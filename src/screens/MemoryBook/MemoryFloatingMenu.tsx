@@ -5,8 +5,9 @@ import { Text, useTheme, themeColor } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
+import { NavigationProp } from "@react-navigation/native";
+type NavProp = NavigationProp<MainStackParamList>;
 
-type NavProp = NativeStackNavigationProp<MainStackParamList>;
 
 interface Props {
   navigation: NavProp;

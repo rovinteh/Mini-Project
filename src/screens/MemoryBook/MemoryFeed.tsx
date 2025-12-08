@@ -303,7 +303,7 @@ const PostItem: React.FC<PostItemProps> = ({
               <VideoView
                 player={player}
                 style={{ width: "100%", height: "100%" }}
-                fullscreenOptions={{ enabled: true }}
+                allowsFullscreen
                 allowsPictureInPicture
                 nativeControls
               />
