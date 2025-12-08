@@ -1,24 +1,24 @@
+// src/screens/MemoryBook/MemoryFloatingMenu.tsx
 import React, { useState } from "react";
 import { View, TouchableOpacity } from "react-native";
-import {
-  Text,
-  useTheme,
-  themeColor,
-} from "react-native-rapi-ui";
+import { Text, useTheme, themeColor } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
-import { NavigationProp } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 
+type NavProp = NativeStackNavigationProp<MainStackParamList>;
+
 interface Props {
-  navigation: NavigationProp<MainStackParamList>;
+  navigation: NavProp;
 }
 
 export default function MemoryFloatingMenu({ navigation }: Props) {
   const { isDarkmode } = useTheme();
   const [open, setOpen] = useState(false);
 
-  const iconColor = isDarkmode ? themeColor.white100 : themeColor.dark;
-  const bgColor = isDarkmode ? themeColor.dark100 : themeColor.white100;
+  const barBg = isDarkmode ? "#0b1120" : "#e5e7eb"; // 整条横条背景
+  const iconBubbleBg = "#0ea5e9"; // 每个小圆icon背景（明显一点）
+  const labelColor = isDarkmode ? "#e5e7eb" : "#111827";
 
   const actions = [
     {
@@ -40,7 +40,7 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
       onPress: () => navigation.navigate("MemoryReels"),
     },
     {
-      key: "upload",
+      key: "add",
       icon: "add",
       label: "Add",
       onPress: () => navigation.navigate("MemoryUpload"),
@@ -72,68 +72,64 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
         position: "absolute",
         bottom: 24,
         right: 24,
+        flexDirection: "row",
+        alignItems: "center",
       }}
     >
-      {/* 展开后的小圆按钮们 */}
-      {open &&
-        actions.map((action, index) => (
-          <View
-            key={action.key}
-            style={{
-              position: "absolute",
-              bottom: 72 + index * 56,
-              right: 0,
-              alignItems: "flex-end",
-            }}
-          >
-            {/* label */}
-            <View
-              style={{
-                marginRight: 58,
-                paddingHorizontal: 8,
-                paddingVertical: 4,
-                borderRadius: 12,
-                backgroundColor: bgColor,
-                shadowColor: "#000",
-                shadowOpacity: 0.15,
-                shadowRadius: 4,
-                elevation: 3,
-              }}
-            >
-              <Text
-                style={{
-                  fontSize: 11,
-                  color: iconColor,
-                }}
-              >
-                {action.label}
-              </Text>
-            </View>
-
-            {/* icon 圆钮 */}
+      {/* 左边伸出去的一条横条 */}
+      {open && (
+        <View
+          style={{
+            marginRight: 12,
+            paddingHorizontal: 12,
+            paddingVertical: 8,
+            borderRadius: 999,
+            backgroundColor: barBg,
+            flexDirection: "row-reverse", // 从主按钮向左排
+            alignItems: "center",
+          }}
+        >
+          {actions.map((action) => (
             <TouchableOpacity
+              key={action.key}
               onPress={() => {
                 setOpen(false);
                 action.onPress();
               }}
               style={{
-                marginTop: 6,
-                width: 48,
-                height: 48,
-                borderRadius: 24,
-                backgroundColor: bgColor,
                 alignItems: "center",
-                justifyContent: "center",
-                shadowColor: "#000",
-                shadowOpacity: 0.25,
-                shadowRadius: 4,
-                elevation: 5,
+                marginHorizontal: 4,
+                width: 56, // 固定宽度，icon+文字对称
               }}
+              activeOpacity={0.8}
             >
-              <Ionicons name={action.icon as any} size={24} color={iconColor} />
+              <View
+                style={{
+                  width: 32,
+                  height: 32,
+                  borderRadius: 16,
+                  backgroundColor: iconBubbleBg,
+                  alignItems: "center",
+                  justifyContent: "center",
+                  marginBottom: 2,
+                }}
+              >
+                <Ionicons name={action.icon as any} size={18} color="#ffffff" />
+              </View>
+              <Text
+                style={{
+                  fontSize: 10,
+                  color: labelColor,
+                  textAlign: "center",
+                }}
+                numberOfLines={1}
+              >
+                {action.label}
+              </Text>
             </TouchableOpacity>
-          </View>
-        ))}
+          ))}
+        </View>
+      )}
 
       {/* 右下角主按钮 */}
       <TouchableOpacity
@@ -150,8 +146,9 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
           shadowRadius: 6,
           elevation: 6,
         }}
+        activeOpacity={0.9}
       >
-        <Ionicons name={open ? "close" : "grid"} size={28} color="#fff" />
+        <Ionicons name={open ? "close" : "grid"} size={28} color="#ffffff" />
       </TouchableOpacity>
     </View>
   );

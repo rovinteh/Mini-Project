@@ -8,7 +8,7 @@ import TabBarText from "../components/utils/TabBarText";
 import Home from "../screens/Home";
 import About from "../screens/About";
 import Profile from "../screens/Profile";
-import Setting from "../screens/Setting";
+
 
 const Tabs = createBottomTabNavigator();
 const MainTabs = () => {
@@ -60,18 +60,7 @@ const MainTabs = () => {
           ),
         }}
       />
-      <Tabs.Screen
-        name="Setting"
-        component={Setting}
-        options={{
-          tabBarLabel: ({ focused }) => (
-            <TabBarText focused={focused} title="Setting" />
-          ),
-          tabBarIcon: ({ focused }) => (
-            <TabBarIcon focused={focused} icon={"settings-outline"} />
-          ),
-        }}
-      />
+      
     </Tabs.Navigator>
   );
 };

@@ -21,7 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
-
+import MemoryFloatingMenu from "./MemoryFloatingMenu";
 import { getAuth, updateProfile } from "firebase/auth";
 import {
   getFirestore,
@@ -801,161 +801,6 @@ export default function MemoryProfile({ navigation }: Props) {
         />
       </View>
 
-      {/* Bottom navigation (unchanged) */}
-      <View
-        style={{
-          position: "absolute",
-          bottom: 0,
-          left: 0,
-          right: 0,
-          height: 70,
-          flexDirection: "row",
-          alignItems: "center",
-          justifyContent: "space-around",
-          backgroundColor: isDarkmode
-            ? themeColor.dark100
-            : themeColor.white100,
-          borderTopWidth: 0.5,
-          borderTopColor: "#444",
-          paddingBottom: 10,
-        }}
-      >
-        {/* Search */}
-        <TouchableOpacity
-          style={{ alignItems: "center" }}
-          onPress={() => navigation.navigate("MemorySearch")}
-        >
-          <Ionicons
-            name="search"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Search
-          </Text>
-        </TouchableOpacity>
-
-        {/* Home */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryFeed")}
-          style={{ alignItems: "center" }}
-        >
-          <Ionicons
-            name="home"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Home
-          </Text>
-        </TouchableOpacity>
-
-        {/* Reels */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryReels")}
-          style={{ alignItems: "center" }}
-        >
-          <Ionicons
-            name="play-circle"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Reels
-          </Text>
-        </TouchableOpacity>
-
-        {/* Upload */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryUpload")}
-          style={{
-            width: 56,
-            height: 56,
-            borderRadius: 28,
-            backgroundColor: themeColor.info,
-            alignItems: "center",
-            justifyContent: "center",
-            marginBottom: 8,
-          }}
-        >
-          <Ionicons name="add" size={30} color="#fff" />
-        </TouchableOpacity>
-
-        {/* Mood Calendar */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryMoodCalendar")}
-          style={{ alignItems: "center" }}
-        >
-          <Ionicons
-            name="calendar-outline"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Mood
-          </Text>
-        </TouchableOpacity>
-
-        {/* Album */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryAlbum")}
-          style={{ alignItems: "center" }}
-        >
-          <Ionicons
-            name="albums-outline"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Album
-          </Text>
-        </TouchableOpacity>
-
-        {/* Profile */}
-        <TouchableOpacity
-          onPress={() => navigation.navigate("MemoryProfile")}
-          style={{ alignItems: "center" }}
-        >
-          <Ionicons
-            name="person-circle-outline"
-            size={24}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
-          <Text
-            style={{
-              fontSize: 10,
-              color: isDarkmode ? themeColor.white100 : themeColor.dark,
-            }}
-          >
-            Profile
-          </Text>
-        </TouchableOpacity>
-      </View>
 
       {/* Followers Modal */}
       <Modal
@@ -1494,6 +1339,7 @@ export default function MemoryProfile({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+      <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
 }

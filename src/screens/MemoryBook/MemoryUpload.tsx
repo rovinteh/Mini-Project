@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
-
+import MemoryFloatingMenu from "./MemoryFloatingMenu";
 import { getAuth } from "firebase/auth";
 import {
   getFirestore,
@@ -763,6 +763,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           />
         </View>
       </ScrollView>
+      <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
 }

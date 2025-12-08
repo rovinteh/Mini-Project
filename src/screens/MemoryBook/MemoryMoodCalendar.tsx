@@ -26,7 +26,7 @@ import {
   getDocs,
   deleteDoc,
 } from "firebase/firestore";
-
+import MemoryFloatingMenu from "./MemoryFloatingMenu";
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryMoodCalendar">;
 
 type MoodCategory = "positive" | "neutral" | "tired" | "sad";
@@ -560,6 +560,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       />
 
       <View style={{ flex: 1 }}>{renderMoodCalendar()}</View>
+      <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
 }

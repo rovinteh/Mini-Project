@@ -28,7 +28,7 @@ import {
 import { getAuth } from "firebase/auth";
 
 import B2PostCard, { PostType } from "./B2PostCard";
-
+import MemoryFloatingMenu from "./MemoryFloatingMenu";
 type Props = NativeStackScreenProps<MainStackParamList, "MemorySearch">;
 
 interface UserType {
@@ -694,6 +694,7 @@ export default function MemorySearch({ navigation }: Props) {
           </Text>
         </TouchableOpacity>
       </View>
+      <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
 }
