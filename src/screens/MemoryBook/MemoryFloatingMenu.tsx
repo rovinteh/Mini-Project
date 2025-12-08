@@ -16,7 +16,7 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
   const { isDarkmode } = useTheme();
   const [open, setOpen] = useState(false);
 
-  const barBg = isDarkmode ? "#0c1748ff" : "#f9fafb"; // 比较浅的背景，像向左那一版
+  const barBg = isDarkmode ? "#626a90ff" : "#f9fafb"; // 比较浅的背景，像向左那一版
   const iconBubbleBg = "#1aadf0ff";
   const labelColor = isDarkmode ? "#e5e7eb" : "#111827";
 
@@ -87,7 +87,7 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
               paddingHorizontal: 10,
               backgroundColor: barBg,
               borderRadius: 24,        // 不用 999，比较自然的圆角矩形
-              width: 120,              // 固定宽度，刚好包住文字 + icon
+              width: 110,              // 固定宽度，刚好包住文字 + icon
               alignSelf: "flex-end",
               shadowColor: "#000000ff",
               shadowOpacity: 0.25,
