@@ -104,7 +104,7 @@ const ReelItem: React.FC<ReelItemProps> = ({
           player={player}
           style={{ width: "100%", height: "100%" }}
           nativeControls
-          allowsFullscreen
+          fullscreenOptions={{ enable: true }}
           allowsPictureInPicture
         />
       </View>

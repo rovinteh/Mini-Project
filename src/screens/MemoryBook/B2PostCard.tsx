@@ -84,7 +84,7 @@ export default function B2PostCard({
                 player={player}
                 // show basic OS controls so user can play / pause
                 nativeControls
-                fullscreenOptions={{ enabled: true }}
+                fullscreenOptions={{ enable: true }}
                 allowsPictureInPicture
               />
             ) : (

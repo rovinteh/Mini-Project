@@ -59,7 +59,7 @@ function PostVideoItem({ uri, isActive, isScreenFocused }: VideoItemProps) {
     <VideoView
       style={{ width: "100%", height: "100%" }}
       player={player}
-      allowsFullscreen
+      fullscreenOptions={{ enable: true }}
       allowsPictureInPicture
       nativeControls
       contentFit="contain" // 等同以前的 resizeMode="contain"
