@@ -1,7 +1,6 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 
-
 import MainTabs from "./MainTabs";
 import MemoryFeed from "../screens/MemoryBook/MemoryFeed";
 import MemoryUpload from "../screens/MemoryBook/MemoryUpload";
@@ -15,7 +14,7 @@ import MemoryChat from "../screens/MemoryBook/MemoryChat";
 import MemoryChatsList from "../screens/MemoryBook/MemoryChatsList";
 import MemoryMoodCalendar from "../screens/MemoryBook/MemoryMoodCalendar";
 import MemoryAlbum from "../screens/MemoryBook/MemoryAlbum";
-
+import MemoryFloatingMenu from "../screens/MemoryBook/MemoryFloatingMenu";
 
 const MainStack = createNativeStackNavigator();
 
@@ -36,9 +35,16 @@ const Main = () => {
       <MainStack.Screen name="MemoryPostView" component={MemoryPostView} />
       <MainStack.Screen name="MemoryChat" component={MemoryChat} />
       <MainStack.Screen name="MemoryChatsList" component={MemoryChatsList} />
-      <MainStack.Screen name="MemoryMoodCalendar"component={MemoryMoodCalendar}/>
+      <MainStack.Screen
+        name="MemoryMoodCalendar"
+        component={MemoryMoodCalendar}
+      />
       <MainStack.Screen name="MemoryAlbum" component={MemoryAlbum} />
-
+      <MainStack.Screen name="MemoryFeed" component={MemoryFeed} />
+      <MainStack.Screen
+        name="MemoryFloatingMenu"
+        component={MemoryFloatingMenu}
+      />
     </MainStack.Navigator>
   );
 };

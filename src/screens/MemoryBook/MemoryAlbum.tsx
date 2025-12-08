@@ -29,8 +29,9 @@ import {
   orderBy,
   onSnapshot,
 } from "firebase/firestore";
-
+import MemoryFloatingMenu from "./MemoryFloatingMenu";
 import { PostType } from "./B2PostCard";
+
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryAlbum">;
 
@@ -955,6 +956,7 @@ export default function MemoryAlbum({ navigation }: Props) {
           </View>
         </ScrollView>
       </View>
+      <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
 }
