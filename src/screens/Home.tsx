@@ -57,33 +57,7 @@ export default function ({
               status="info"
               onPress={() => Linking.openURL("https://rapi-ui.kikiding.space/")}
             />
-            <Button
-              text="Go to second screen"
-              onPress={() => {
-                navigation.navigate("SecondScreen");
-              }}
-              style={{
-                marginTop: 10,
-              }}
-            />
-            <Button
-              text="Go to third screen"
-              onPress={() => {
-                navigation.navigate("ThirdScreen");
-              }}
-              style={{
-                marginTop: 10,
-              }}
-            />
-            <Button
-              text="Go to My Module"
-              onPress={() => {
-                navigation.navigate("MyMenu");
-              }}
-              style={{
-                marginTop: 10,
-              }}
-            />
+            
             <Button
               text="Go to my Memory Feed"
               onPress={() => {
