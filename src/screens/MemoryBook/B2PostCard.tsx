@@ -23,16 +23,16 @@ export type PostType = {
   mediaUrl: string;
   mediaType?: "image" | "video";
   caption?: string;
-  likes?: string[];        // list of user IDs who liked
-  comments?: any[];        // or you can change to number if you prefer
-  savedBy?: string[];      // list of user IDs who saved/bookmarked
-  createdAt?: any;         // Firestore timestamp
+  likes?: string[]; // list of user IDs who liked
+  comments?: any[]; // or you can change to number if you prefer
+  savedBy?: string[]; // list of user IDs who saved/bookmarked
+  createdAt?: any; // Firestore timestamp
   isStory?: boolean;
 };
 
 type Props = {
   post: PostType;
-  onPress?: () => void;     // open full post (optional)
+  onPress?: () => void; // open full post (optional)
   showMenu?: boolean;
   onPressMenu?: () => void;
 };
@@ -66,7 +66,7 @@ export default function B2PostCard({
   // expo-video player (used only when isVideo === true)
   const player = useVideoPlayer(post.mediaUrl, (p) => {
     p.loop = false; // no auto-loop
-    p.pause();      // start paused
+    p.pause(); // start paused
   });
 
   const isLiked = uid ? (post.likes || []).includes(uid) : false;
@@ -173,62 +173,58 @@ export default function B2PostCard({
           </Text>
         </TouchableOpacity>
 
-        {/* ACTIONS: like, comment, save */}
+        {/* ACTIONS: like, comment, save (all on left) */}
         <View
           style={{
             flexDirection: "row",
             alignItems: "center",
-            justifyContent: "space-between",
             marginTop: 4,
           }}
         >
-          {/* Left side: like + comment */}
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {/* Like button */}
-            <TouchableOpacity
-              disabled={!uid}
-              onPress={handleToggleLike}
-              style={{ flexDirection: "row", alignItems: "center" }}
-            >
-              <Ionicons
-                name={isLiked ? "heart" : "heart-outline"}
-                size={16}
-                color={isLiked ? themeColor.danger : textColor}
-              />
-              <Text
-                style={{ marginLeft: 4, fontSize: 12, color: textColor }}
-              >
-                {likesCount}
-              </Text>
-            </TouchableOpacity>
+          {/* Like button */}
+          <TouchableOpacity
+            disabled={!uid}
+            onPress={handleToggleLike}
+            style={{ flexDirection: "row", alignItems: "center" }}
+          >
+            <Ionicons
+              name={isLiked ? "heart" : "heart-outline"}
+              size={16}
+              color={isLiked ? themeColor.danger : textColor}
+            />
+            <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
+              {likesCount}
+            </Text>
+          </TouchableOpacity>
 
-            {/* Comment button */}
-            <TouchableOpacity
-              onPress={handleOpenComments}
-              style={{
-                flexDirection: "row",
-                alignItems: "center",
-                marginLeft: 12,
-              }}
-            >
-              <Ionicons
-                name="chatbubble-ellipses-outline"
-                size={16}
-                color={isDarkmode ? "#aaa" : "#666"}
-              />
-              <Text
-                style={{ marginLeft: 4, fontSize: 12, color: textColor }}
-              >
-                {commentsCount}
-              </Text>
-            </TouchableOpacity>
-          </View>
+          {/* Comment button */}
+          <TouchableOpacity
+            onPress={handleOpenComments}
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              marginLeft: 12,
+            }}
+          >
+            <Ionicons
+              name="chatbubble-ellipses-outline"
+              size={16}
+              color={isDarkmode ? "#aaa" : "#666"}
+            />
+            <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
+              {commentsCount}
+            </Text>
+          </TouchableOpacity>
 
-          {/* Right side: save / bookmark */}
-          <TouchableOpacity disabled={!uid} onPress={handleToggleSave}>
+          {/* Save / Bookmark (NOW beside comment) */}
+          <TouchableOpacity
+            disabled={!uid}
+            onPress={handleToggleSave}
+            style={{ marginLeft: 12 }}
+          >
             <Ionicons
               name={isSaved ? "bookmark" : "bookmark-outline"}
-              size={18}
+              size={16}
               color={isSaved ? themeColor.info : textColor}
             />
           </TouchableOpacity>

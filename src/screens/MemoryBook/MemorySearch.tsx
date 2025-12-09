@@ -34,6 +34,7 @@ import {
 import { getAuth } from "firebase/auth";
 
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
+import B2PostCard, { PostType } from "./B2PostCard";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemorySearch">;
 
@@ -44,18 +45,6 @@ interface UserType {
   photoURL?: string;
   followers?: string[];
   following?: string[];
-}
-
-export interface PostType {
-  id: string;
-  imageUrl?: string;
-  videoUrl?: string;
-  caption?: string;
-  likes?: string[];
-  savedBy?: string[];
-  commentsCount?: number;
-  createdAt?: any;
-  [key: string]: any; // allow extra fields
 }
 
 export default function MemorySearch({ navigation }: Props) {
@@ -174,7 +163,7 @@ export default function MemorySearch({ navigation }: Props) {
     }
   };
 
-  // ---------- Toggle follow from user list (small heart) ----------
+  // ---------- Toggle follow from user list (still used in logic, but no heart UI now) ----------
   const toggleFollowUser = async (user: UserType) => {
     if (!currentUser) return;
     if (user.id === currentUser.uid) return;
@@ -264,208 +253,8 @@ export default function MemorySearch({ navigation }: Props) {
             .includes(trimmed.toLowerCase())
         );
 
-  // ---------- LIKE & SAVE handlers ----------
-  const toggleLike = async (post: PostType) => {
-    if (!currentUser) return;
-    const uid = currentUser.uid;
-    const isLiked = (post.likes || []).includes(uid);
-
-    try {
-      const ref = doc(firestore, "posts", post.id);
-      await updateDoc(ref, {
-        likes: isLiked ? arrayRemove(uid) : arrayUnion(uid),
-      });
-
-      // update local state for both lists (profile posts + hashtag posts)
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === post.id
-            ? {
-                ...p,
-                likes: isLiked
-                  ? (p.likes || []).filter((id) => id !== uid)
-                  : [...(p.likes || []), uid],
-              }
-            : p
-        )
-      );
-      setHashtagPosts((prev) =>
-        prev.map((p) =>
-          p.id === post.id
-            ? {
-                ...p,
-                likes: isLiked
-                  ? (p.likes || []).filter((id) => id !== uid)
-                  : [...(p.likes || []), uid],
-              }
-            : p
-        )
-      );
-    } catch (err) {
-      console.log("toggleLike error", err);
-    }
-  };
-
-  const toggleSave = async (post: PostType) => {
-    if (!currentUser) return;
-    const uid = currentUser.uid;
-    const isSaved = (post.savedBy || []).includes(uid);
-
-    try {
-      const ref = doc(firestore, "posts", post.id);
-      await updateDoc(ref, {
-        savedBy: isSaved ? arrayRemove(uid) : arrayUnion(uid),
-      });
-
-      setPosts((prev) =>
-        prev.map((p) =>
-          p.id === post.id
-            ? {
-                ...p,
-                savedBy: isSaved
-                  ? (p.savedBy || []).filter((id) => id !== uid)
-                  : [...(p.savedBy || []), uid],
-              }
-            : p
-        )
-      );
-      setHashtagPosts((prev) =>
-        prev.map((p) =>
-          p.id === post.id
-            ? {
-                ...p,
-                savedBy: isSaved
-                  ? (p.savedBy || []).filter((id) => id !== uid)
-                  : [...(p.savedBy || []), uid],
-              }
-            : p
-        )
-      );
-    } catch (err) {
-      console.log("toggleSave error", err);
-    }
-  };
-
   const openPost = (post: PostType) => {
     navigation.navigate("MemoryPostView", { postId: post.id });
-  };
-
-  const renderPostCard = (post: PostType) => {
-    const uid = currentUser?.uid;
-    const isLiked = uid ? (post.likes || []).includes(uid) : false;
-    const isSaved = uid ? (post.savedBy || []).includes(uid) : false;
-    const likesCount = post.likes ? post.likes.length : 0;
-    const commentsCount = post.commentsCount || 0;
-
-    return (
-      <View
-        key={post.id}
-        style={{
-          width: "48%",
-          marginBottom: 16,
-          borderRadius: 12,
-          overflow: "hidden",
-          backgroundColor: isDarkmode ? "#111" : "#f3f4f6",
-        }}
-      >
-        {/* image / video preview */}
-        <TouchableOpacity onPress={() => openPost(post)}>
-          {post.imageUrl ? (
-            <Image
-              source={{ uri: post.imageUrl }}
-              style={{ width: "100%", height: 160 }}
-            />
-          ) : (
-            <View
-              style={{
-                width: "100%",
-                height: 160,
-                alignItems: "center",
-                justifyContent: "center",
-                backgroundColor: isDarkmode ? "#222" : "#e5e7eb",
-              }}
-            >
-              <Ionicons
-                name="image-outline"
-                size={30}
-                color={secondaryTextColor}
-              />
-            </View>
-          )}
-        </TouchableOpacity>
-
-        {/* caption (1 line) */}
-        {post.caption ? (
-          <Text
-            numberOfLines={1}
-            style={{
-              fontSize: 12,
-              paddingHorizontal: 8,
-              paddingTop: 6,
-              color: primaryTextColor,
-            }}
-          >
-            {post.caption}
-          </Text>
-        ) : null}
-
-        {/* actions row: like, comment, save */}
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-            justifyContent: "space-between",
-            paddingHorizontal: 8,
-            paddingVertical: 6,
-          }}
-        >
-          <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {/* like */}
-            <TouchableOpacity
-              disabled={!currentUser}
-              onPress={() => toggleLike(post)}
-              style={{ marginRight: 6 }}
-            >
-              <Ionicons
-                name={isLiked ? "heart" : "heart-outline"}
-                size={18}
-                color={isLiked ? "#ef4444" : secondaryTextColor}
-              />
-            </TouchableOpacity>
-            <Text style={{ fontSize: 11, color: secondaryTextColor }}>
-              {likesCount}
-            </Text>
-
-            {/* comment */}
-            <TouchableOpacity
-              onPress={() => openPost(post)}
-              style={{ marginLeft: 12, marginRight: 4 }}
-            >
-              <Ionicons
-                name="chatbubble-outline"
-                size={18}
-                color={secondaryTextColor}
-              />
-            </TouchableOpacity>
-            <Text style={{ fontSize: 11, color: secondaryTextColor }}>
-              {commentsCount}
-            </Text>
-          </View>
-
-          {/* save */}
-          <TouchableOpacity
-            disabled={!currentUser}
-            onPress={() => toggleSave(post)}
-          >
-            <Ionicons
-              name={isSaved ? "bookmark" : "bookmark-outline"}
-              size={18}
-              color={isSaved ? themeColor.info : secondaryTextColor}
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-    );
   };
 
   return (
@@ -579,7 +368,13 @@ export default function MemorySearch({ navigation }: Props) {
                     justifyContent: "space-between",
                   }}
                 >
-                  {hashtagPosts.map(renderPostCard)}
+                  {hashtagPosts.map((post) => (
+                    <B2PostCard
+                      key={post.id}
+                      post={post}
+                      onPress={() => openPost(post)}
+                    />
+                  ))}
                 </View>
               )}
             </View>
@@ -600,11 +395,6 @@ export default function MemorySearch({ navigation }: Props) {
               </Text>
 
               {filteredUsers.map((user) => {
-                const isMe = currentUser?.uid === user.id;
-                const isFollowingUser =
-                  !!currentUser &&
-                  (user.followers || []).includes(currentUser.uid);
-
                 return (
                   <View
                     key={user.id}
@@ -616,7 +406,7 @@ export default function MemorySearch({ navigation }: Props) {
                       borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
                     }}
                   >
-                    {/* Avatar */}
+                    {/* Avatar + text (tap → open profile) */}
                     <TouchableOpacity
                       onPress={() => handleSelectUser(user)}
                       style={{
@@ -663,20 +453,7 @@ export default function MemorySearch({ navigation }: Props) {
                       </View>
                     </TouchableOpacity>
 
-                    {/* Small heart button to follow / unfollow */}
-                    <TouchableOpacity
-                      disabled={!currentUser || isMe}
-                      onPress={() => toggleFollowUser(user)}
-                      style={{ paddingHorizontal: 4, paddingVertical: 4 }}
-                    >
-                      <Ionicons
-                        name={isFollowingUser ? "heart" : "heart-outline"}
-                        size={22}
-                        color={
-                          isFollowingUser ? "#ef4444" : secondaryTextColor
-                        }
-                      />
-                    </TouchableOpacity>
+                    {/* ❌ Heart (follow) removed from list */}
                   </View>
                 );
               })}
@@ -812,15 +589,21 @@ export default function MemorySearch({ navigation }: Props) {
                 )}
               </View>
 
-              {/* Posts grid with like / comment / save */}
+              {/* Posts grid (B2PostCard) */}
               <View
                 style={{
                   flexDirection: "row",
                   flexWrap: "wrap",
-                  justifyContent: "space-between",
+                  justifyContent: "flex-start",
                 }}
               >
-                {posts.map(renderPostCard)}
+                {posts.map((post) => (
+                  <B2PostCard
+                    key={post.id}
+                    post={post}
+                    onPress={() => openPost(post)}
+                  />
+                ))}
                 {posts.length === 0 && (
                   <View
                     style={{
