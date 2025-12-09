@@ -1,6 +1,12 @@
 // src/screens/MemoryBook/MemorySearch.tsx
 import React, { useEffect, useState } from "react";
-import { View, TextInput, TouchableOpacity, ScrollView } from "react-native";
+import {
+  View,
+  TextInput,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+} from "react-native";
 import {
   Layout,
   TopNav,
@@ -10,7 +16,7 @@ import {
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 
 import {
@@ -29,12 +35,17 @@ import { getAuth } from "firebase/auth";
 
 import B2PostCard, { PostType } from "./B2PostCard";
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
-type Props = NativeStackScreenProps<MainStackParamList, "MemorySearch">;
+
+type NavProp = NativeStackNavigationProp<MainStackParamList>;
+interface Props {
+  navigation: NavProp;
+}
 
 interface UserType {
   id: string;
   displayName?: string;
   email?: string;
+  photoURL?: string; // ⭐ 新增：用户头像
   followers?: string[];
   following?: string[];
 }
@@ -58,9 +69,7 @@ export default function MemorySearch({ navigation }: Props) {
   const primaryTextColor = isDarkmode ? themeColor.white100 : themeColor.dark;
   const secondaryTextColor = isDarkmode ? "#aaa" : "#555";
 
-  // derived search helpers
   const trimmed = search.trim();
-  const searchingHashtag = trimmed.length > 0;
 
   // ---------- Load all users ----------
   useEffect(() => {
@@ -111,46 +120,59 @@ export default function MemorySearch({ navigation }: Props) {
     setSelectedUser(user);
   };
 
+  // ---------- Toggle follow for selectedUser ----------
   const handleFollowToggle = async () => {
     if (!selectedUser || !currentUser) return;
     if (selectedUser.id === currentUser.uid) return;
 
-    const userRef = doc(firestore, "users", selectedUser.id);
-    const meRef = doc(firestore, "users", currentUser.uid);
-    const currently = isFollowing;
+    await toggleFollowUser(selectedUser);
+  };
 
-    const newFollowers = currently
-      ? (selectedUser.followers || []).filter((id) => id !== currentUser.uid)
-      : [...(selectedUser.followers || []), currentUser.uid];
+  // ---------- 通用：跟随 / 取消跟随 某一个 user ----------
+  const toggleFollowUser = async (target: UserType) => {
+    if (!currentUser) return;
+    if (target.id === currentUser.uid) return;
+
+    const targetRef = doc(firestore, "users", target.id);
+    const meRef = doc(firestore, "users", currentUser.uid);
+
+    const already = (target.followers || []).includes(currentUser.uid);
 
     try {
       await Promise.all([
-        updateDoc(userRef, {
-          followers: currently
+        updateDoc(targetRef, {
+          followers: already
             ? arrayRemove(currentUser.uid)
             : arrayUnion(currentUser.uid),
         }),
         updateDoc(meRef, {
-          following: currently
-            ? arrayRemove(selectedUser.id)
-            : arrayUnion(selectedUser.id),
+          following: already ? arrayRemove(target.id) : arrayUnion(target.id),
         }),
       ]);
 
-      setIsFollowing(!currently);
-      setSelectedUser((prev) =>
-        prev
-          ? {
-              ...prev,
-              followers: newFollowers,
-            }
-          : prev
-      );
+      // 更新 users 列表里的 followers
       setUsers((prev) =>
-        prev.map((u) =>
-          u.id === selectedUser.id ? { ...u, followers: newFollowers } : u
-        )
+        prev.map((u) => {
+          if (u.id !== target.id) return u;
+          const old = u.followers || [];
+          const newFollowers = already
+            ? old.filter((id) => id !== currentUser.uid)
+            : [...old, currentUser.uid];
+          return { ...u, followers: newFollowers };
+        })
       );
+
+      // 如果当前选中的刚好是这个 user，同步更新 mini profile 的状态
+      if (selectedUser && selectedUser.id === target.id) {
+        const newFollowers = already
+          ? (selectedUser.followers || []).filter(
+              (id) => id !== currentUser.uid
+            )
+          : [...(selectedUser.followers || []), currentUser.uid];
+
+        setSelectedUser({ ...selectedUser, followers: newFollowers });
+        setIsFollowing(!already);
+      }
     } catch (e) {
       console.log("Failed to toggle follow:", e);
     }
@@ -160,17 +182,12 @@ export default function MemorySearch({ navigation }: Props) {
   useEffect(() => {
     const text = trimmed.toLowerCase();
 
-    // clear hashtag state when search empty
     if (!text) {
       setHashtagPosts([]);
       setActiveHashtag(null);
       return;
     }
 
-    // we want hashtags stored in Firestore like "#makeup"
-    // so:
-    // - if user types "#makeup" -> tag = "#makeup"
-    // - if user types "makeup"  -> tag = "#makeup"
     let tag = text;
     if (!tag.startsWith("#")) {
       tag = "#" + tag;
@@ -289,7 +306,7 @@ export default function MemorySearch({ navigation }: Props) {
             paddingBottom: 90,
           }}
         >
-          {/* hashtag results (if any) */}
+          {/* hashtag results */}
           {trimmed.length > 0 && (
             <View style={{ marginBottom: 16 }}>
               <Text
@@ -346,44 +363,40 @@ export default function MemorySearch({ navigation }: Props) {
                 Users
               </Text>
 
-              {filteredUsers.map((user) => (
-                <TouchableOpacity
-                  key={user.id}
-                  onPress={() => handleSelectUser(user)}
-                  style={{
-                    flexDirection: "row",
-                    alignItems: "center",
-                    paddingVertical: 8,
-                    borderBottomWidth: 0.3,
-                    borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
-                  }}
-                >
-                  <Ionicons
-                    name="person-circle-outline"
-                    size={40}
-                    color={themeColor.info}
-                  />
-                  <View style={{ marginLeft: 10 }}>
-                    <Text
-                      style={{
-                        fontSize: 14,
-                        fontWeight: "bold",
-                        color: primaryTextColor,
-                      }}
+              {filteredUsers.map((user) => {
+                const isMe = currentUser?.uid === user.id;
+                const isFollowingUser =
+                  !!currentUser &&
+                  (user.followers || []).includes(currentUser.uid);
+
+                return (
+                  <View
+                    key={user.id}
+                    style={{
+                      flexDirection: "row",
+                      alignItems: "center",
+                      paddingVertical: 8,
+                      borderBottomWidth: 0.3,
+                      borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
+                    }}
+                  >
+                    {/* 左边头像 + 文本 ... */}
+
+                    {/* 右边小爱心 */}
+                    <TouchableOpacity
+                      disabled={!currentUser || isMe} // ✅ 用 disabled
+                      onPress={() => toggleFollowUser(user)}
+                      style={{ paddingHorizontal: 4, paddingVertical: 4 }}
                     >
-                      {user.displayName || "No name"}
-                    </Text>
-                    <Text
-                      style={{
-                        fontSize: 12,
-                        color: secondaryTextColor,
-                      }}
-                    >
-                      {user.email}
-                    </Text>
+                      <Ionicons
+                        name={isFollowingUser ? "heart" : "heart-outline"}
+                        size={22}
+                        color={isFollowingUser ? "#ef4444" : secondaryTextColor}
+                      />
+                    </TouchableOpacity>
                   </View>
-                </TouchableOpacity>
-              ))}
+                );
+              })}
             </View>
           )}
 
@@ -391,11 +404,26 @@ export default function MemorySearch({ navigation }: Props) {
           {selectedUser && (
             <View style={{ marginTop: 10 }}>
               <View style={{ alignItems: "center", marginBottom: 16 }}>
-                <Ionicons
-                  name="person-circle-outline"
-                  size={70}
-                  color={themeColor.info}
-                />
+                {selectedUser.photoURL ? (
+                  <Image
+                    source={{ uri: selectedUser.photoURL }}
+                    style={{
+                      width: 80,
+                      height: 80,
+                      borderRadius: 40,
+                      borderWidth: 2,
+                      borderColor: themeColor.info,
+                    }}
+                    resizeMode="cover"
+                  />
+                ) : (
+                  <Ionicons
+                    name="person-circle-outline"
+                    size={70}
+                    color={themeColor.info}
+                  />
+                )}
+
                 <Text
                   style={{
                     marginTop: 4,
@@ -538,6 +566,8 @@ export default function MemorySearch({ navigation }: Props) {
           )}
         </ScrollView>
       </View>
+
+      {/* 底部导航条 */}
       <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );
