@@ -5,23 +5,39 @@ import { Text, themeColor, useTheme } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { useVideoPlayer, VideoView } from "expo-video";
 
+import { getAuth } from "firebase/auth";
+import {
+  getFirestore,
+  doc,
+  updateDoc,
+  arrayUnion,
+  arrayRemove,
+} from "firebase/firestore";
+
+import { useNavigation } from "@react-navigation/native";
+import { NativeStackNavigationProp } from "@react-navigation/native-stack";
+import { MainStackParamList } from "../../types/navigation";
+
 export type PostType = {
   id: string;
   mediaUrl: string;
   mediaType?: "image" | "video";
   caption?: string;
-  likes?: string[];
-  comments?: any[];
-  createdAt?: any; // Firestore timestamp
+  likes?: string[];        // list of user IDs who liked
+  comments?: any[];        // or you can change to number if you prefer
+  savedBy?: string[];      // list of user IDs who saved/bookmarked
+  createdAt?: any;         // Firestore timestamp
   isStory?: boolean;
 };
 
 type Props = {
   post: PostType;
-  onPress?: () => void;
+  onPress?: () => void;     // open full post (optional)
   showMenu?: boolean;
   onPressMenu?: () => void;
 };
+
+type NavProp = NativeStackNavigationProp<MainStackParamList>;
 
 export default function B2PostCard({
   post,
@@ -30,6 +46,12 @@ export default function B2PostCard({
   onPressMenu,
 }: Props) {
   const { isDarkmode } = useTheme();
+  const navigation = useNavigation<NavProp>();
+
+  const auth = getAuth();
+  const firestore = getFirestore();
+  const currentUser = auth.currentUser;
+  const uid = currentUser?.uid || null;
 
   const dateString = post.createdAt
     ? new Date(post.createdAt.toDate()).toLocaleDateString()
@@ -39,14 +61,56 @@ export default function B2PostCard({
   const textColor = isDarkmode ? themeColor.white100 : themeColor.dark;
   const borderColor = isDarkmode ? "#333" : "#d0d0d0";
 
-  // detect video based on Firestore field
   const isVideo = post.mediaType === "video";
 
   // expo-video player (used only when isVideo === true)
   const player = useVideoPlayer(post.mediaUrl, (p) => {
-    p.loop = false;   // no auto-loop
-    p.pause();        // start paused; user can press play in controls
+    p.loop = false; // no auto-loop
+    p.pause();      // start paused
   });
+
+  const isLiked = uid ? (post.likes || []).includes(uid) : false;
+  const isSaved = uid ? (post.savedBy || []).includes(uid) : false;
+
+  const likesCount = post.likes?.length || 0;
+  const commentsCount = post.comments?.length || 0;
+
+  const openPost = () => {
+    if (onPress) {
+      onPress();
+    } else {
+      navigation.navigate("MemoryPostView", { postId: post.id });
+    }
+  };
+
+  const handleToggleLike = async () => {
+    if (!uid) return; // not logged in
+    try {
+      const ref = doc(firestore, "posts", post.id);
+      await updateDoc(ref, {
+        likes: isLiked ? arrayRemove(uid) : arrayUnion(uid),
+      });
+    } catch (err) {
+      console.log("Error toggling like:", err);
+    }
+  };
+
+  const handleToggleSave = async () => {
+    if (!uid) return;
+    try {
+      const ref = doc(firestore, "posts", post.id);
+      await updateDoc(ref, {
+        savedBy: isSaved ? arrayRemove(uid) : arrayUnion(uid),
+      });
+    } catch (err) {
+      console.log("Error toggling save:", err);
+    }
+  };
+
+  const handleOpenComments = () => {
+    // go to full post screen where you handle comments
+    navigation.navigate("MemoryPostView", { postId: post.id });
+  };
 
   return (
     <View style={{ width: "33.33%", padding: 4 }}>
@@ -65,7 +129,8 @@ export default function B2PostCard({
           position: "relative",
         }}
       >
-        <TouchableOpacity activeOpacity={0.85} onPress={onPress}>
+        {/* Whole card tap → open post */}
+        <TouchableOpacity activeOpacity={0.85} onPress={openPost}>
           {/* MEDIA */}
           <View
             style={{
@@ -82,7 +147,6 @@ export default function B2PostCard({
               <VideoView
                 style={{ width: "100%", height: "100%" }}
                 player={player}
-                // show basic OS controls so user can play / pause
                 nativeControls
                 fullscreenOptions={{ enable: true }}
                 allowsPictureInPicture
@@ -107,44 +171,82 @@ export default function B2PostCard({
           >
             {post.caption || ""}
           </Text>
-
-          {/* LIKE + COMMENT COUNT */}
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              marginTop: 3,
-            }}
-          >
-            <Ionicons name="heart" size={14} color={themeColor.danger} />
-            <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
-              {post.likes?.length || 0}
-            </Text>
-
-            <Ionicons
-              name="chatbubble-ellipses-outline"
-              size={14}
-              color={isDarkmode ? "#aaa" : "#666"}
-              style={{ marginLeft: 12 }}
-            />
-            <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
-              {post.comments?.length || 0}
-            </Text>
-          </View>
-
-          {/* DATE */}
-          <Text
-            style={{
-              marginTop: 2,
-              fontSize: 10,
-              color: textColor,
-              opacity: 0.6,
-            }}
-          >
-            {dateString}
-          </Text>
         </TouchableOpacity>
 
+        {/* ACTIONS: like, comment, save */}
+        <View
+          style={{
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginTop: 4,
+          }}
+        >
+          {/* Left side: like + comment */}
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            {/* Like button */}
+            <TouchableOpacity
+              disabled={!uid}
+              onPress={handleToggleLike}
+              style={{ flexDirection: "row", alignItems: "center" }}
+            >
+              <Ionicons
+                name={isLiked ? "heart" : "heart-outline"}
+                size={16}
+                color={isLiked ? themeColor.danger : textColor}
+              />
+              <Text
+                style={{ marginLeft: 4, fontSize: 12, color: textColor }}
+              >
+                {likesCount}
+              </Text>
+            </TouchableOpacity>
+
+            {/* Comment button */}
+            <TouchableOpacity
+              onPress={handleOpenComments}
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginLeft: 12,
+              }}
+            >
+              <Ionicons
+                name="chatbubble-ellipses-outline"
+                size={16}
+                color={isDarkmode ? "#aaa" : "#666"}
+              />
+              <Text
+                style={{ marginLeft: 4, fontSize: 12, color: textColor }}
+              >
+                {commentsCount}
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Right side: save / bookmark */}
+          <TouchableOpacity disabled={!uid} onPress={handleToggleSave}>
+            <Ionicons
+              name={isSaved ? "bookmark" : "bookmark-outline"}
+              size={18}
+              color={isSaved ? themeColor.info : textColor}
+            />
+          </TouchableOpacity>
+        </View>
+
+        {/* DATE */}
+        <Text
+          style={{
+            marginTop: 2,
+            fontSize: 10,
+            color: textColor,
+            opacity: 0.6,
+          }}
+        >
+          {dateString}
+        </Text>
+
+        {/* 3-dot menu */}
         {showMenu && (
           <TouchableOpacity
             onPress={onPressMenu}
