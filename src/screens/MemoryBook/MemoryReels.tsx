@@ -300,7 +300,7 @@ export default function MemoryReels({ navigation }: Props) {
         renderItem={renderReel}
         contentContainerStyle={{ padding: 16, paddingBottom: 100 }}
       />
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }

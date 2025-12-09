@@ -1,5 +1,5 @@
 // src/screens/MyModule/MemoryUpload.tsx
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import { View, Image, Alert, ScrollView, TouchableOpacity } from "react-native";
 import {
   Layout,
@@ -12,6 +12,7 @@ import {
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as Location from "expo-location";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
@@ -35,6 +36,14 @@ type SelectedMedia = {
   uri: string;
   type: "image" | "video";
   base64?: string | null; // for vision AI
+};
+
+// For place search (IG-style location search)
+type PlaceOption = {
+  id: string;
+  label: string;
+  latitude: number;
+  longitude: number;
 };
 
 // ----- Types for face-recognition responses -----
@@ -111,9 +120,156 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [faceName, setFaceName] = useState(""); // name typed by user
   const [isSavingFace, setIsSavingFace] = useState(false);
 
+  // 🔹 Location state (auto-detect + search)
+  const [locationLabel, setLocationLabel] = useState<string | null>(null);
+  const [locationCoords, setLocationCoords] = useState<{
+    latitude: number;
+    longitude: number;
+  } | null>(null);
+  const [locationError, setLocationError] = useState<string | null>(null);
+
+  // Search state for IG-style place search
+  const [locationQuery, setLocationQuery] = useState("");
+  const [placeOptions, setPlaceOptions] = useState<PlaceOption[]>([]);
+  const [isSearchingPlace, setIsSearchingPlace] = useState(false);
+
   // For Expo web / Android emulator on same PC.
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
-  const LOCAL_AI_SERVER = "http://localhost:3000";
+  const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
+
+
+  // -------------------------------------------------------
+  // Location: auto-detect using GPS + Nominatim (English)
+  // -------------------------------------------------------
+  const autoDetectLocation = async () => {
+    try {
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setLocationError("Permission to access location was denied");
+        return;
+      }
+
+      const loc = await Location.getCurrentPositionAsync({});
+      const latitude = loc.coords.latitude;
+      const longitude = loc.coords.longitude;
+
+      setLocationCoords({ latitude, longitude });
+
+      // 1) Try Nominatim reverse geocode with English first
+      try {
+        const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1&accept-language=en`;
+        const resp = await fetch(url, {
+          headers: {
+            "User-Agent": "memorybook-app",
+          },
+        });
+
+        if (resp.ok) {
+          const data = await resp.json();
+          const addr = data.address || {};
+          const parts = [
+            addr.amenity,
+            addr.road,
+            addr.neighbourhood || addr.suburb,
+            addr.city || addr.town || addr.village,
+            addr.state,
+            addr.country,
+          ].filter(Boolean);
+          const label =
+            (parts.length ? parts.slice(0, 3).join(", ") : "") ||
+            data.display_name ||
+            null;
+          setLocationLabel(label);
+          setLocationError(null);
+          return;
+        }
+      } catch (e) {
+        console.log("Nominatim reverse error:", e);
+      }
+
+      // 2) Fallback to Expo reverseGeocode (may be device-language)
+      try {
+        const places = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
+        if (places && places.length > 0) {
+          const p = places[0];
+          const parts = [
+            p.name,
+            p.street,
+            (p as any).subregion || (p as any).city,
+            p.region,
+            p.country,
+          ].filter(Boolean);
+          const label = parts.slice(0, 3).join(", ");
+          setLocationLabel(label || null);
+          setLocationError(null);
+        }
+      } catch (e) {
+        console.log("Expo reverseGeocode error:", e);
+        setLocationError("Could not fetch location.");
+      }
+    } catch (e) {
+      console.log("Location error:", e);
+      setLocationError("Could not fetch location.");
+    }
+  };
+
+  useEffect(() => {
+    autoDetectLocation();
+  }, []);
+
+  // -------------------------------------------------------
+  // Search address (IG-style) with Nominatim (English)
+  // -------------------------------------------------------
+  const searchAddress = async () => {
+    const q = locationQuery.trim();
+    if (!q) return;
+
+    try {
+      setIsSearchingPlace(true);
+      setPlaceOptions([]);
+
+      const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
+        q
+      )}&limit=5&addressdetails=1&accept-language=en`;
+      const resp = await fetch(url, {
+        headers: {
+          "User-Agent": "memorybook-app",
+        },
+      });
+
+      if (!resp.ok) {
+        throw new Error(`HTTP ${resp.status}`);
+      }
+
+      const data = await resp.json();
+      const options: PlaceOption[] = data.map((item: any) => ({
+        id: String(item.place_id),
+        label: item.display_name || q,
+        latitude: parseFloat(item.lat),
+        longitude: parseFloat(item.lon),
+      }));
+
+      setPlaceOptions(options);
+    } catch (e) {
+      console.log("searchAddress error:", e);
+      setLocationError("Failed to search address");
+    } finally {
+      setIsSearchingPlace(false);
+    }
+  };
+
+  const handleSelectPlace = (place: PlaceOption) => {
+    setLocationLabel(place.label);
+    setLocationCoords({
+      latitude: place.latitude,
+      longitude: place.longitude,
+    });
+    setLocationQuery(place.label);
+    setPlaceOptions([]);
+  };
 
   // -------------------------------------------------------
   // Helper: call local AI server (caption + hashtags + friendTags)
@@ -138,7 +294,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     const data = await response.json();
-    // expected: { caption: string, hashtags: string[], friendTags: string[] }
     console.log("[CLIENT] /generatePostMeta result:", data);
     return data as {
       caption: string;
@@ -176,7 +331,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   // Helper – register a face under a given name
   const callFaceRegister = async (name: string, imageBase64: string) => {
-    // simple slug from name as personId
     const personId = name.trim().toLowerCase().replace(/\s+/g, "_");
 
     const resp = await fetch(`${LOCAL_AI_SERVER}/faces/register`, {
@@ -210,8 +364,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
     if (!recognizedNames.length) return;
 
-    // Use functional update so we always get the latest text
-    setFriendTagsText((prev: String) => {
+    setFriendTagsText((prev: string) => {
       const existing: string[] = prev
         .split(/[,@\s]+/)
         .map((t: string) => t.trim())
@@ -235,7 +388,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   // -------------------------------------------------------
   // Auto-generate AI caption & tags + face-based names
-  // options.useDraft = true 时强制用 draft，当作「用这句帮我写」
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -252,12 +404,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
     try {
       setIsGeneratingAI(true);
 
-      // 所有 image 的 base64，一起给 vision 模型看
       const imageBase64List = mediaItems
         .filter((m) => m.type === "image" && m.base64)
         .map((m) => m.base64 as string);
 
-      // 🔴 如果有选图片但没有 base64，不要用纯文字模式，直接提示
       if (!imageBase64List.length) {
         Alert.alert(
           "Need photo data",
@@ -274,22 +424,18 @@ export default function MemoryUpload({ navigation, route }: Props) {
         captionDraft = caption || "";
       }
 
-      // -------- 1) Caption / hashtags / friendTags from language model --------
       const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
 
-      // helper to strip hashtags that models sometimes add into caption text
       const stripHashtags = (text: string) =>
         (text || "")
           .replace(/(^|\s)#\S+/g, " ")
           .replace(/\s+/g, " ")
           .trim();
 
-      // 1. Caption (without embedded hashtags)
       if (aiResult.caption) {
         setCaption(stripHashtags(aiResult.caption));
       }
 
-      // 2. Hashtags: convert ["friends","trip2025"] -> "#friends #trip2025"
       if (Array.isArray(aiResult.hashtags)) {
         const formatted = aiResult.hashtags.map((h) =>
           h.trim().startsWith("#") ? h.trim() : `#${h.trim()}`
@@ -297,13 +443,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
         setHashtagsText(formatted.join(" "));
       }
 
-      // 3. Friend tags from AI
       if (Array.isArray(aiResult.friendTags) && aiResult.friendTags.length) {
         console.log("[CLIENT] Friend tags from AI:", aiResult.friendTags);
         setFriendTagsText(aiResult.friendTags.join(", "));
       }
 
-      // -------- 2) Extra: client-side face-recognition (可选，主要是 double-check) --------
       const firstImageBase64 = imageBase64List[0];
       if (firstImageBase64) {
         const faceResult = await callFaceRecognize(firstImageBase64);
@@ -340,7 +484,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       return;
     }
 
-    // use first image with base64
     const firstImage = mediaItems.find((m) => m.type === "image" && m.base64);
 
     if (!firstImage || !firstImage.base64) {
@@ -355,8 +498,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       setIsSavingFace(true);
       await callFaceRegister(name, firstImage.base64);
 
-      // also merge into friendTagsText
-      setFriendTagsText((prev: String) => {
+      setFriendTagsText((prev: string) => {
         const existingNames: string[] = prev
           .split(/[,@\s]+/)
           .map((t: string) => t.trim())
@@ -384,16 +526,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // pick one or more media files
-  const pickMedia = async () => {
-    if (editMode) {
-      Alert.alert(
-        "Edit mode",
-        "Right now you can only edit the caption and story setting, not the media."
-      );
-      return;
-    }
-
+  // -------------------------------------------------------
+  // Media picking: show options (Camera / Gallery)
+  // -------------------------------------------------------
+  const pickFromLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
@@ -404,10 +540,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.All,
+      // new API – avoid deprecated MediaTypeOptions
+      mediaTypes: ["images", "videos"],
       quality: 0.85,
       allowsMultipleSelection: true,
-      base64: true, // important for vision AI & face recognition
+      base64: true,
     });
 
     if (result.canceled) return;
@@ -418,7 +555,64 @@ export default function MemoryUpload({ navigation, route }: Props) {
       base64: asset.base64 ?? null,
     }));
 
-    setMediaItems(selected);
+    setMediaItems((prev) => [...prev, ...selected]);
+  };
+
+  const captureWithCamera = async () => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission needed",
+        "We need access to your camera to capture memories."
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images", "videos"],
+      quality: 0.85,
+      base64: true,
+    });
+
+    if (result.canceled || !result.assets || !result.assets.length) return;
+
+    const asset = result.assets[0];
+    const item: SelectedMedia = {
+      uri: asset.uri,
+      type: asset.type === "video" ? "video" : "image",
+      base64: asset.base64 ?? null,
+    };
+
+    setMediaItems((prev) => [...prev, item]);
+  };
+
+  const pickMedia = async () => {
+    if (editMode) {
+      Alert.alert(
+        "Edit mode",
+        "Right now you can only edit the caption and story setting, not the media."
+      );
+      return;
+    }
+
+    Alert.alert("Add Media", "Choose photo / video from:", [
+      {
+        text: "Camera",
+        onPress: () => {
+          captureWithCamera();
+        },
+      },
+      {
+        text: "Gallery",
+        onPress: () => {
+          pickFromLibrary();
+        },
+      },
+      {
+        text: "Cancel",
+        style: "cancel",
+      },
+    ]);
   };
 
   const handleUpload = async () => {
@@ -428,7 +622,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       return;
     }
 
-    // Prepare hashtags & friend tags as arrays
     const hashtagList =
       hashtagsText
         .split(/[,\s]+/)
@@ -457,6 +650,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
           friendTags: friendTagList,
+          // keep old location for edited posts
         });
 
         Alert.alert("Updated", "Your memory has been updated.");
@@ -482,7 +676,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       const now = Date.now();
       const expiry = Timestamp.fromDate(new Date(now + 24 * 60 * 60 * 1000));
 
-      // 1) upload ALL media, collect urls & types
       const uploadedUrls: string[] = [];
       const uploadedTypes: ("image" | "video")[] = [];
 
@@ -499,7 +692,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
         uploadedTypes.push(item.type);
       }
 
-      // 2) create ONE Firestore document for this post
       const firstUrl = uploadedUrls[0];
       const firstType = uploadedTypes[0] || "image";
 
@@ -509,14 +701,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
           CreatedUserName: user.displayName || "Unknown",
           CreatedUserPhoto: user.photoURL || "-",
         },
-        // for backward compatibility
         mediaUrl: firstUrl,
         mediaType: firstType,
-
-        // NEW: all media in one post
         mediaUrls: uploadedUrls,
         mediaTypes: uploadedTypes,
-
         caption,
         hashtags: hashtagList,
         friendTags: friendTagList,
@@ -525,6 +713,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
         storyExpiresAt: isStory ? expiry : null,
         likes: [],
         savedBy: [],
+        locationLabel: locationLabel || null,
+        locationCoords: locationCoords || null,
       });
 
       Alert.alert("Posted", "Your memory has been uploaded.");
@@ -537,7 +727,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // -------- render --------
   const arrowColor = isDarkmode ? themeColor.white : "#999";
   const canUseAI = mediaItems.length > 0 && !isGeneratingAI;
 
@@ -565,7 +754,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           text={
             editMode
               ? "Choose Photo / Video (disabled in edit mode)"
-              : "Choose Photo / Video (multi-select)"
+              : "Add Photo / Video (Camera or Gallery)"
           }
           onPress={pickMedia}
         />
@@ -596,7 +785,125 @@ export default function MemoryUpload({ navigation, route }: Props) {
           </View>
         )}
 
-        {/* Draft 行：用 keyword 来造句 */}
+        {/* 📍 Location (auto-detect + IG-style search) */}
+        <View style={{ marginTop: 16 }}>
+          {/* Row showing current label + Detect again */}
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+            >
+              <Ionicons
+                name="location-outline"
+                size={18}
+                color={isDarkmode ? themeColor.white : "#555"}
+              />
+              <Text
+                style={{
+                  marginLeft: 6,
+                  color: isDarkmode ? themeColor.white : themeColor.dark,
+                }}
+                numberOfLines={1}
+              >
+                {locationLabel
+                  ? locationLabel
+                  : locationError
+                  ? locationError
+                  : "Detecting location..."}
+              </Text>
+            </View>
+
+            <TouchableOpacity onPress={autoDetectLocation}>
+              <Text
+                style={{
+                  fontSize: 11,
+                  color: themeColor.info,
+                  marginLeft: 8,
+                }}
+              >
+                Detect again
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* Search box like IG – override auto-detect */}
+          <View
+            style={{
+              marginTop: 8,
+              flexDirection: "row",
+              alignItems: "center",
+            }}
+          >
+            <View style={{ flex: 1, marginRight: 8 }}>
+              <TextInput
+                placeholder="Search for a place (optional)"
+                value={locationQuery}
+                onChangeText={setLocationQuery}
+              />
+            </View>
+            <TouchableOpacity
+              onPress={searchAddress}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 6,
+                borderRadius: 6,
+                borderWidth: 1,
+                borderColor: isDarkmode ? "#555" : "#ccc",
+                opacity: isSearchingPlace ? 0.5 : 1,
+              }}
+              disabled={isSearchingPlace}
+            >
+              <Ionicons
+                name="search-outline"
+                size={18}
+                color={isDarkmode ? themeColor.white : "#555"}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Suggestion list */}
+          {placeOptions.length > 0 && (
+            <View
+              style={{
+                marginTop: 6,
+                borderRadius: 8,
+                borderWidth: 1,
+                borderColor: isDarkmode ? "#444" : "#ddd",
+                backgroundColor: isDarkmode ? "#111" : "#fff",
+              }}
+            >
+              {placeOptions.map((p) => (
+                <TouchableOpacity
+                  key={p.id}
+                  onPress={() => handleSelectPlace(p)}
+                  style={{
+                    paddingVertical: 8,
+                    paddingHorizontal: 10,
+                    borderBottomWidth: 1,
+                    borderBottomColor: isDarkmode ? "#222" : "#eee",
+                  }}
+                >
+                  <Text
+                    style={{
+                      fontSize: 13,
+                      color: isDarkmode ? themeColor.white : themeColor.dark,
+                    }}
+                    numberOfLines={2}
+                  >
+                    {p.label}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </View>
+          )}
+        </View>
+
+        {/* Draft / Keywords */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>
           Draft / Keywords (optional)
         </Text>
@@ -632,7 +939,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
 
-        {/* Caption 行：显示结果 + 右边 ✨ 自动生成 */}
+        {/* Caption */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>Caption</Text>
         <View
           style={{

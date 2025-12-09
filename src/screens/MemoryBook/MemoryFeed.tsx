@@ -57,6 +57,11 @@ interface Post {
   friendTags?: string[];
   mediaUrls?: string[];
   mediaTypes?: ("image" | "video")[];
+  locationLabel?: string | null;
+  locationCoords?: {
+    latitude: number;
+    longitude: number;
+  } | null;
 }
 
 // Format Firestore timestamp to readable date+time
@@ -113,7 +118,7 @@ const PostItem: React.FC<PostItemProps> = ({
 
   return (
     <View style={cardStyle}>
-      {/* header: username + 3-dot menu for own post */}
+      {/* header: username + location + 3-dot menu for own post */}
       <View
         style={{
           flexDirection: "row",
@@ -122,7 +127,21 @@ const PostItem: React.FC<PostItemProps> = ({
           marginBottom: 6,
         }}
       >
-        <Text fontWeight="bold">{post.username || "User"}</Text>
+        <View style={{ flex: 1 }}>
+          <Text fontWeight="bold">{post.username || "User"}</Text>
+          {post.locationLabel && (
+            <Text
+              style={{
+                marginTop: 2,
+                fontSize: 12,
+                color: isDarkmode ? "#9ca3af" : "#6b7280",
+              }}
+              numberOfLines={1}
+            >
+              {post.locationLabel}
+            </Text>
+          )}
+        </View>
 
         {post.userId === currentUserId && (
           <TouchableOpacity
@@ -474,6 +493,8 @@ export default function MemoryFeed({ navigation }: Props) {
           friendTags: d.friendTags || [],
           mediaUrls: d.mediaUrls || (d.mediaUrl ? [d.mediaUrl] : []),
           mediaTypes: d.mediaTypes || (d.mediaType ? [d.mediaType] : []),
+          locationLabel: d.locationLabel || null,
+          locationCoords: d.locationCoords || null,
         });
       });
       setPosts(data);
@@ -752,7 +773,7 @@ export default function MemoryFeed({ navigation }: Props) {
           </View>
         </View>
       </Modal>
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }

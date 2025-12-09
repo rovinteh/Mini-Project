@@ -560,7 +560,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       />
 
       <View style={{ flex: 1 }}>{renderMoodCalendar()}</View>
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }

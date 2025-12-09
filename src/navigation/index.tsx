@@ -1,14 +1,18 @@
+// src/navigation/index.tsx
 import React, { useContext } from "react";
 import { getApps, initializeApp } from "firebase/app";
-import { AuthContext } from "../provider/AuthProvider";
+// @ts-ignore – available in RN bundle even if typings complain
+import { initializeAuth, getReactNativePersistence } from "firebase/auth";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
+import { AuthContext } from "../provider/AuthProvider";
 import { NavigationContainer } from "@react-navigation/native";
 
 import Main from "./MainStack";
 import Auth from "./AuthStack";
 import Loading from "../screens/utils/Loading";
 
-// Better put your these secret keys in .env file
+// Firebase config
 const firebaseConfig = {
   apiKey: "AIzaSyCh_I6y5GCLkzFRFdbl8Na69SomyiVBysI",
   authDomain: "myminiprojectjay.firebaseapp.com",
@@ -18,13 +22,21 @@ const firebaseConfig = {
   appId: "1:96591390670:web:7d80f3f3e61252b21d6d9f",
   measurementId: "G-17X825V6HB",
 };
+
+// Initialize Firebase + Auth persistence
+let app;
 if (getApps().length === 0) {
-  initializeApp(firebaseConfig);
+  app = initializeApp(firebaseConfig);
+
+  initializeAuth(app, {
+    persistence: getReactNativePersistence(AsyncStorage),
+  });
 }
 
-export default () => {
+export default function RootNavigation() {
   const auth = useContext(AuthContext);
   const user = auth.user;
+
   return (
     <NavigationContainer>
       {user == null && <Loading />}
@@ -32,4 +44,4 @@ export default () => {
       {user == true && <Main />}
     </NavigationContainer>
   );
-};
+}

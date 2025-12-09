@@ -1,4 +1,4 @@
-// index.js - Local AI + Face proxy server for MemoryBook 
+// index.js - Local AI + Face proxy server for MemoryBook
 
 const express = require("express");
 const cors = require("cors");
@@ -19,9 +19,9 @@ app.use(bodyParser.json({ limit: "20mb" }));
 // ---- Ollama config (adjust if needed) ----
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 // DeepSeek 专门用来“改写 + 输出 JSON”
-const OLLAMA_TEXT_MODEL = "deepseek-r1:7b"; // for text-only caption helper
+const OLLAMA_TEXT_MODEL = "deepseek-r1:7b"; // text-only caption helper
 // 视觉模型只负责看图描述（不再直接输出 JSON）
-const OLLAMA_VISION_MODEL = "llava-phi3:latest"; // for real image-based caption
+const OLLAMA_VISION_MODEL = "llava-phi3:latest"; // real image-based caption
 
 // -------------------------
 // Small helpers
@@ -42,12 +42,12 @@ function normalizeCaptionLength(caption, captionDraft) {
   result = result.replace(/\s+/g, " ").trim();
   let words = countWords(result);
 
-  const MAX_WORDS = 28; // 最大允许字数
+  const MAX_WORDS = 50; // 最大允许字数
 
   // 1️⃣ 如果字数在范围内 → 完全保留 DeepSeek 的自然风格
   if (words <= MAX_WORDS) return result;
 
-  // 2️⃣ 字数超过 MAX_WORDS → 先粗略截到 28 个词
+  // 2️⃣ 字数超过 MAX_WORDS → 先粗略截到 50 个词
   let tokens = result.split(/\s+/);
   let truncated = tokens.slice(0, MAX_WORDS).join(" ");
 
@@ -122,6 +122,8 @@ const SENSITIVE_TAGS_REQUIRE_DRAFT = [
   "desserts",
   "party",
   "celebration",
+  // 新增：boh 也必须 draft 提到才允许
+  "boh",
 ];
 
 function adjustHashtags(hashtags, captionDraft) {
@@ -135,7 +137,7 @@ function adjustHashtags(hashtags, captionDraft) {
   // 去重
   tags = Array.from(new Set(tags));
 
-  // 没有在 draft 里提到的敏感词，直接 ban 掉（避免幻觉蛋糕 / 生日）
+  // 没有在 draft 里提到的敏感词，直接 ban 掉（避免幻觉蛋糕 / 生日 / boh）
   const draftLower = String(captionDraft || "").toLowerCase();
   tags = tags.filter((t) => {
     if (SENSITIVE_TAGS_REQUIRE_DRAFT.includes(t)) {
@@ -143,6 +145,10 @@ function adjustHashtags(hashtags, captionDraft) {
     }
     return true;
   });
+
+  // 🚫 额外硬性禁止的标签（无论 draft 有没有写都不要）
+  const BANNED_ALWAYS = ["boh", "bohtea", "bohteamalaysia"];
+  tags = tags.filter((t) => !BANNED_ALWAYS.includes(t));
 
   return tags.slice(0, 5);
 }
@@ -175,6 +181,56 @@ function removeBannedWords(text) {
   return result.replace(/\s+/g, " ").trim();
 }
 
+// 🚫 不想无缘无故出现的「学习 / 工作」活动 —— 只有 draft 自己写才允许
+const BANNED_ACTIVITY_PHRASES = [
+  "taking notes",
+  "take notes",
+  "doing homework",
+  "do homework",
+  "studying",
+  "study session",
+  "working on my notes",
+  "working on notes",
+  "working on homework",
+  "working on assignments",
+  "doing my assignment",
+  "doing assignments",
+  "preparing for exams",
+  "studying for exams",
+];
+
+function removeBannedActivities(text, captionDraft) {
+  let result = String(text || "");
+  const draftLower = String(captionDraft || "").toLowerCase();
+
+  // 如果 draft 没有提到这些活动词，就从 caption 里删掉
+  for (const phrase of BANNED_ACTIVITY_PHRASES) {
+    const phraseLower = phrase.toLowerCase();
+    if (!draftLower.includes(phraseLower)) {
+      const re = new RegExp(phrase.replace(/\s+/g, "\\s+"), "ig");
+      result = result.replace(re, "");
+    }
+  }
+
+  // 清理多余空白和多余逗号
+  result = result.replace(/\s+/g, " ").trim();
+  result = result.replace(/\s+,/g, ",").replace(/,\s*,/g, ",");
+  return result.trim();
+}
+
+// 🔹 品牌 / 文本：如果 draft 没有写 “boh”，就从 caption 里删掉它，避免幻觉招牌
+function removeBrandTextIfNotInDraft(text, captionDraft) {
+  let result = String(text || "");
+  const draftLower = String(captionDraft || "").toLowerCase();
+
+  if (!draftLower.includes("boh")) {
+    result = result.replace(/\bBOH\b/gi, "").trim();
+  }
+
+  // 清一次多余空格
+  return result.replace(/\s+/g, " ").trim();
+}
+
 // -------------------------
 // Helper: call Ollama (text → DeepSeek)
 // -------------------------
@@ -192,7 +248,7 @@ async function callOllamaChatText(prompt) {
 }
 
 // -------------------------
-// Helper: Vision – 单张图片描述（加强版：读招牌 + 禁止幻想）
+// Helper: Vision – 单张图片描述（加强版：禁止乱读文字）
 // -------------------------
 async function describeSingleImage(imageBase64, index, total) {
   if (!imageBase64) return "";
@@ -208,9 +264,10 @@ Describe ONLY what you clearly see in this one photo.
 
 FOCUS (VERY IMPORTANT):
 - Focus on the main subject (people, landscapes, buildings, plush toys, large objects).
-- If there is any LARGE, CLEAR text on a sign, building, product, or sculpture
-  (for example "BOH"), you MUST copy that text exactly once in your description,
-  wrapped in quotes, like: the large white "BOH" sign on the hill.
+- If there is any LARGE, CLEAR text on a sign, building, product, or sculpture:
+  • Only mention the text if it is perfectly readable and unambiguous.
+  • If you see the word "BOH" anywhere, COMPLETELY IGNORE it and do NOT mention it.
+  • If you are not 100% sure of every letter, DO NOT mention any text at all.
 - Completely ignore tiny or unclear background items, especially on tables or far away.
 - If you are not 100% sure what an object is, DO NOT name it.
 - If the main subject looks like a plush toy, and you are not 100% sure which animal it is,
@@ -223,10 +280,11 @@ STRICT NO-GUESSING RULES:
   and people are clearly visible with chairs etc.
 - Do NOT describe feelings or atmosphere ("inviting", "cozy", "romantic") —
   keep it purely visual.
+- NEVER guess the text content of far away or blurry signs. If unsure, say nothing about text.
 
 STYLE:
 - Use simple English, 1–2 short sentences.
-- Mention key visible details of the main subject (shape, colors, text on signs).
+- Mention key visible details of the main subject (shape, colors, text on signs only when clear).
 - Do NOT mention "photo", "image", "camera" or "AI".
 - Just give a neutral description of what is visible with your eyes.
 `.trim(),
@@ -269,7 +327,11 @@ async function callOllamaVisionDescribeMulti(imageBase64List, captionDraft) {
 
   if (!parts.length) return "";
 
-  const combined = parts.join("\n");
+  let combined = parts.join("\n");
+
+  // 🔹 extra safety: remove BOH brand text from the description
+  combined = combined.replace(/\bBOH\b/gi, "").replace(/\s+/g, " ").trim();
+
   console.log("[VISION] Combined per-photo description:\n", combined);
   return combined;
 }
@@ -346,6 +408,8 @@ GENERAL VISION RULES (VERY IMPORTANT):
   - Do NOT say "lunch", "dinner", "breakfast" unless you clearly see a meal or food.
   - Do NOT say "trip", "travel", "holiday" unless there are obvious travel clues
     like luggage, landmarks, hotel, airplane view, or the user draft says it.
+  - Do NOT say I am working, studying, doing homework, or taking notes
+    unless the USER draft clearly says so.
 - When the background is unclear, keep the place description very neutral
   (e.g. "today", "this moment", "tonight", "here") instead of guessing.
 - Never invent a story like "I woke up early" or "I spent the whole day with you guys"
@@ -385,13 +449,14 @@ FRIEND TAG RULES:
 EXTRA SAFETY RULE (VERY IMPORTANT):
 - If the vision description mentions small background items like
   "matches", "box of matches", "pencils", "pens", "notebooks", "remote controls", etc.,
-  you MUST ignore these words completely.
+  you MUST ignore these words completely, and also ignore any activities like
+  "taking notes", "doing homework", "studying", or "working on notes".
 - They must NOT appear in the final caption or hashtags at all.
 
 TEXT ON SIGNS:
-- If the vision description contains quoted text from a sign or logo
-  (for example "BOH"), you SHOULD mention this name once in either
-  the caption or in one of the hashtags (or both), as long as it feels natural.
+- Only trust text from signs or logos if it is reported very clearly in the description.
+- If the text in the description sounds uncertain or strange, ignore it.
+- Never invent text such as a random brand name.
 
 Return ONLY valid JSON, no explanation, no markdown fences:
 
@@ -464,6 +529,10 @@ Always obey ALL the rules above.
 
     // 先硬过滤掉我们不想要的幻觉词
     caption = removeBannedWords(caption);
+    // 再去掉不想要的学习 / 作业活动（如果 draft 没有提）
+    caption = removeBannedActivities(caption, captionDraft);
+    // 如果 draft 没写 boh，就把 caption 里的 BOH 删掉
+    caption = removeBrandTextIfNotInDraft(caption, captionDraft);
     // 再强制变成第一人称
     caption = enforceFirstPerson(caption);
     // plush + dog/cat/bear/bunny → plush toy
@@ -483,23 +552,38 @@ Always obey ALL the rules above.
       }
     }
 
-    // -------- Face recognition for friendTags --------
-    let faceMatches = [];
+    // -------- Face recognition for friendTags (single best match, strict) --------
+    let bestMatchName = null;
+
     if (images.length > 0) {
       try {
-        const faceResp = await recognizeFace(images[0]);
-        faceMatches = Array.isArray(faceResp.matches) ? faceResp.matches : [];
-        console.log("[VISION] Face matches for friend tags:", faceMatches);
+        // use a stricter threshold than Python default (0.6)
+        const faceResp = await recognizeFace(images[0], 0.4);
+        const matches = Array.isArray(faceResp.matches)
+          ? faceResp.matches
+          : [];
+        console.log("[VISION] Face matches for friend tags:", matches);
+
+        if (matches.length > 0) {
+          // face_api already sorts by distance ascending
+          const top = matches[0];
+          const name = (top.name || "").trim();
+          const distance =
+            typeof top.distance === "number"
+              ? top.distance
+              : Number(top.distance) || 1;
+
+          // only accept if distance is still confidently small
+          if (name && distance <= 0.4) {
+            bestMatchName = name;
+          }
+        }
       } catch (err) {
         console.log("Face recognition in /generatePostMeta failed:", err);
       }
     }
 
-    const faceNames = faceMatches
-      .map((m) => (m.name || "").trim())
-      .filter(Boolean);
-
-    const friendTagsMerged = Array.from(new Set(faceNames));
+    const friendTagsMerged = bestMatchName ? [bestMatchName] : [];
 
     const cleaned = {
       caption,

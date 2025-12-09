@@ -68,7 +68,7 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
               style={{
                 alignItems: "center",
                 justifyContent: "center",
-                transform: isAdd ? [{ translateY: -7 }] : [],
+                transform: isAdd ? [{ translateY: -6 }] : [],
               }}
             >
               <Ionicons

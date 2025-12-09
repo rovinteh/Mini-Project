@@ -29,7 +29,7 @@ type StoryPost = {
   mediaUrl: string;
   caption?: string;
   userId?: string;
-  username?: string; // <--- added so we can show "{username} story"
+  username?: string;
   isStory?: boolean;
   createdAt?: any;
   storyExpiresAt?: any;
@@ -79,8 +79,9 @@ export default function MemoryStoryView({ route, navigation }: Props) {
         if (story.storyExpiresAt?.toDate) {
           expired = story.storyExpiresAt.toDate() <= now;
         } else if (story.createdAt?.toDate && story.isStory) {
-          const created = story.createdAt.toDate();
-          expired = now.getTime() - created.getTime() >= 24 * 60 * 60 * 1000;
+          const createdTime = story.createdAt.toDate();
+          expired =
+            now.getTime() - createdTime.getTime() >= 24 * 60 * 60 * 1000;
         }
 
         if (story.isStory && expired) {
@@ -104,7 +105,7 @@ export default function MemoryStoryView({ route, navigation }: Props) {
     load();
   }, [firestore, postId, navigation]);
 
-  // Auto close like IG (6 seconds)
+  // Auto close like IG (5 seconds)
   useEffect(() => {
     if (!post) return;
     const timer = setTimeout(() => {
@@ -116,15 +117,12 @@ export default function MemoryStoryView({ route, navigation }: Props) {
 
   const isOwner = !!post && !!currentUser && post.userId === currentUser.uid;
 
-  // DIRECT delete (works on web and native)
   const handleDelete = async () => {
     if (!post || !isOwner) return;
 
     try {
-      // delete Firestore doc
       await deleteDoc(doc(firestore, "posts", post.id));
 
-      // try delete image from Storage as well
       if (post.mediaUrl) {
         try {
           const fileRef = ref(storage, post.mediaUrl);
@@ -146,7 +144,7 @@ export default function MemoryStoryView({ route, navigation }: Props) {
     return (
       <Layout>
         <TopNav
-          middleContent={<Text>{"Story"}</Text>}
+          middleContent={<Text>Story</Text>}
           leftContent={
             <Ionicons
               name="chevron-back"
@@ -164,7 +162,6 @@ export default function MemoryStoryView({ route, navigation }: Props) {
           }
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
         />
-
         <View
           style={{
             flex: 1,
@@ -179,49 +176,75 @@ export default function MemoryStoryView({ route, navigation }: Props) {
     );
   }
 
-  if (!post) {
-    return null;
-  }
+  if (!post) return null;
 
-  const titleText = post.username ? `${post.username} story` : "User story";
+  const username = post.username || "User";
+  const initial = username.charAt(0).toUpperCase();
+  const titleText = `${username}'s story`;
 
   return (
-    <Layout>
+    <Layout style={{ backgroundColor: "black" }}>
+      {/* Top bar styled more like a story header */}
       <TopNav
-        middleContent={titleText}
+        backgroundColor="transparent"
+        borderColor="transparent"
+        middleContent={
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <View
+              style={{
+                width: 32,
+                height: 32,
+                borderRadius: 16,
+                backgroundColor: "rgba(255,255,255,0.15)",
+                justifyContent: "center",
+                alignItems: "center",
+                marginRight: 8,
+              }}
+            >
+              <Text style={{ color: "white", fontWeight: "bold" }}>
+                {initial}
+              </Text>
+            </View>
+            <View>
+              <Text style={{ color: "white", fontWeight: "600" }}>
+                {username}
+              </Text>
+              <Text style={{ color: "#bbbbbb", fontSize: 11 }}>Story</Text>
+            </View>
+          </View>
+        }
         leftContent={
           <Ionicons
             name="chevron-back"
-            size={20}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
+            size={22}
+            color={isDarkmode ? themeColor.white100 : themeColor.white100}
           />
         }
         leftAction={() => navigation.goBack()}
         rightContent={
-          <Ionicons
-            name={isDarkmode ? "sunny" : "moon"}
-            size={20}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            {isOwner && (
+              <TouchableOpacity
+                onPress={handleDelete}
+                style={{ marginRight: 14 }}
+              >
+                <Ionicons name="trash-outline" size={20} color="#ff6b6b" />
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              onPress={() => setTheme(isDarkmode ? "light" : "dark")}
+            >
+              <Ionicons
+                name={isDarkmode ? "sunny" : "moon"}
+                size={20}
+                color={themeColor.white100}
+              />
+            </TouchableOpacity>
+          </View>
         }
-        rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
 
-      {/* Delete button for owner */}
-      {isOwner && (
-        <TouchableOpacity
-          onPress={handleDelete}
-          style={{
-            position: "absolute",
-            top: 90, // moved lower so it doesn't align with title
-            right: 16, // a bit inward
-            zIndex: 10,
-          }}
-        >
-          <Ionicons name="trash" size={20} color="#fff" /> {/* smaller */}
-        </TouchableOpacity>
-      )}
-
+      {/* Story content */}
       <TouchableWithoutFeedback onPress={() => navigation.goBack()}>
         <View
           style={{
@@ -229,7 +252,6 @@ export default function MemoryStoryView({ route, navigation }: Props) {
             backgroundColor: "black",
             justifyContent: "center",
             alignItems: "center",
-            padding: 16,
           }}
         >
           <Image
@@ -240,19 +262,44 @@ export default function MemoryStoryView({ route, navigation }: Props) {
               resizeMode: "contain",
             }}
           />
+
+          {/* Caption card at the bottom */}
           {post.caption ? (
-            <Text
+            <View
               style={{
-                color: "white",
-                marginTop: 10,
-                textAlign: "center",
+                position: "absolute",
+                bottom: 60,
+                left: 16,
+                right: 16,
+                backgroundColor: "rgba(0,0,0,0.55)",
+                borderRadius: 14,
+                paddingHorizontal: 14,
+                paddingVertical: 10,
               }}
             >
-              {post.caption}
-            </Text>
+              <Text
+                style={{
+                  color: "white",
+                  textAlign: "left",
+                  fontSize: 14,
+                  lineHeight: 18,
+                }}
+              >
+                {post.caption}
+              </Text>
+            </View>
           ) : null}
-          <Text style={{ color: "#aaa", marginTop: 5, fontSize: 12 }}>
-            Story will close in 5 seconds. Tap to exit.
+
+          {/* Hint text */}
+          <Text
+            style={{
+              position: "absolute",
+              bottom: 24,
+              color: "#aaaaaa",
+              fontSize: 11,
+            }}
+          >
+            Story will close in 5 seconds · Tap anywhere to exit
           </Text>
         </View>
       </TouchableWithoutFeedback>

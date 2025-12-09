@@ -401,7 +401,7 @@ export default function MemoryProfile({ navigation }: Props) {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      mediaTypes: ["images", "videos"],
       allowsEditing: true,
       aspect: [1, 1],
       quality: 0.7,
@@ -1339,7 +1339,7 @@ export default function MemoryProfile({ navigation }: Props) {
           </View>
         </View>
       </Modal>
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }

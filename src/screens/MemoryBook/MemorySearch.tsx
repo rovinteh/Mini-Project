@@ -624,7 +624,7 @@ export default function MemorySearch({ navigation }: Props) {
       </View>
 
       {/* Bottom navigation bar */}
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }

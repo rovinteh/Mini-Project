@@ -28,6 +28,13 @@ export type PostType = {
   savedBy?: string[]; // list of user IDs who saved/bookmarked
   createdAt?: any; // Firestore timestamp
   isStory?: boolean;
+
+  // 🔹 New: optional location stored in Firestore
+  locationLabel?: string | null;
+  locationCoords?: {
+    latitude: number;
+    longitude: number;
+  } | null;
 };
 
 type Props = {
@@ -108,9 +115,11 @@ export default function B2PostCard({
   };
 
   const handleOpenComments = () => {
-    // go to full post screen where you handle comments
     navigation.navigate("MemoryPostView", { postId: post.id });
   };
+
+  // subtle colour for location text
+  const locationColor = isDarkmode ? "#b5c4ff" : "#555";
 
   return (
     <View style={{ width: "33.33%", padding: 4 }}>
@@ -127,6 +136,7 @@ export default function B2PostCard({
           shadowRadius: 3,
           elevation: 3,
           position: "relative",
+          height: 270,
         }}
       >
         {/* Whole card tap → open post */}
@@ -160,6 +170,34 @@ export default function B2PostCard({
             )}
           </View>
 
+          {/* 📍 Location (optional) */}
+          {post.locationLabel ? (
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginTop: 4,
+              }}
+            >
+              <Ionicons
+                name="location-outline"
+                size={12}
+                color={locationColor}
+              />
+              <Text
+                numberOfLines={1}
+                style={{
+                  marginLeft: 4,
+                  fontSize: 10,
+                  flex: 1,
+                  color: locationColor,
+                }}
+              >
+                {post.locationLabel}
+              </Text>
+            </View>
+          ) : null}
+
           {/* CAPTION */}
           <Text
             numberOfLines={2}
@@ -189,7 +227,7 @@ export default function B2PostCard({
           >
             <Ionicons
               name={isLiked ? "heart" : "heart-outline"}
-              size={16}
+              size={18}
               color={isLiked ? themeColor.danger : textColor}
             />
             <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
@@ -208,7 +246,7 @@ export default function B2PostCard({
           >
             <Ionicons
               name="chatbubble-ellipses-outline"
-              size={16}
+              size={18}
               color={isDarkmode ? "#aaa" : "#666"}
             />
             <Text style={{ marginLeft: 4, fontSize: 12, color: textColor }}>
@@ -216,7 +254,7 @@ export default function B2PostCard({
             </Text>
           </TouchableOpacity>
 
-          {/* Save / Bookmark (NOW beside comment) */}
+          {/* Save / Bookmark (beside comment) */}
           <TouchableOpacity
             disabled={!uid}
             onPress={handleToggleSave}
@@ -224,7 +262,7 @@ export default function B2PostCard({
           >
             <Ionicons
               name={isSaved ? "bookmark" : "bookmark-outline"}
-              size={16}
+              size={18}
               color={isSaved ? themeColor.info : textColor}
             />
           </TouchableOpacity>

@@ -956,7 +956,7 @@ export default function MemoryAlbum({ navigation }: Props) {
           </View>
         </ScrollView>
       </View>
-      <MemoryFloatingMenu navigation={navigation} />
+      <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
 }
