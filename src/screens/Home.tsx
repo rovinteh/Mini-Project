@@ -240,7 +240,7 @@ export default function Home({ navigation }: Props) {
               {
                 label: "Fitness",
                 icon: "fitness-outline",
-                route: "HealthFitness",
+                route: "FitnessMenu",
               },
             ].map((item) => (
               <TouchableOpacity
