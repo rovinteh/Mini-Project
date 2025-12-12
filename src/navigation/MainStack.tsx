@@ -15,6 +15,11 @@ import MemoryChatsList from "../screens/MemoryBook/MemoryChatsList";
 import MemoryMoodCalendar from "../screens/MemoryBook/MemoryMoodCalendar";
 import MemoryAlbum from "../screens/MemoryBook/MemoryAlbum";
 import MemoryFloatingMenu from "../screens/MemoryBook/MemoryFloatingMenu";
+import FitnessMenu from "../screens/Health&Fitness/FitnessMenu";
+import LogMeal from "../screens/Health&Fitness/LogMeal";
+import WeeklySummary from "../screens/Health&Fitness/WeeklySummary";
+import WorkoutPreference from "../screens/Health&Fitness/WorkoutPreference";
+import WorkoutSession from "../screens/Health&Fitness/WorkoutSession";
 
 const MainStack = createNativeStackNavigator();
 
@@ -45,6 +50,14 @@ const Main = () => {
         name="MemoryFloatingMenu"
         component={MemoryFloatingMenu}
       />
+      <MainStack.Screen name="FitnessMenu" component={FitnessMenu} />
+      <MainStack.Screen name="LogMeal" component={LogMeal} />
+      <MainStack.Screen name="WeeklySummary" component={WeeklySummary} />
+      <MainStack.Screen
+        name="WorkoutPreference"
+        component={WorkoutPreference}
+      />
+      <MainStack.Screen name="WorkoutSession" component={WorkoutSession} />
     </MainStack.Navigator>
   );
 };

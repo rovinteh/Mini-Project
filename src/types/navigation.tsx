@@ -34,6 +34,11 @@ export type MainStackParamList = {
     category: string;
   };
   MemoryFloatingMenu: undefined;
+  FitnessMenu: undefined;
+  LogMeal: undefined;
+  WeeklySummary: undefined;
+  WorkoutPreference: undefined;
+  WorkoutSession: undefined;
 };
 
 export type AuthStackParamList = {
