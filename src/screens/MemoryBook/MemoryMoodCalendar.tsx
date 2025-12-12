@@ -1,13 +1,7 @@
 // src/screens/MemoryBook/MemoryMoodCalendar.tsx
 import React, { useEffect, useState } from "react";
 import { View, TouchableOpacity, ScrollView } from "react-native";
-import {
-  Layout,
-  TopNav,
-  Text,
-  useTheme,
-  themeColor,
-} from "react-native-rapi-ui";
+import { Layout, TopNav, Text, useTheme, themeColor } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -22,11 +16,12 @@ import {
   query,
   where,
   onSnapshot,
-  setDoc,
-  getDocs,
-  deleteDoc,
+  writeBatch,
+  Timestamp,
 } from "firebase/firestore";
+
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
+
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryMoodCalendar">;
 
 type MoodCategory = "positive" | "neutral" | "tired" | "sad";
@@ -55,9 +50,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   // ----- derived month values -----
   const currentYear = monthDate.getFullYear();
   const currentMonthIndex = monthDate.getMonth(); // 0-11
-  const currentMonthKey = `${currentYear}-${String(
-    currentMonthIndex + 1
-  ).padStart(2, "0")}`;
+  const currentMonthKey = `${currentYear}-${String(currentMonthIndex + 1).padStart(
+    2,
+    "0"
+  )}`;
 
   const monthNames = [
     "January",
@@ -75,11 +71,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   ];
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
-  const daysInMonth = new Date(
-    currentYear,
-    currentMonthIndex + 1,
-    0
-  ).getDate();
+  const daysInMonth = new Date(currentYear, currentMonthIndex + 1, 0).getDate();
   const firstDayIndex = new Date(currentYear, currentMonthIndex, 1).getDay();
 
   const dateKeyFromDay = (day: number) =>
@@ -111,23 +103,26 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     load();
   }, [uid, firestore]);
 
-  // ---- load moods for current month (users/{uid}/moods) ----
+  // ---- load moods for current month (READ FROM posts.mood) ----
   useEffect(() => {
     if (!uid) return;
 
     setMoods({});
 
-    const moodsCol = collection(firestore, "users", uid, "moods");
-    const qMoods = query(moodsCol, where("monthKey", "==", currentMonthKey));
+    const postsCol = collection(firestore, "posts");
+    const qPosts = query(postsCol, where("CreatedUser.CreatedUserId", "==", uid));
 
-    const unsub = onSnapshot(qMoods, (snap) => {
+    const unsub = onSnapshot(qPosts, (snap) => {
       const map: Record<string, string> = {};
+
       snap.forEach((ds) => {
-        const data = ds.data() as any;
-        if (data.date) {
-          map[data.date] = data.emoji || "";
+        const data: any = ds.data();
+        const m = data.mood;
+        if (m?.date && m?.emoji && m?.monthKey === currentMonthKey) {
+          map[m.date] = m.emoji;
         }
       });
+
       setMoods(map);
     });
 
@@ -164,7 +159,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       score = scoreFromLabel(data.moodLabel);
     }
 
-    // 通过 score -> 大分类
     if (score >= 0.3) return "positive";
     if (score <= -0.7) return "sad";
     if (score <= -0.3) return "tired";
@@ -177,7 +171,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     tired: number;
     sad: number;
   }): string | null => {
-    // 找出出现最多的类别
     const entries: [MoodCategory, number][] = [
       ["positive", counts.positive],
       ["neutral", counts.neutral],
@@ -190,16 +183,11 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       if (c > bestCount) bestCount = c;
     });
 
-    if (bestCount === 0) return null; // 没有任何贴文
+    if (bestCount === 0) return null;
 
-    const topCats = entries
-      .filter(([, c]) => c === bestCount)
-      .map(([cat]) => cat);
+    const topCats = entries.filter(([, c]) => c === bestCount).map(([cat]) => cat);
 
-    // 如果最高票不止一个 → 平手 → neutral
-    if (topCats.length > 1) {
-      return "😐";
-    }
+    if (topCats.length > 1) return "😐";
 
     const only = topCats[0];
     switch (only) {
@@ -215,91 +203,82 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     }
   };
 
-  // ---- auto-compute moods per day, using AI mood from posts ----
-  // 多数决 + 当某天没有任何 post 时，自动把该日的 mood doc 删除
+  // ---- auto-compute moods per day, STORE INTO posts.mood ----
   useEffect(() => {
     if (!uid) return;
 
     const postsCol = collection(firestore, "posts");
-    const qPosts = query(
-      postsCol,
-      where("CreatedUser.CreatedUserId", "==", uid)
-    );
+    const qPosts = query(postsCol, where("CreatedUser.CreatedUserId", "==", uid));
 
     const unsub = onSnapshot(qPosts, async (snap) => {
-      // 每天的分类计数
-      const perDay: Record<
-        string,
-        { positive: number; neutral: number; tired: number; sad: number }
-      > = {};
+      // Group posts by dateKey
+      const postsByDate: Record<string, { ref: any; data: any }[]> = {};
 
       snap.forEach((ds) => {
-        const data = ds.data() as any;
-
+        const data: any = ds.data();
         const createdAt = data.createdAt;
-        let dateObj: Date;
+
+        let dateObj: Date | null = null;
+
         if (createdAt && typeof createdAt.toDate === "function") {
           dateObj = createdAt.toDate();
+        } else if (createdAt?.seconds) {
+          dateObj = new Date(createdAt.seconds * 1000);
         } else if (createdAt) {
           dateObj = new Date(createdAt);
-        } else {
-          return;
         }
 
-        const key = dateKeyFromDate(dateObj);
-        const cat = moodCategoryFromPost(data);
+        if (!dateObj || isNaN(dateObj.getTime())) return;
 
-        if (!perDay[key]) {
-          perDay[key] = { positive: 0, neutral: 0, tired: 0, sad: 0 };
-        }
-        perDay[key][cat] += 1;
+        const dateKey = dateKeyFromDate(dateObj);
+        if (!postsByDate[dateKey]) postsByDate[dateKey] = [];
+        postsByDate[dateKey].push({ ref: ds.ref, data });
       });
 
-      const moodsCol = collection(firestore, "users", uid, "moods");
-      const writePromises: Promise<any>[] = [];
-
+      const batch = writeBatch(firestore);
       const dateKeysWithPosts = new Set<string>();
 
-      // 写入 / 更新有贴文的日期
-      Object.entries(perDay).forEach(([dateKey, counts]) => {
+      // For each day -> compute emoji -> write into every post of that day
+      Object.entries(postsByDate).forEach(([dateKey, list]) => {
+        const counts = { positive: 0, neutral: 0, tired: 0, sad: 0 };
+
+        list.forEach(({ data }) => {
+          const cat = moodCategoryFromPost(data);
+          counts[cat] += 1;
+        });
+
         const emoji = emojiFromCategoryMajority(counts);
-        if (!emoji) return; // 理论上不会发生，但以防万一
+        if (!emoji) return;
 
         dateKeysWithPosts.add(dateKey);
-        const monthKeyFromDate = dateKey.slice(0, 7); // "YYYY-MM"
+        const monthKeyFromDate = dateKey.slice(0, 7);
 
-        writePromises.push(
-          setDoc(
-            doc(firestore, "users", uid, "moods", dateKey),
-            {
+        list.forEach(({ ref }) => {
+          batch.update(ref, {
+            mood: {
               date: dateKey,
               emoji,
               monthKey: monthKeyFromDate,
+              updatedAt: Timestamp.now(),
             },
-            { merge: true }
-          )
-        );
+          });
+        });
       });
 
-      // 把现在 moods 里那些「已经没有任何贴文的日期」删掉
-      const deletePromises: Promise<any>[] = [];
-      try {
-        const existing = await getDocs(moodsCol);
-        existing.forEach((ds) => {
-          const data = ds.data() as any;
-          const dateKey = (data.date as string) || ds.id;
-          if (!dateKeysWithPosts.has(dateKey)) {
-            deletePromises.push(deleteDoc(ds.ref));
-          }
-        });
-      } catch (e) {
-        console.log("Failed to load existing moods for cleanup:", e);
-      }
+      // Optional cleanup: if a post has mood but its dateKey is no longer valid (rare)
+      snap.forEach((ds) => {
+        const data: any = ds.data();
+        const m = data.mood;
+        if (!m?.date) return;
+        if (!dateKeysWithPosts.has(m.date)) {
+          batch.update(ds.ref, { mood: null });
+        }
+      });
 
       try {
-        await Promise.all([...writePromises, ...deletePromises]);
+        await batch.commit();
       } catch (e) {
-        console.log("Failed to auto-save moods:", e);
+        console.log("Failed to auto-save moods into posts:", e);
       }
     });
 
@@ -349,21 +328,11 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             }}
           >
             <TouchableOpacity onPress={goToPrevMonth} style={{ padding: 4 }}>
-              <Ionicons
-                name="chevron-back"
-                size={20}
-                color={primaryTextColor}
-              />
+              <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
             </TouchableOpacity>
 
             <View style={{ alignItems: "center" }}>
-              <Text
-                style={{
-                  fontWeight: "bold",
-                  fontSize: 16,
-                  color: primaryTextColor,
-                }}
-              >
+              <Text style={{ fontWeight: "bold", fontSize: 16, color: primaryTextColor }}>
                 {monthNames[currentMonthIndex]} {currentYear}
               </Text>
               <Text
@@ -379,11 +348,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             </View>
 
             <TouchableOpacity onPress={goToNextMonth} style={{ padding: 4 }}>
-              <Ionicons
-                name="chevron-forward"
-                size={20}
-                color={primaryTextColor}
-              />
+              <Ionicons name="chevron-forward" size={20} color={primaryTextColor} />
             </TouchableOpacity>
           </View>
 
@@ -448,17 +413,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                       backgroundColor: isDarkmode ? "#1f2933" : "#f3f4f6",
                     }}
                   >
-                    <Text
-                      style={{
-                        fontSize: 11,
-                        color: primaryTextColor,
-                      }}
-                    >
-                      {day}
-                    </Text>
-                    <Text style={{ fontSize: 16, marginTop: 2 }}>
-                      {emoji || " "}
-                    </Text>
+                    <Text style={{ fontSize: 11, color: primaryTextColor }}>{day}</Text>
+                    <Text style={{ fontSize: 16, marginTop: 2 }}>{emoji || " "}</Text>
                   </View>
                 </View>
               );
@@ -490,12 +446,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                 }}
               >
                 <Text style={{ fontSize: 16, marginRight: 4 }}>{emo}</Text>
-                <Text
-                  style={{
-                    fontSize: 11,
-                    color: isDarkmode ? "#ddd" : "#444",
-                  }}
-                >
+                <Text style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}>
                   {label}
                 </Text>
               </View>
@@ -518,7 +469,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
               color={isDarkmode ? themeColor.white100 : themeColor.dark}
             />
           }
-          leftAction={() => navigation.goBack()}
+          leftAction={() => navigation.popToTop()}
           rightContent={
             <Ionicons
               name={isDarkmode ? "sunny" : "moon"}
@@ -528,9 +479,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
           }
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
         />
-        <View
-          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-        >
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <Text>Please sign in to use the mood calendar.</Text>
         </View>
       </Layout>
@@ -548,7 +497,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             color={isDarkmode ? themeColor.white100 : themeColor.dark}
           />
         }
-        leftAction={() => navigation.goBack()}
+        leftAction={() => navigation.popToTop()}
         rightContent={
           <Ionicons
             name={isDarkmode ? "sunny" : "moon"}

@@ -4,6 +4,7 @@ const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
 const axios = require("axios");
+const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
 const {
@@ -38,20 +39,15 @@ function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
 
-  // 统一空白
   result = result.replace(/\s+/g, " ").trim();
-  let words = countWords(result);
+  const words = countWords(result);
 
-  const MAX_WORDS = 50; // 最大允许字数
-
-  // 1️⃣ 如果字数在范围内 → 完全保留 DeepSeek 的自然风格
+  const MAX_WORDS = 50;
   if (words <= MAX_WORDS) return result;
 
-  // 2️⃣ 字数超过 MAX_WORDS → 先粗略截到 50 个词
-  let tokens = result.split(/\s+/);
+  const tokens = result.split(/\s+/);
   let truncated = tokens.slice(0, MAX_WORDS).join(" ");
 
-  // 3️⃣ 尝试智能收尾：不让句子断在一半
   const punctuations = [".", "!", "?", "。", "！", "？"];
   let lastPuncIndex = -1;
 
@@ -60,50 +56,33 @@ function normalizeCaptionLength(caption, captionDraft) {
     if (idx > lastPuncIndex) lastPuncIndex = idx;
   }
 
-  if (lastPuncIndex > 0) {
-    truncated = truncated.slice(0, lastPuncIndex + 1);
-  }
+  if (lastPuncIndex > 0) truncated = truncated.slice(0, lastPuncIndex + 1);
 
   return truncated.trim();
 }
 
-// 🔹 把第三人称强行改成第一人称（防止 “I watched as she …” 这种）
+// 🔹 third person → first person
 function enforceFirstPerson(caption) {
   let result = String(caption || "");
 
-  // she / her → I / my
   result = result.replace(/\b[Ss]he\b/g, "I");
   result = result.replace(/\bHer\b/g, "My");
   result = result.replace(/\bher\b/g, "my");
 
-  // he / him 一般不会出现，出现就粗暴当成 I / me
   result = result.replace(/\b[Hh]e\b/g, "I");
   result = result.replace(/\b[Hh]im\b/g, "me");
 
   return result;
 }
 
-// 🔹 plush 专用：如果 draft 里写了 plush，但 caption 却说 dog / cat / bear / bunny → 统统改成 plush toy
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog",
-  "dogs",
-  "puppy",
-  "puppies",
-  "cat",
-  "cats",
-  "kitten",
-  "kittens",
-  "bear",
-  "bears",
-  "bunny",
-  "bunnies",
-  "rabbit",
-  "rabbits",
+  "dog","dogs","puppy","puppies","cat","cats","kitten","kittens",
+  "bear","bears","bunny","bunnies","rabbit","rabbits",
 ];
 
 function fixPlushAnimalHallucination(caption, captionDraft) {
   const draftLower = String(captionDraft || "").toLowerCase();
-  if (!draftLower.includes("plush")) return caption; // 用户没提 plush，就不要乱改
+  if (!draftLower.includes("plush")) return caption;
 
   let result = String(caption || "");
   ANIMAL_WORDS_FOR_PLUSH.forEach((word) => {
@@ -115,15 +94,7 @@ function fixPlushAnimalHallucination(caption, captionDraft) {
 
 // 🔹 Hashtag 最小处理：去空、去重、小写、过滤敏感词、最多 5 个
 const SENSITIVE_TAGS_REQUIRE_DRAFT = [
-  "birthday",
-  "cake",
-  "cakes",
-  "dessert",
-  "desserts",
-  "party",
-  "celebration",
-  // 新增：boh 也必须 draft 提到才允许
-  "boh",
+  "birthday","cake","cakes","dessert","desserts","party","celebration","boh",
 ];
 
 function adjustHashtags(hashtags, captionDraft) {
@@ -134,10 +105,8 @@ function adjustHashtags(hashtags, captionDraft) {
     .filter(Boolean)
     .map((t) => t.toLowerCase().replace(/\s+/g, ""));
 
-  // 去重
   tags = Array.from(new Set(tags));
 
-  // 没有在 draft 里提到的敏感词，直接 ban 掉（避免幻觉蛋糕 / 生日 / boh）
   const draftLower = String(captionDraft || "").toLowerCase();
   tags = tags.filter((t) => {
     if (SENSITIVE_TAGS_REQUIRE_DRAFT.includes(t)) {
@@ -146,79 +115,49 @@ function adjustHashtags(hashtags, captionDraft) {
     return true;
   });
 
-  // 🚫 额外硬性禁止的标签（无论 draft 有没有写都不要）
   const BANNED_ALWAYS = ["boh", "bohtea", "bohteamalaysia"];
   tags = tags.filter((t) => !BANNED_ALWAYS.includes(t));
 
   return tags.slice(0, 5);
 }
 
-// 不想出现在 caption 里的「幻觉物件」
 const BANNED_BACKGROUND_WORDS = [
-  "matches",
-  "matchbox",
-  "box of matches",
-  "pencil",
-  "pencils",
-  "pen",
-  "pens",
-  "marker",
-  "markers",
-  "notebook",
-  "notebooks",
-  "remote control",
-  "remote",
+  "matches","matchbox","box of matches","pencil","pencils","pen","pens",
+  "marker","markers","notebook","notebooks","remote control","remote",
 ];
 
-// 从 caption 里把这些词删掉
 function removeBannedWords(text) {
   let result = String(text || "");
   for (const w of BANNED_BACKGROUND_WORDS) {
     const re = new RegExp("\\b" + w.replace(/\s+/g, "\\s+") + "\\b", "ig");
     result = result.replace(re, "");
   }
-  // 再整理空白
   return result.replace(/\s+/g, " ").trim();
 }
 
-// 🚫 不想无缘无故出现的「学习 / 工作」活动 —— 只有 draft 自己写才允许
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes",
-  "take notes",
-  "doing homework",
-  "do homework",
-  "studying",
-  "study session",
-  "working on my notes",
-  "working on notes",
-  "working on homework",
-  "working on assignments",
-  "doing my assignment",
-  "doing assignments",
-  "preparing for exams",
-  "studying for exams",
+  "taking notes","take notes","doing homework","do homework","studying",
+  "study session","working on my notes","working on notes","working on homework",
+  "working on assignments","doing my assignment","doing assignments",
+  "preparing for exams","studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
   let result = String(text || "");
   const draftLower = String(captionDraft || "").toLowerCase();
 
-  // 如果 draft 没有提到这些活动词，就从 caption 里删掉
   for (const phrase of BANNED_ACTIVITY_PHRASES) {
-    const phraseLower = phrase.toLowerCase();
-    if (!draftLower.includes(phraseLower)) {
+    if (!draftLower.includes(phrase.toLowerCase())) {
       const re = new RegExp(phrase.replace(/\s+/g, "\\s+"), "ig");
       result = result.replace(re, "");
     }
   }
 
-  // 清理多余空白和多余逗号
   result = result.replace(/\s+/g, " ").trim();
   result = result.replace(/\s+,/g, ",").replace(/,\s*,/g, ",");
   return result.trim();
 }
 
-// 🔹 品牌 / 文本：如果 draft 没有写 “boh”，就从 caption 里删掉它，避免幻觉招牌
 function removeBrandTextIfNotInDraft(text, captionDraft) {
   let result = String(text || "");
   const draftLower = String(captionDraft || "").toLowerCase();
@@ -226,9 +165,24 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
   if (!draftLower.includes("boh")) {
     result = result.replace(/\bBOH\b/gi, "").trim();
   }
-
-  // 清一次多余空格
   return result.replace(/\s+/g, " ").trim();
+}
+
+// ✅ Safe fallback hashtags from USER draft only (no hallucination)
+function fallbackTagsFromDraft(captionDraft, max = 3) {
+  const draft = String(captionDraft || "").trim();
+  if (!draft) return [];
+
+  const cleaned = draft
+    .toLowerCase()
+    .replace(/[#]/g, " ")
+    .split(/[,;\n\r\t ]+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.length >= 3) // avoid "a", "i"
+    .filter((t) => /^[a-z0-9]+$/i.test(t)); // simple safe tags only
+
+  return Array.from(new Set(cleaned)).slice(0, max);
 }
 
 // -------------------------
@@ -238,17 +192,15 @@ async function callOllamaChatText(prompt) {
   const resp = await axios.post(`${OLLAMA_URL}/api/chat`, {
     model: OLLAMA_TEXT_MODEL,
     messages: [{ role: "user", content: prompt }],
-    // 让 DeepSeek 直接给 JSON（它会把 <think> 收在内部）
     format: "json",
     stream: false,
   });
 
-  const msg = resp.data?.message?.content || "";
-  return msg;
+  return resp.data?.message?.content || "";
 }
 
 // -------------------------
-// Helper: Vision – 单张图片描述（加强版：禁止乱读文字）
+// Helper: Vision – single image describe
 // -------------------------
 async function describeSingleImage(imageBase64, index, total) {
   if (!imageBase64) return "";
@@ -274,19 +226,15 @@ FOCUS (VERY IMPORTANT):
   call it simply "a plush toy" or "a plush character", do NOT guess dog / cat / bear / bunny.
 
 STRICT NO-GUESSING RULES:
-- Do NOT talk about sounds (no "birds chirping", "music playing", etc.).
+- Do NOT talk about sounds.
 - Do NOT guess how many people are there if you cannot clearly count them.
-- Do NOT invent activities like "people gathering around tables" unless the tables
-  and people are clearly visible with chairs etc.
-- Do NOT describe feelings or atmosphere ("inviting", "cozy", "romantic") —
-  keep it purely visual.
-- NEVER guess the text content of far away or blurry signs. If unsure, say nothing about text.
+- Do NOT invent activities unless clearly visible.
+- Do NOT describe feelings or atmosphere.
+- NEVER guess text content of far away signs.
 
 STYLE:
 - Use simple English, 1–2 short sentences.
-- Mention key visible details of the main subject (shape, colors, text on signs only when clear).
 - Do NOT mention "photo", "image", "camera" or "AI".
-- Just give a neutral description of what is visible with your eyes.
 `.trim(),
         images: [imageBase64],
       },
@@ -295,14 +243,13 @@ STYLE:
   };
 
   const resp = await axios.post(`${OLLAMA_URL}/api/chat`, body);
-  const msg = resp.data?.message?.content || "";
-  return String(msg || "").trim();
+  return String(resp.data?.message?.content || "").trim();
 }
 
 // -------------------------
-// Helper: Vision – 多张图片，逐张描述再合并
+// Helper: Vision – multi images describe
 // -------------------------
-async function callOllamaVisionDescribeMulti(imageBase64List, captionDraft) {
+async function callOllamaVisionDescribeMulti(imageBase64List) {
   const safeList = Array.isArray(imageBase64List)
     ? imageBase64List.filter(Boolean)
     : [];
@@ -314,22 +261,15 @@ async function callOllamaVisionDescribeMulti(imageBase64List, captionDraft) {
   for (let i = 0; i < total; i++) {
     try {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
-      if (desc) {
-        parts.push(`Photo ${i + 1}: ${desc}`);
-      }
+      if (desc) parts.push(`Photo ${i + 1}: ${desc}`);
     } catch (err) {
-      console.log(
-        `Vision describe error on photo ${i + 1}:`,
-        err.message || err
-      );
+      console.log(`Vision describe error on photo ${i + 1}:`, err.message || err);
     }
   }
 
   if (!parts.length) return "";
 
   let combined = parts.join("\n");
-
-  // 🔹 extra safety: remove BOH brand text from the description
   combined = combined.replace(/\bBOH\b/gi, "").replace(/\s+/g, " ").trim();
 
   console.log("[VISION] Combined per-photo description:\n", combined);
@@ -337,7 +277,7 @@ async function callOllamaVisionDescribeMulti(imageBase64List, captionDraft) {
 }
 
 // -------------------------
-// /generatePostMeta  —— 多图版本
+// /generatePostMeta
 // -------------------------
 app.post("/generatePostMeta", async (req, res) => {
   try {
@@ -365,142 +305,50 @@ app.post("/generatePostMeta", async (req, res) => {
     let visionDescription = "";
     if (images.length > 0) {
       try {
-        visionDescription = await callOllamaVisionDescribeMulti(
-          images,
-          captionDraft
-        );
-        console.log(
-          "[VISION] Description from llava (multi):",
-          visionDescription
-        );
+        visionDescription = await callOllamaVisionDescribeMulti(images);
+        console.log("[VISION] Description from llava (multi):", visionDescription);
       } catch (err) {
-        console.log(
-          "⚠️ Vision describe error, continue with text-only:",
-          err.message || err
-        );
+        console.log("⚠️ Vision describe error, continue with text-only:", err.message || err);
       }
     }
 
     // 2) DeepSeek
     const systemInstruction = `
-You are an assistant for a personal memory / social media app. 
+You are an assistant for a personal memory / social media app.
 
-You will receive:
-- A short draft caption written by the user (may be empty).
-- A neutral description of the photo(s) from another AI model (may be empty).
-
-Your job is to:
-1) Understand what is happening (people, place, objects, mood).
-2) Write a warm, natural, first-person caption.
-3) Suggest a few simple hashtags related ONLY to what you actually see.
-
-GENERAL VISION RULES (VERY IMPORTANT):
-- Treat everything as real life (no fantasy, no magic, no sci-fi).
-- Only describe things that are clearly visible.
-- If you are unsure about something, do NOT mention it.
-- Do NOT exaggerate or invent:
-  - Do NOT mention "friends", "we", "our group", "everyone" unless:
-    • there are clearly TWO OR MORE people visible in the photos, OR
-    • the USER draft explicitly mentions friends.
-  - If there is exactly ONE clear face, treat it as a SOLO moment with "I / me / my".
-  - Do NOT say "cafe", "restaurant", "local food spot" unless you clearly see:
-    • an indoor dining area, OR tables + chairs + counter/menu/signs etc.
-  - Do NOT say "lunch", "dinner", "breakfast" unless you clearly see a meal or food.
-  - Do NOT say "trip", "travel", "holiday" unless there are obvious travel clues
-    like luggage, landmarks, hotel, airplane view, or the user draft says it.
-  - Do NOT say I am working, studying, doing homework, or taking notes
-    unless the USER draft clearly says so.
-- When the background is unclear, keep the place description very neutral
-  (e.g. "today", "this moment", "tonight", "here") instead of guessing.
-- Never invent a story like "I woke up early" or "I spent the whole day with you guys"
-  unless the user draft clearly says so.
-
-CAPTION RULES (STYLE C: gentle, diary-like, suitable for everyone):
-- Use only first person ("I", "me", "my", "we", "our").
-- Forbidden words in the caption: "she", "her", "he", "him", and speaking directly to "you".
-- The caption MUST feel like a note to myself, not a message to an audience.
-- Absolutely do NOT speak to "you", "everyone", "guys", etc.
-- Style: like a real person writing a short diary line:
-  - warm, simple, slightly emotional or cute, but not dramatic.
-  - suitable for any gender and any age.
-- The caption should feel like I am gently describing this moment for myself.
-- Length: roughly 8–20 words (shorter and simple is okay).
-- 0–2 emojis only.
-- Do NOT mention "photo", "picture", "image", "camera", or "AI".
-- Do NOT include hashtags in the caption.
-
-BIRTHDAY RULES:
-- If description clearly shows birthday cake / candles / "Happy Birthday" text
-  or number candles, caption MUST mention the birthday context.
-
-HASHTAG RULES:
-- Return 1–5 hashtags WITHOUT the "#" symbol.
-- All hashtags must be directly related to objects in description.
-- Only include food / drink / cafe / friends tags when description clearly supports them.
-- All hashtags lowercase, no spaces, no spammy tags.
-
-FRIEND TAG RULES:
-- DO NOT invent names.
-- DO NOT guess or create friend names.
-- Only include names that the USER explicitly typed in the draft caption.
-- Use first names only, no @ and no #.
-- If the user did not provide names, return an empty array: friendTags: [].
-
-EXTRA SAFETY RULE (VERY IMPORTANT):
-- If the vision description mentions small background items like
-  "matches", "box of matches", "pencils", "pens", "notebooks", "remote controls", etc.,
-  you MUST ignore these words completely, and also ignore any activities like
-  "taking notes", "doing homework", "studying", or "working on notes".
-- They must NOT appear in the final caption or hashtags at all.
-
-TEXT ON SIGNS:
-- Only trust text from signs or logos if it is reported very clearly in the description.
-- If the text in the description sounds uncertain or strange, ignore it.
-- Never invent text such as a random brand name.
-
-Return ONLY valid JSON, no explanation, no markdown fences:
-
+Return ONLY valid JSON:
 {
   "caption": "string",
   "hashtags": ["tag1","tag2"],
   "friendTags": ["name1","name2"]
 }
+
+Rules:
+- Caption: warm, first-person, diary-like, 8–20 words, 0–2 emojis, no hashtags inside caption.
+- Hashtags: 1–5 tags, lowercase, no spaces, no guessing.
+- Friend tags: DO NOT invent names; return [] unless user typed names in draft.
 `.trim();
 
-    const totalPhotos = images.length;
-
     const combinedPrompt = `${systemInstruction}
-
-Total number of photos in this memory: ${totalPhotos}
 
 User draft caption (may be empty):
 "${captionDraft || "(empty)"}"
 
 Neutral description of the photo(s) from a vision model (may be empty):
 "${visionDescription || "(no description)"}"
-
-Using BOTH the user draft and the description, generate the final caption and hashtags.
-Always obey ALL the rules above.
 `;
 
     let rawContent;
     try {
       rawContent = await callOllamaChatText(combinedPrompt);
     } catch (err) {
-      console.error(
-        "⚠️ Ollama DeepSeek error in /generatePostMeta, using fallback:",
-        err.message || err
-      );
-      rawContent = JSON.stringify({
-        caption: captionDraft || "",
-        hashtags: [],
-        friendTags: [],
-      });
+      console.error("⚠️ Ollama DeepSeek error in /generatePostMeta, using fallback:", err.message || err);
+      rawContent = JSON.stringify({ caption: captionDraft || "", hashtags: [], friendTags: [] });
     }
 
     console.log("[VISION] Raw content from DeepSeek:", rawContent);
 
-    // Try to parse JSON from DeepSeek output
+    // Parse DeepSeek JSON
     let parsed = { caption: captionDraft, hashtags: [], friendTags: [] };
     try {
       let cleanedStr = String(rawContent || "").trim();
@@ -521,69 +369,90 @@ Always obey ALL the rules above.
       console.log("⚠️ Failed to parse JSON from DeepSeek, using fallback:", err);
     }
 
-    // Normalize raw model output
+    // Normalize model output
     let caption = String(parsed.caption || captionDraft || "").trim();
     let hashtags = Array.isArray(parsed.hashtags)
       ? parsed.hashtags.map((h) => String(h).trim()).filter(Boolean)
       : [];
 
-    // 先硬过滤掉我们不想要的幻觉词
+    // Cleanup caption
     caption = removeBannedWords(caption);
-    // 再去掉不想要的学习 / 作业活动（如果 draft 没有提）
     caption = removeBannedActivities(caption, captionDraft);
-    // 如果 draft 没写 boh，就把 caption 里的 BOH 删掉
     caption = removeBrandTextIfNotInDraft(caption, captionDraft);
-    // 再强制变成第一人称
     caption = enforceFirstPerson(caption);
-    // plush + dog/cat/bear/bunny → plush toy
     caption = fixPlushAnimalHallucination(caption, captionDraft);
 
-    // ---- ENFORCE MINIMAL RULES HERE ----
     caption = normalizeCaptionLength(caption, captionDraft);
     hashtags = adjustHashtags(hashtags, captionDraft);
 
-    // ✅ 只有当 draft 里本来就提到 birthday，才强制加 birthday hashtag
-    if (
-      caption.toLowerCase().includes("birthday") &&
-      String(captionDraft || "").toLowerCase().includes("birthday")
-    ) {
-      if (!hashtags.includes("birthday")) {
-        hashtags.unshift("birthday");
-      }
+    // ✅ If AI gives zero hashtags, fallback to USER draft keywords only
+    if (hashtags.length === 0) {
+      const fallback = fallbackTagsFromDraft(captionDraft, 3);
+      if (fallback.length > 0) hashtags = fallback;
     }
 
-    // -------- Face recognition for friendTags (single best match, strict) --------
-    let bestMatchName = null;
+    // -------- Face recognition for friendTags (STRICT multi-face) --------
+    const FACE_THRESHOLD = 0.37; // strict
+    const MIN_GAP = 0.06;
+    const MAX_TAGS = 5;
+
+    let friendTagsMerged = [];
 
     if (images.length > 0) {
       try {
-        // use a stricter threshold than Python default (0.6)
-        const faceResp = await recognizeFace(images[0], 0.4);
-        const matches = Array.isArray(faceResp.matches)
-          ? faceResp.matches
-          : [];
-        console.log("[VISION] Face matches for friend tags:", matches);
+        const faceResp = await recognizeFace(images[0], FACE_THRESHOLD);
+        const faces = Array.isArray(faceResp.faces) ? faceResp.faces : [];
 
-        if (matches.length > 0) {
-          // face_api already sorts by distance ascending
-          const top = matches[0];
-          const name = (top.name || "").trim();
-          const distance =
-            typeof top.distance === "number"
-              ? top.distance
-              : Number(top.distance) || 1;
+        // ✅ PROOF: print full distances (0.xxxxxx)
+        console.log(
+          "[VISION] FaceResp FULL:\n",
+          util.inspect(faceResp, { depth: null, colors: true })
+        );
+        console.log("[VISION] FaceResp JSON:\n", JSON.stringify(faceResp, null, 2));
 
-          // only accept if distance is still confidently small
-          if (name && distance <= 0.4) {
-            bestMatchName = name;
-          }
+        for (const f of faces) {
+          const matches = Array.isArray(f.matches) ? f.matches : [];
+          console.log(
+            `Face ${f.faceIndex} distances:`,
+            matches.map((m) => `${m.name}:${Number(m.distance).toFixed(6)}`).join(", ")
+          );
         }
+
+        const pickedNames = [];
+
+        for (const f of faces) {
+          const matches = Array.isArray(f.matches) ? f.matches : [];
+          if (!matches.length) continue;
+
+          let candidates = matches
+            .map((m) => ({
+              name: String(m.name || "").trim(),
+              distance:
+                typeof m.distance === "number"
+                  ? m.distance
+                  : Number(m.distance) || 999,
+            }))
+            .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
+            .sort((a, b) => a.distance - b.distance);
+
+          if (!candidates.length) continue;
+
+          // GAP RULE (only use top match per face if clearly better than next)
+          const top = candidates[0];
+          const next = candidates[1];
+          if (next && Math.abs(next.distance - top.distance) < MIN_GAP) {
+            continue; // ambiguous
+          }
+
+          pickedNames.push(top.name);
+          if (pickedNames.length >= MAX_TAGS) break;
+        }
+
+        friendTagsMerged = Array.from(new Set(pickedNames)).slice(0, MAX_TAGS);
       } catch (err) {
         console.log("Face recognition in /generatePostMeta failed:", err);
       }
     }
-
-    const friendTagsMerged = bestMatchName ? [bestMatchName] : [];
 
     const cleaned = {
       caption,
@@ -591,7 +460,7 @@ Always obey ALL the rules above.
       friendTags: friendTagsMerged,
     };
 
-    console.log("[VISION] Cleaned content:", cleaned);
+    console.log("[VISION] Cleaned content:\n", JSON.stringify(cleaned, null, 2));
     res.json(cleaned);
   } catch (err) {
     console.error("❌ Error in /generatePostMeta:", err);
@@ -619,9 +488,7 @@ app.post("/faces/detect", async (req, res) => {
 app.post("/faces/register", async (req, res) => {
   const { personId, name, imageBase64 } = req.body || {};
   if (!name || !imageBase64) {
-    return res
-      .status(400)
-      .json({ error: "name and imageBase64 are required." });
+    return res.status(400).json({ error: "name and imageBase64 are required." });
   }
 
   try {
@@ -651,11 +518,11 @@ app.post("/faces/recognize", async (req, res) => {
 
   try {
     const pyResp = await recognizeFace(imageBase64, threshold);
-    console.log("✅ /faces/recognize -> Python:", pyResp);
+    console.log("✅ /faces/recognize -> Python:", util.inspect(pyResp, { depth: null, colors: true }));
 
     res.json({
       ok: pyResp.ok !== false,
-      matches: Array.isArray(pyResp.matches) ? pyResp.matches : [],
+      faces: Array.isArray(pyResp.faces) ? pyResp.faces : [],
     });
   } catch (err) {
     console.error("❌ /faces/recognize proxy error:", err);

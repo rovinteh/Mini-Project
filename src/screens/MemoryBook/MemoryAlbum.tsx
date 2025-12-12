@@ -457,7 +457,7 @@ export default function MemoryAlbum({ navigation }: Props) {
               color={isDarkmode ? themeColor.white100 : themeColor.dark}
             />
           }
-          leftAction={() => navigation.goBack()}
+          leftAction={() => navigation.popToTop()}
           rightContent={
             <Ionicons
               name={isDarkmode ? "sunny" : "moon"}
@@ -492,7 +492,7 @@ export default function MemoryAlbum({ navigation }: Props) {
         leftContent={
           <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
         }
-        leftAction={() => navigation.goBack()}
+        leftAction={() => navigation.popToTop()}
         rightContent={
           <Ionicons
             name={isDarkmode ? "sunny" : "moon"}

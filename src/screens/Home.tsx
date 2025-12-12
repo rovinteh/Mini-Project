@@ -59,6 +59,8 @@ export default function Home({ navigation }: Props) {
     },
   ];
 
+  const textColor = isDarkmode ? themeColor.white100 : themeColor.dark;
+
   return (
     <Layout>
       {/* Top Navbar */}
@@ -93,6 +95,7 @@ export default function Home({ navigation }: Props) {
               marginTop: 6,
               fontSize: 14,
               opacity: 0.8,
+              color: textColor,
             }}
           >
             Manage memories, tasks, money, and health — all in one place.
@@ -139,16 +142,22 @@ export default function Home({ navigation }: Props) {
                     marginBottom: 10,
                   }}
                 >
-                  <Ionicons name={card.icon as any} size={22} />
+                  <Ionicons name={card.icon as any} size={22} color="#111" />
                 </View>
-                <Text fontWeight="bold" style={{ fontSize: 16 }}>
+
+                <Text
+                  fontWeight="bold"
+                  style={{ fontSize: 16, color: textColor }}
+                >
                   {card.title}
                 </Text>
+
                 <Text
                   style={{
                     marginTop: 4,
                     fontSize: 12,
                     opacity: 0.9,
+                    color: textColor,
                   }}
                   numberOfLines={3}
                 >
@@ -168,7 +177,7 @@ export default function Home({ navigation }: Props) {
             backgroundColor: isDarkmode ? "#1E293B" : "#F4F4F5",
           }}
         >
-          <Text fontWeight="bold" style={{ fontSize: 14 }}>
+          <Text fontWeight="bold" style={{ fontSize: 14, color: textColor }}>
             Daily Tip 🌱
           </Text>
           <Text
@@ -176,11 +185,95 @@ export default function Home({ navigation }: Props) {
               marginTop: 4,
               fontSize: 12,
               opacity: 0.9,
+              color: textColor,
             }}
           >
             Small consistent steps in your tasks, savings, and health can create
             powerful memories in your future.
           </Text>
+        </View>
+
+        {/* ✅ NEW: Quick Actions (fills the empty space) */}
+        <View
+          style={{
+            marginTop: 16,
+            padding: 14,
+            borderRadius: 16,
+            backgroundColor: isDarkmode ? "#111827" : "#FFFFFF",
+            shadowColor: "#000",
+            shadowOpacity: 0.08,
+            shadowRadius: 8,
+            shadowOffset: { width: 0, height: 4 },
+            elevation: 3,
+          }}
+        >
+          <Text
+            fontWeight="bold"
+            style={{ fontSize: 14, marginBottom: 10, color: textColor }}
+          >
+            Quick Actions ⚡
+          </Text>
+
+          <View
+            style={{
+              flexDirection: "row",
+              flexWrap: "wrap",
+              justifyContent: "space-between",
+            }}
+          >
+            {[
+              {
+                label: "Add Memory",
+                icon: "add-circle-outline",
+                route: "MemoryUpload",
+              },
+              {
+                label: "New Task",
+                icon: "create-outline",
+                route: "TaskManagement",
+              },
+              {
+                label: "Add Expense",
+                icon: "cash-outline",
+                route: "MoneyManagement",
+              },
+              {
+                label: "Fitness",
+                icon: "fitness-outline",
+                route: "HealthFitness",
+              },
+            ].map((item) => (
+              <TouchableOpacity
+                key={item.label}
+                activeOpacity={0.9}
+                onPress={() => navigation.navigate(item.route as never)}
+                style={{
+                  width: "48%",
+                  paddingVertical: 14,
+                  borderRadius: 14,
+                  alignItems: "center",
+                  marginBottom: 10,
+                  backgroundColor: isDarkmode ? "#1F2937" : "#F4F4F5",
+                }}
+              >
+                <Ionicons
+                  name={item.icon as any}
+                  size={22}
+                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                />
+                <Text
+                  style={{
+                    fontSize: 12,
+                    marginTop: 6,
+                    color: textColor,
+                    fontWeight: "500",
+                  }}
+                >
+                  {item.label}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </View>
         </View>
 
         {/* Logout button at bottom */}

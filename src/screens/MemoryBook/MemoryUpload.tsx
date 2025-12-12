@@ -26,7 +26,6 @@ import {
   doc,
   updateDoc,
 } from "firebase/firestore";
-
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
@@ -58,6 +57,12 @@ type FaceRecognizeResponse = {
   matches: FaceMatch[];
 };
 
+// ✅ Album info stored under posts
+type AlbumInfo = {
+  id: string;
+  name: string;
+};
+
 export default function MemoryUpload({ navigation, route }: Props) {
   const { isDarkmode } = useTheme();
 
@@ -65,11 +70,16 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const firestore = getFirestore();
   const storage = getStorage();
 
-  // ---- read params (for edit mode) ----
-  const params = route?.params || {};
+  // ---- read params (for edit mode / optional album selection) ----
+  const params: any = route?.params || {};
   const editMode = params.editMode || false;
   const editingPostId: string | undefined = params.postId;
   const postData: any = params.postData || {};
+
+  // ✅ albums passed in from Album screen (optional)
+  const selectedAlbums: AlbumInfo[] = Array.isArray(params.selectedAlbums)
+    ? params.selectedAlbums
+    : [];
 
   // 用户输入的 draft/keywords
   const [draft, setDraft] = useState("");
@@ -97,6 +107,18 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : ""
     : "";
 
+  // ✅ initial albums if editing (fallback to [])
+  const initialAlbumIds: string[] = editMode
+    ? Array.isArray(postData.albumIds)
+      ? postData.albumIds
+      : []
+    : [];
+  const initialAlbums: AlbumInfo[] = editMode
+    ? Array.isArray(postData.albums)
+      ? postData.albums
+      : []
+    : [];
+
   // store ALL selected media here
   const [mediaItems, setMediaItems] = useState<SelectedMedia[]>(() =>
     initialMediaUrls.length
@@ -115,6 +137,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isStory, setIsStory] = useState(initialIsStory);
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+
+  // ✅ albums state (so you can keep passed albums OR editing albums)
+  const [albumIds, setAlbumIds] = useState<string[]>(
+    selectedAlbums.length ? selectedAlbums.map((a) => a.id) : initialAlbumIds
+  );
+  const [albums, setAlbums] = useState<AlbumInfo[]>(
+    selectedAlbums.length ? selectedAlbums : initialAlbums
+  );
 
   // face-learning UI state
   const [faceName, setFaceName] = useState(""); // name typed by user
@@ -135,8 +165,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   // For Expo web / Android emulator on same PC.
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
-  const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
-
+  const LOCAL_AI_SERVER = "http://192.168.0.18:3000";
 
   // -------------------------------------------------------
   // Location: auto-detect using GPS + Nominatim (English)
@@ -540,7 +569,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      // new API – avoid deprecated MediaTypeOptions
       mediaTypes: ["images", "videos"],
       quality: 0.85,
       allowsMultipleSelection: true,
@@ -596,23 +624,23 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     Alert.alert("Add Media", "Choose photo / video from:", [
-      {
-        text: "Camera",
-        onPress: () => {
-          captureWithCamera();
-        },
-      },
-      {
-        text: "Gallery",
-        onPress: () => {
-          pickFromLibrary();
-        },
-      },
-      {
-        text: "Cancel",
-        style: "cancel",
-      },
+      { text: "Camera", onPress: () => captureWithCamera() },
+      { text: "Gallery", onPress: () => pickFromLibrary() },
+      { text: "Cancel", style: "cancel" },
     ]);
+  };
+
+  // ✅ helper for mood keys
+  const getTodayMoodObject = () => {
+    const now = new Date();
+    const yyyy = now.getFullYear();
+    const mm = String(now.getMonth() + 1).padStart(2, "0");
+    const dd = String(now.getDate()).padStart(2, "0");
+    return {
+      date: `${yyyy}-${mm}-${dd}`, // YYYY-MM-DD
+      monthKey: `${yyyy}-${mm}`, // YYYY-MM
+      emoji: "😐", // default (MoodCalendar will later overwrite based on posts)
+    };
   };
 
   const handleUpload = async () => {
@@ -635,7 +663,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
         .map((t: string) => t.trim())
         .filter((t: string) => t.length > 0) || [];
 
-    // ---- EDIT MODE: only update text fields (not media) ----
+    // ✅ album values to store under posts
+    const safeAlbums: AlbumInfo[] = Array.isArray(albums) ? albums : [];
+    const safeAlbumIds: string[] = Array.isArray(albumIds) ? albumIds : [];
+
+    // ---- EDIT MODE: update text fields (and also mood/album if you want) ----
     if (editMode && editingPostId) {
       try {
         setIsUploading(true);
@@ -650,7 +682,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
           friendTags: friendTagList,
-          // keep old location for edited posts
+
+          // ✅ keep mood + album under posts
+          mood: postData?.mood || getTodayMoodObject(),
+          albums: safeAlbums,
+          albumIds: safeAlbumIds,
         });
 
         Alert.alert("Updated", "Your memory has been updated.");
@@ -715,6 +751,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
         savedBy: [],
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
+
+        // ✅ mood stored under posts
+        mood: getTodayMoodObject(),
+
+        // ✅ album stored under posts
+        albums: safeAlbums,
+        albumIds: safeAlbumIds,
       });
 
       Alert.alert("Posted", "Your memory has been uploaded.");
@@ -733,9 +776,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   return (
     <Layout>
       <TopNav
-        middleContent={
-          <Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>
-        }
+        middleContent={<Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>}
         leftAction={() => navigation.goBack()}
         leftContent={
           <Ionicons
@@ -787,7 +828,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
         {/* 📍 Location (auto-detect + IG-style search) */}
         <View style={{ marginTop: 16 }}>
-          {/* Row showing current label + Detect again */}
           <View
             style={{
               flexDirection: "row",
@@ -795,9 +835,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
               justifyContent: "space-between",
             }}
           >
-            <View
-              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
-            >
+            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
               <Ionicons
                 name="location-outline"
                 size={18}
@@ -819,26 +857,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </View>
 
             <TouchableOpacity onPress={autoDetectLocation}>
-              <Text
-                style={{
-                  fontSize: 11,
-                  color: themeColor.info,
-                  marginLeft: 8,
-                }}
-              >
+              <Text style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}>
                 Detect again
               </Text>
             </TouchableOpacity>
           </View>
 
-          {/* Search box like IG – override auto-detect */}
-          <View
-            style={{
-              marginTop: 8,
-              flexDirection: "row",
-              alignItems: "center",
-            }}
-          >
+          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <TextInput
                 placeholder="Search for a place (optional)"
@@ -866,7 +891,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </TouchableOpacity>
           </View>
 
-          {/* Suggestion list */}
           {placeOptions.length > 0 && (
             <View
               style={{
@@ -907,12 +931,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         <Text style={{ marginTop: 20, marginBottom: 10 }}>
           Draft / Keywords (optional)
         </Text>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-          }}
-        >
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
               placeholder="Eg: dinner, makeup, dress full"
@@ -941,12 +960,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
         {/* Caption */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>Caption</Text>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-          }}
-        >
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
               placeholder="Generated caption will appear here"
@@ -995,12 +1009,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
         {/* Remember this face */}
         <Text style={{ marginTop: 24, marginBottom: 8 }}>Remember this face</Text>
-        <View
-          style={{
-            flexDirection: "row",
-            alignItems: "center",
-          }}
-        >
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
               placeholder="Type a name (eg: Angelina)"
@@ -1021,10 +1030,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         <View style={{ marginTop: 24 }}>
           <TouchableOpacity
             onPress={() => setIsStory(!isStory)}
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-            }}
+            style={{ flexDirection: "row", alignItems: "center" }}
           >
             <Ionicons
               name={isStory ? "checkbox-outline" : "square-outline"}
@@ -1032,11 +1038,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color={isDarkmode ? themeColor.white : "#444"}
               style={{ marginRight: 8 }}
             />
-            <Text
-              style={{
-                color: isDarkmode ? themeColor.white : themeColor.dark,
-              }}
-            >
+            <Text style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}>
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
@@ -1047,13 +1049,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color: isDarkmode ? "#aaa" : "#777",
             }}
           >
-            When enabled, this memory will appear as a story and disappear
-            after 24 hours.
+            When enabled, this memory will appear as a story and disappear after 24
+            hours.
           </Text>
         </View>
 
         {/* Upload button */}
-        <View style={{ marginTop: 30 }}>
+        <View style={{ marginTop: 30, marginBottom: 20 }}>
           <Button
             text={
               isUploading
