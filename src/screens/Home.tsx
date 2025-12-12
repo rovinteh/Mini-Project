@@ -37,7 +37,7 @@ export default function Home({ navigation }: Props) {
       icon: "checkmark-done-outline",
       bgLight: "#E5F4FF",
       bgDark: "#102A43",
-      route: "TaskManagement" as keyof MainStackParamList,
+      route: "TaskManagementMenu" as keyof MainStackParamList,
     },
     {
       key: "MoneyManagement",
@@ -55,7 +55,7 @@ export default function Home({ navigation }: Props) {
       icon: "fitness-outline",
       bgLight: "#FFF6E5",
       bgDark: "#3D2A0F",
-      route: "HealthFitness" as keyof MainStackParamList,
+      route: "FitnessMenu" as keyof MainStackParamList,
     },
   ];
 
