@@ -51,7 +51,7 @@ export default function Home({ navigation }: Props) {
     {
       key: "HealthFitness",
       title: "Health & Fitness",
-      subtitle: "Monitor mood, steps, and healthy routines.",
+      subtitle: "Track daily workouts and meals.",
       icon: "fitness-outline",
       bgLight: "#FFF6E5",
       bgDark: "#3D2A0F",
@@ -238,8 +238,8 @@ export default function Home({ navigation }: Props) {
                 route: "MoneyManagement",
               },
               {
-                label: "Fitness",
-                icon: "fitness-outline",
+                label: "Add Meal",
+                icon: "restaurant-outline",
                 route: "LogMeal",
               },
             ].map((item) => (
