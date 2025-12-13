@@ -280,7 +280,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="time" size={24} color={COLOR_ACTIVE} />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalMinutes}m
               </Text>
               <Text style={styles.highlightLabel}>Active Time</Text>
@@ -293,7 +293,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="barbell" size={24} color={COLOR_WORKOUT} />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalWorkouts}
               </Text>
               <Text style={styles.highlightLabel}>Workouts</Text>
@@ -306,7 +306,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="restaurant" size={24} color={COLOR_MEAL} />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalMeals}
               </Text>
               <Text style={styles.highlightLabel}>Meals</Text>
@@ -322,7 +322,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="water" size={24} color={COLOR_WATER} />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalWaterMl}ml
               </Text>
               <Text style={styles.highlightLabel}>Hydration</Text>
@@ -335,7 +335,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="trophy" size={24} color="#F59E0B" />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {bestDay}
               </Text>
               <Text style={styles.highlightLabel}>Best Day</Text>
@@ -348,7 +348,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="pulse" size={24} color="#10B981" />
-              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {dailyAvgMinutes}m
               </Text>
               <Text style={styles.highlightLabel}>Daily Avg</Text>
