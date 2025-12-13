@@ -203,7 +203,16 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
     return stats[idx]?.label || "-";
   }, [dataMinutes, totalMinutes, stats]);
 
-  // --- Chart Config Helper ---
+  // --- Chart Helpers ---
+
+  // Calculate max segments dynamically to avoid repeated integers on Y-axis
+  const getMaxSegments = (dataArray: number[]) => {
+    const maxVal = Math.max(...dataArray, 1); // ensure at least 1
+    // If max value is small (e.g. 3), use 3 segments (0, 1, 2, 3)
+    // If max value is large, cap it at 4 segments for cleanliness
+    return maxVal < 5 ? maxVal : 4;
+  };
+
   const getChartConfig = (colorHex: string) => ({
     backgroundGradientFrom: isDarkmode ? "#1F2937" : "#ffffff",
     backgroundGradientTo: isDarkmode ? "#1F2937" : "#ffffff",
@@ -271,7 +280,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="time" size={24} color={COLOR_ACTIVE} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {totalMinutes}m
               </Text>
               <Text style={styles.highlightLabel}>Active Time</Text>
@@ -284,7 +293,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="barbell" size={24} color={COLOR_WORKOUT} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {totalWorkouts}
               </Text>
               <Text style={styles.highlightLabel}>Workouts</Text>
@@ -297,7 +306,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="restaurant" size={24} color={COLOR_MEAL} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {totalMeals}
               </Text>
               <Text style={styles.highlightLabel}>Meals</Text>
@@ -313,7 +322,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="water" size={24} color={COLOR_WATER} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {totalWaterMl}ml
               </Text>
               <Text style={styles.highlightLabel}>Hydration</Text>
@@ -326,7 +335,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="trophy" size={24} color="#F59E0B" />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {bestDay}
               </Text>
               <Text style={styles.highlightLabel}>Best Day</Text>
@@ -339,7 +348,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               ]}
             >
               <Ionicons name="pulse" size={24} color="#10B981" />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+              <Text fontWeight="bold" size="h4" style={{ marginTop: 8 }}>
                 {dailyAvgMinutes}m
               </Text>
               <Text style={styles.highlightLabel}>Daily Avg</Text>
@@ -409,8 +418,8 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 data={{ labels, datasets: [{ data: dataMinutes }] }}
                 width={screenWidth - 48}
                 height={200}
-                yAxisLabel="" // Mandatory for some versions
-                yAxisSuffix="" // Mandatory for some versions
+                yAxisLabel=""
+                yAxisSuffix=""
                 chartConfig={getChartConfig(COLOR_ACTIVE)}
                 bezier
                 style={{ borderRadius: 12, marginVertical: 8 }}
@@ -448,8 +457,9 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 data={{ labels, datasets: [{ data: dataMeals }] }}
                 width={screenWidth - 48}
                 height={200}
-                yAxisLabel="" // Mandatory Fix
-                yAxisSuffix="" // Mandatory Fix
+                yAxisLabel=""
+                yAxisSuffix=""
+                segments={getMaxSegments(dataMeals)} // FIX: prevent repeated axis
                 chartConfig={getChartConfig(COLOR_MEAL)}
                 style={{ borderRadius: 12, marginVertical: 8 }}
                 fromZero
@@ -480,8 +490,9 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 data={{ labels, datasets: [{ data: dataWaterCups }] }}
                 width={screenWidth - 48}
                 height={200}
-                yAxisLabel="" // Mandatory Fix
-                yAxisSuffix="" // Mandatory Fix
+                yAxisLabel=""
+                yAxisSuffix=""
+                segments={getMaxSegments(dataWaterCups)} // FIX: prevent repeated axis
                 chartConfig={getChartConfig(COLOR_WATER)}
                 style={{ borderRadius: 12, marginVertical: 8 }}
                 fromZero
