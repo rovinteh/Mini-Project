@@ -598,7 +598,7 @@ export default function LogMealScreen({ navigation }: Props) {
                 marginBottom: 16,
               }}
             >
-              <Text size="h4" fontWeight="bold">
+              <Text size="h3" fontWeight="bold">
                 Today's History
               </Text>
               <View style={styles.totalBadge}>

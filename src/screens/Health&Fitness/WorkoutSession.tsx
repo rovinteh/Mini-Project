@@ -623,7 +623,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
                   size="lg"
                   color={COLOR_WORK}
                   onPress={startSession}
-                  width="100%"
+                  style={{ width: "100%" }}
                   leftContent={<Ionicons name="play" color="#fff" size={20} />}
                 />
               </View>

@@ -442,7 +442,7 @@ export default function FitnessMenu({ navigation }: Props) {
           >
             <View style={styles.waterRow}>
               <View style={{ flex: 1 }}>
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Quick Water
                 </Text>
                 <Text style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
@@ -477,7 +477,7 @@ export default function FitnessMenu({ navigation }: Props) {
               ]}
             >
               <View style={styles.bmiHeader}>
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Body Metrics
                 </Text>
                 <Text
@@ -513,7 +513,7 @@ export default function FitnessMenu({ navigation }: Props) {
               { borderColor: isDarkmode ? "#262626" : "#e2e8f0" },
             ]}
           >
-            <Text size="h4" fontWeight="bold" style={{ marginBottom: 12 }}>
+            <Text size="h3" fontWeight="bold" style={{ marginBottom: 12 }}>
               Current Plan
             </Text>
             {pref ? (

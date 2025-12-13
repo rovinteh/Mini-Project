@@ -269,7 +269,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_ABOUT}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   About You
                 </Text>
               </View>
@@ -332,7 +332,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_GOAL}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Your Goal
                 </Text>
               </View>
@@ -388,7 +388,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_INTENSITY}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Intensity
                 </Text>
               </View>
@@ -473,7 +473,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_SCHEDULE}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Schedule
                 </Text>
               </View>
@@ -533,8 +533,8 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                         style={{
                           fontSize: 10, // Smaller Font
                           color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
+                          fontWeight: active ? "bold" : "normal", // ✅ move into style
                         }}
-                        fontWeight={active ? "bold" : "normal"}
                       >
                         {day}
                       </Text>
@@ -543,15 +543,16 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 })}
               </View>
 
-              <Text style={[styles.label, { marginTop: 16 }]}>
+              <Text style={{ ...styles.label, marginTop: 16 }}>
                 Duration (minutes)
               </Text>
+
               <TextInput
                 value={sessionLength}
                 onChangeText={(v) => setSessionLength(v.replace(/[^\d]/g, ""))}
                 keyboardType="numeric"
                 placeholder="20"
-                width={120}
+                style={{ width: 120 }}
               />
 
               <Text style={{ fontSize: 11, opacity: 0.6, marginTop: 10 }}>
