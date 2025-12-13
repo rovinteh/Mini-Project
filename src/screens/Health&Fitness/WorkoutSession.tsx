@@ -139,8 +139,9 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   const [voiceOn, setVoiceOn] = useState(true);
 
   // Time & Progress Tracking
+  // 'completedDuration' accumulates the full PLANNED duration of finished/skipped steps
   const [completedDuration, setCompletedDuration] = useState(0);
-  const [elapsedSec, setElapsedSec] = useState(0);
+  const [elapsedSec, setElapsedSec] = useState(0); // This tracks real-world time passed
   const [startedAtClient, setStartedAtClient] = useState<Date | null>(null);
 
   const totalDurationSec = useMemo(
@@ -154,8 +155,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   const progressAnim = useRef(new Animated.Value(0)).current;
   const lastCountdownSpoken = useRef<number | null>(null);
 
-  // CRITICAL FIX: Ref to track if we are intentionally exiting
-  // This prevents the "auto-save" listener from resurrecting a deleted session
+  // Ref to track exit intent
   const isExiting = useRef(false);
 
   // --- Voice & Haptics ---
@@ -172,13 +172,12 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   // --- Plan Generator ---
   const generatePlan = async (pref: any) => {
     const goal = pref?.goal || "Stay Active";
-    const difficulty = pref?.difficulty || "easy"; // easy, moderate, hard
+    const difficulty = pref?.difficulty || "easy";
     const lengthMin = pref?.sessionLengthMinutes || 20;
 
     // 1. Determine Intensity Pools
     let pool: string[] = [];
 
-    // Base mix: Always include some cardio and some strength
     if (difficulty === "easy") {
       pool = [
         ...EXERCISE_LIBRARY.cardio.easy,
@@ -200,7 +199,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
       ];
     }
 
-    // 2. Goal Bias
     if (goal.includes("Fat") || goal.includes("Stamina")) {
       pool = [
         ...pool,
@@ -215,7 +213,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
       ];
     }
 
-    // Shuffle and deduplicate
     pool = shuffle([...new Set(pool)]);
 
     // 3. Structure
@@ -274,7 +271,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
 
-    // Reset Exit Flag on load
     isExiting.current = false;
 
     try {
@@ -299,7 +295,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
         }
       }
 
-      // Generate New
       const prefSnap = await getDoc(doc(db, "WorkoutPreference", user.uid));
       const pref = prefSnap.data() as any | undefined;
       const newSteps = await generatePlan(pref);
@@ -312,7 +307,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
       setSessionDone(false);
       setPhase("preview");
 
-      // Clean stale storage
       await AsyncStorage.removeItem(`session_${user.uid}`);
     } catch (err) {
       console.log("Error loading session:", err);
@@ -330,7 +324,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   useEffect(() => {
     const saveState = async () => {
       const user = auth.currentUser;
-      // Do NOT save if we are intentionally exiting or finished
       if (!user || sessionDone || phase === "preview" || isExiting.current)
         return;
 
@@ -350,7 +343,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     };
 
     const unsubscribe = navigation.addListener("beforeRemove", () => {
-      // Only auto-save if we are NOT intentionally cancelling/finishing
       if (!isExiting.current && (phase === "running" || phase === "paused")) {
         saveState();
       }
@@ -399,11 +391,12 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     if (secondsLeft > 3) lastCountdownSpoken.current = null;
   }, [secondsLeft, phase, voiceOn]);
 
-  // --- Progress Bar Animation (Fixed) ---
+  // --- Progress Bar ---
   useEffect(() => {
     if (totalDurationSec <= 0) return;
 
-    // Total Progress = (Already Finished Steps Duration) + (Time spent in current step)
+    // We base progress purely on (Completed Steps Duration + Time spent in current).
+    // This ensures skipping a step "fills" that chunk in the bar.
     const currentStepDuration = steps[currentIndex]?.durationSec || 0;
     const timeSpentInCurrent = Math.max(0, currentStepDuration - secondsLeft);
     const effectiveProgress = completedDuration + timeSpentInCurrent;
@@ -421,7 +414,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   const handleStepFinished = () => {
     triggerHaptic();
 
-    // Add full duration of the step we just finished/skipped
+    // Key Logic: Add the FULL duration of the finished (or skipped) step
     const finishedStepDuration = steps[currentIndex]?.durationSec || 0;
     setCompletedDuration((prev) => prev + finishedStepDuration);
 
@@ -442,7 +435,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     setPhase("paused");
     setSessionDone(true);
     speak("Workout complete!");
-    // Mark as exiting so auto-save doesn't run
     isExiting.current = true;
     const user = auth.currentUser;
     if (user) await AsyncStorage.removeItem(`session_${user.uid}`);
@@ -464,7 +456,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
   };
 
   const cancelSession = async () => {
-    // Mark as exiting to block auto-save resurrection
     isExiting.current = true;
     const user = auth.currentUser;
     if (user) await AsyncStorage.removeItem(`session_${user.uid}`);
@@ -475,10 +466,17 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     const user = auth.currentUser;
     if (!user || saving) return;
     setSaving(true);
-    isExiting.current = true; // Ensure we don't auto-save while leaving
+    isExiting.current = true;
 
     try {
       const now = new Date();
+      // CRITICAL FIX: We save 'completedDuration' as 'actualDurationSec'
+      // This ensures FitnessMenu/Summary give you credit for the FULL SKIPPED time.
+      const durationToRecord =
+        status === "completed"
+          ? Math.max(completedDuration, elapsedSec)
+          : elapsedSec;
+
       await addDoc(collection(db, "WorkoutSession"), {
         userId: user.uid,
         createdAtClient: Timestamp.fromDate(now),
@@ -487,7 +485,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
         createdAt: serverTimestamp(),
         status,
         totalPlannedDurationSec: totalDurationSec,
-        actualDurationSec: elapsedSec,
+        actualDurationSec: durationToRecord, // <--- CHANGED HERE
         rating: status === "completed" ? rating : null,
         feedback: status === "completed" ? feedback.trim() : null,
         steps: steps.map((s) => ({
