@@ -10,6 +10,8 @@ import {
   ScrollView,
   Alert,
   Modal,
+  ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -49,20 +51,28 @@ type MealEntry = {
   notes: string;
   photoURL?: string | null;
   mealTimeClient?: any;
-
-  // optional fields
   calories?: number | null;
   isWater?: boolean;
   volumeMl?: number | null;
 };
 
-const FITNESS_COLOR = "#22C55E";
+// --- Vibrant Colors ---
+const COLOR_BREAKFAST = "#F59E0B"; // Amber
+const COLOR_LUNCH = "#EF4444"; // Red
+const COLOR_DINNER = "#8B5CF6"; // Purple
+const COLOR_SNACK = "#10B981"; // Emerald
+const FITNESS_COLOR = "#22C55E"; // Generic Green
 
 const MEAL_TYPES = [
-  { label: "Breakfast", value: "breakfast", icon: "sunny", color: "#F59E0B" },
-  { label: "Lunch", value: "lunch", icon: "restaurant", color: "#EF4444" },
-  { label: "Dinner", value: "dinner", icon: "moon", color: "#6366F1" },
-  { label: "Snack", value: "snack", icon: "cafe", color: "#10B981" },
+  {
+    label: "Breakfast",
+    value: "breakfast",
+    icon: "sunny",
+    color: COLOR_BREAKFAST,
+  },
+  { label: "Lunch", value: "lunch", icon: "restaurant", color: COLOR_LUNCH },
+  { label: "Dinner", value: "dinner", icon: "moon", color: COLOR_DINNER },
+  { label: "Snack", value: "snack", icon: "cafe", color: COLOR_SNACK },
 ] as const;
 
 const QUICK_TAGS = [
@@ -71,11 +81,11 @@ const QUICK_TAGS = [
   "Noodles",
   "Egg",
   "Fish",
-  "Vegetables",
+  "Veg",
   "Bread",
   "Coffee",
-  "Tea",
   "Fruits",
+  "Soup",
 ];
 
 function startOfDay(d: Date) {
@@ -89,8 +99,9 @@ export default function LogMealScreen({ navigation }: Props) {
   const [image, setImage] = useState<string | null>(null);
   const [mealType, setMealType] = useState<string>("breakfast");
   const [notes, setNotes] = useState("");
-  const [calories, setCalories] = useState(""); // optional
+  const [calories, setCalories] = useState("");
   const [saving, setSaving] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
 
   // --- Data State ---
   const [todayMeals, setTodayMeals] = useState<MealEntry[]>([]);
@@ -108,16 +119,13 @@ export default function LogMealScreen({ navigation }: Props) {
         const { status } =
           await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert(
-            "Permission Required",
-            "We need access to your photos to attach meal pictures."
-          );
+          Alert.alert("Permission Required", "We need access to your photos.");
         }
       })();
     }
   }, []);
 
-  // --- Load Today's Meals ---
+  // --- Live Listener for Today's Meals ---
   useEffect(() => {
     const auth = getAuth();
     const user = auth.currentUser;
@@ -143,7 +151,6 @@ export default function LogMealScreen({ navigation }: Props) {
         const list: MealEntry[] = [];
         snap.forEach((docSnap) => {
           const data: any = docSnap.data();
-          // Ignore water-only rows in the meal timeline (they still exist for hydration widgets)
           if (data?.isWater) return;
 
           list.push({
@@ -170,13 +177,19 @@ export default function LogMealScreen({ navigation }: Props) {
     return () => unsub();
   }, []);
 
+  const onRefresh = () => {
+    // Data updates live, so just simulate a network wait feel
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 800);
+  };
+
   // --- Actions ---
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 0.8,
+      quality: 0.7,
     });
 
     if (!result.canceled) {
@@ -203,8 +216,8 @@ export default function LogMealScreen({ navigation }: Props) {
 
     const cals =
       calories.trim().length === 0 ? null : Number.parseInt(calories, 10);
-    if (cals !== null && (Number.isNaN(cals) || cals < 0 || cals > 3000)) {
-      Alert.alert("Invalid Calories", "Please enter a value between 0–3000.");
+    if (cals !== null && (Number.isNaN(cals) || cals < 0 || cals > 5000)) {
+      Alert.alert("Invalid Calories", "Please enter a valid number.");
       return;
     }
 
@@ -239,10 +252,10 @@ export default function LogMealScreen({ navigation }: Props) {
         createdAt: serverTimestamp(),
       });
 
+      // Reset form
       setImage(null);
       setNotes("");
       setCalories("");
-      Alert.alert("Saved", "Meal entry added to your log.");
     } catch (err: any) {
       Alert.alert("Error", err.message);
     } finally {
@@ -251,7 +264,7 @@ export default function LogMealScreen({ navigation }: Props) {
   };
 
   const confirmDelete = (id: string) => {
-    Alert.alert("Delete Entry?", "This will remove the meal log.", [
+    Alert.alert("Delete Entry?", "This cannot be undone.", [
       { text: "Cancel", style: "cancel" },
       {
         text: "Delete",
@@ -261,14 +274,14 @@ export default function LogMealScreen({ navigation }: Props) {
             const db = getFirestore();
             await deleteDoc(doc(db, "MealEntry", id));
           } catch (e) {
-            Alert.alert("Error", "Could not delete the entry.");
+            Alert.alert("Error", "Could not delete.");
           }
         },
       },
     ]);
   };
 
-  // --- Render Helpers ---
+  // --- Rendering ---
   const formatTime = (ts?: any) => {
     if (!ts?.toDate) return "";
     return ts
@@ -276,10 +289,12 @@ export default function LogMealScreen({ navigation }: Props) {
       .toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
   };
 
-  const totalMeals = todayMeals.length;
   const totalCalories = useMemo(() => {
     return todayMeals.reduce((sum, m) => sum + (m.calories || 0), 0);
   }, [todayMeals]);
+
+  const activeColor =
+    MEAL_TYPES.find((m) => m.value === mealType)?.color || FITNESS_COLOR;
 
   const renderTimelineItem = ({
     item,
@@ -289,21 +304,19 @@ export default function LogMealScreen({ navigation }: Props) {
     index: number;
   }) => {
     const meta = MEAL_TYPES.find((m) => m.value === item.mealType);
+    const color = meta?.color || "#ccc";
     const isLast = index === todayMeals.length - 1;
 
     return (
       <View style={styles.timelineRow}>
+        {/* Left Time Column */}
         <View style={styles.timelineLeft}>
           <Text style={styles.timeText}>{formatTime(item.mealTimeClient)}</Text>
-          <View
-            style={[
-              styles.timelineDot,
-              { backgroundColor: meta?.color || "#ccc" },
-            ]}
-          />
+          <View style={[styles.timelineDot, { backgroundColor: color }]} />
           {!isLast && <View style={styles.timelineLine} />}
         </View>
 
+        {/* Right Card */}
         <TouchableOpacity
           activeOpacity={0.9}
           onLongPress={() => confirmDelete(item.id)}
@@ -312,46 +325,48 @@ export default function LogMealScreen({ navigation }: Props) {
             {
               backgroundColor: isDarkmode ? "#1F2937" : "#fff",
               borderColor: isDarkmode ? "#374151" : "#e5e7eb",
+              borderLeftColor: color,
+              borderLeftWidth: 4,
             },
           ]}
         >
-          <View
-            style={{
-              flexDirection: "row",
-              justifyContent: "space-between",
-              alignItems: "flex-start",
-            }}
-          >
+          <View style={styles.cardContent}>
             <View style={{ flex: 1 }}>
-              <Text
-                fontWeight="bold"
-                style={{ textTransform: "capitalize", color: meta?.color }}
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 4,
+                }}
               >
-                {item.mealType}
-              </Text>
-
-              {!!item.calories && (
-                <Text style={{ marginTop: 2, opacity: 0.7, fontSize: 12 }}>
-                  {item.calories} kcal
-                </Text>
-              )}
-
-              {item.notes ? (
-                <Text style={{ marginTop: 6, opacity: 0.85, fontSize: 13 }}>
-                  {item.notes}
-                </Text>
-              ) : (
                 <Text
+                  fontWeight="bold"
                   style={{
-                    marginTop: 6,
-                    opacity: 0.5,
-                    fontSize: 13,
-                    fontStyle: "italic",
+                    textTransform: "capitalize",
+                    color: color,
+                    marginRight: 8,
                   }}
                 >
-                  No notes added.
+                  {item.mealType}
                 </Text>
-              )}
+                {!!item.calories && (
+                  <View style={styles.calBadge}>
+                    <Text
+                      style={{
+                        fontSize: 10,
+                        color: "#666",
+                        fontWeight: "bold",
+                      }}
+                    >
+                      {item.calories} kcal
+                    </Text>
+                  </View>
+                )}
+              </View>
+
+              <Text style={{ opacity: item.notes ? 0.9 : 0.5, fontSize: 14 }}>
+                {item.notes || "No description"}
+              </Text>
             </View>
 
             {item.photoURL && (
@@ -369,13 +384,6 @@ export default function LogMealScreen({ navigation }: Props) {
                 />
               </TouchableOpacity>
             )}
-          </View>
-
-          <View style={{ marginTop: 10, flexDirection: "row", gap: 10 }}>
-            <View style={styles.miniPill}>
-              <Ionicons name="trash-outline" size={14} color="#6B7280" />
-              <Text style={styles.miniPillText}>Long-press to delete</Text>
-            </View>
           </View>
         </TouchableOpacity>
       </View>
@@ -410,196 +418,220 @@ export default function LogMealScreen({ navigation }: Props) {
 
         <ScrollView
           showsVerticalScrollIndicator={false}
-          contentContainerStyle={{ paddingBottom: 28 }}
+          contentContainerStyle={{ paddingBottom: 40 }}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
-          <View style={styles.container}>
-            {/* SECTION 1: selector */}
-            <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
-              <Text size="h4" fontWeight="bold">
-                What did you eat?
-              </Text>
+          {/* SECTION 1: Meal Selector */}
+          <View style={{ padding: 16 }}>
+            <Text size="h3" fontWeight="bold" style={{ marginBottom: 16 }}>
+              What did you eat?
+            </Text>
 
-              <View style={styles.gridContainer}>
-                {MEAL_TYPES.map((m) => {
-                  const active = mealType === m.value;
-                  return (
-                    <TouchableOpacity
-                      key={m.value}
-                      onPress={() => setMealType(m.value)}
-                      style={[
-                        styles.gridButton,
-                        {
-                          backgroundColor: active
-                            ? m.color
-                            : isDarkmode
-                            ? "#1f2937"
-                            : "#f9fafb",
-                          borderColor: active
-                            ? "transparent"
-                            : isDarkmode
-                            ? "#374151"
-                            : "#e5e7eb",
-                        },
-                      ]}
-                    >
-                      <Ionicons
-                        name={m.icon as any}
-                        size={24}
-                        color={active ? "#fff" : m.color}
-                      />
-                      <Text
-                        style={{
-                          marginTop: 8,
-                          color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
-                          fontWeight: active ? "bold" : "normal",
-                        }}
-                      >
-                        {m.label}
-                      </Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              <View style={styles.summaryRow}>
-                <View style={styles.summaryPill}>
-                  <Ionicons name="restaurant" size={14} color={FITNESS_COLOR} />
-                  <Text style={styles.summaryText}>{totalMeals} meals</Text>
-                </View>
-                <View style={styles.summaryPill}>
-                  <Ionicons name="flame" size={14} color="#F59E0B" />
-                  <Text style={styles.summaryText}>{totalCalories} kcal</Text>
-                </View>
-              </View>
-            </View>
-
-            {/* SECTION 2: input */}
-            <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
-              <Text fontWeight="bold" style={{ marginBottom: 8 }}>
-                Description
-              </Text>
-              <TextInput
-                placeholder="e.g. Nasi Lemak, Apple, Coffee..."
-                value={notes}
-                onChangeText={setNotes}
-                multiline
-                numberOfLines={2}
-              />
-
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 12 }}>
-                <View style={{ flex: 1 }}>
-                  <Text
-                    style={{ fontWeight: "600", marginBottom: 6, opacity: 0.8 }}
-                  >
-                    Calories (optional)
-                  </Text>
-                  <TextInput
-                    placeholder="e.g. 450"
-                    value={calories}
-                    onChangeText={setCalories}
-                    keyboardType="numeric"
-                  />
-                </View>
-              </View>
-
-              {/* Tags */}
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                style={{ marginTop: 10, marginBottom: 4 }}
-              >
-                {QUICK_TAGS.map((tag) => (
+            <View style={styles.gridContainer}>
+              {MEAL_TYPES.map((m) => {
+                const active = mealType === m.value;
+                return (
                   <TouchableOpacity
-                    key={tag}
-                    onPress={() => addTag(tag)}
+                    key={m.value}
+                    onPress={() => setMealType(m.value)}
                     style={[
-                      styles.tagChip,
-                      { backgroundColor: isDarkmode ? "#374151" : "#eff6ff" },
+                      styles.gridButton,
+                      {
+                        backgroundColor: active
+                          ? m.color
+                          : isDarkmode
+                          ? "#1f2937"
+                          : "#fff",
+                        borderColor: active
+                          ? m.color
+                          : isDarkmode
+                          ? "#374151"
+                          : "#e5e7eb",
+                        shadowColor: active ? m.color : "#000",
+                        shadowOpacity: active ? 0.3 : 0.05,
+                      },
                     ]}
                   >
+                    <Ionicons
+                      name={m.icon as any}
+                      size={24}
+                      color={active ? "#fff" : m.color}
+                    />
                     <Text
-                      size="sm"
-                      style={{ color: isDarkmode ? "#fff" : "#2563eb" }}
+                      style={{
+                        marginTop: 8,
+                        color: active
+                          ? "#fff"
+                          : isDarkmode
+                          ? "#ccc"
+                          : "#4b5563",
+                        fontWeight: active ? "bold" : "500",
+                      }}
                     >
-                      + {tag}
+                      {m.label}
                     </Text>
                   </TouchableOpacity>
-                ))}
-              </ScrollView>
+                );
+              })}
+            </View>
+          </View>
 
-              {/* Photo */}
-              <View style={styles.photoRow}>
-                <TouchableOpacity
-                  onPress={pickImage}
-                  style={{ flexDirection: "row", alignItems: "center" }}
-                >
-                  <Ionicons
-                    name="camera"
-                    size={20}
-                    color={FITNESS_COLOR}
-                    style={{ marginRight: 6 }}
+          {/* SECTION 2: Form Input */}
+          <View
+            style={[
+              styles.formSection,
+              { backgroundColor: isDarkmode ? "#111827" : "#f9fafb" },
+            ]}
+          >
+            <View style={{ flexDirection: "row", gap: 12 }}>
+              {/* Photo Box */}
+              <TouchableOpacity
+                onPress={pickImage}
+                style={[styles.photoBox, { borderColor: activeColor }]}
+              >
+                {image ? (
+                  <Image
+                    source={{ uri: image }}
+                    style={{ width: "100%", height: "100%" }}
                   />
-                  <Text style={{ color: FITNESS_COLOR, fontWeight: "600" }}>
-                    {image ? "Change Photo" : "Add Photo"}
-                  </Text>
-                </TouchableOpacity>
-
-                {image && (
-                  <View style={{ flexDirection: "row", alignItems: "center" }}>
-                    <Image
-                      source={{ uri: image }}
+                ) : (
+                  <View style={{ alignItems: "center" }}>
+                    <Ionicons name="camera" size={24} color={activeColor} />
+                    <Text
                       style={{
-                        width: 30,
-                        height: 30,
-                        borderRadius: 4,
-                        marginRight: 8,
+                        fontSize: 10,
+                        color: activeColor,
+                        marginTop: 4,
+                        fontWeight: "bold",
                       }}
-                    />
-                    <TouchableOpacity onPress={() => setImage(null)}>
-                      <Ionicons name="close-circle" size={20} color="gray" />
-                    </TouchableOpacity>
+                    >
+                      ADD PHOTO
+                    </Text>
                   </View>
                 )}
-              </View>
+                {image && (
+                  <View style={styles.removePhotoBtn}>
+                    <Ionicons
+                      name="close"
+                      color="#fff"
+                      size={12}
+                      onPress={() => setImage(null)}
+                    />
+                  </View>
+                )}
+              </TouchableOpacity>
 
-              <Button
-                text={saving ? "Saving..." : "Save Log"}
-                onPress={saveMeal}
-                style={{ marginTop: 16 }}
-                disabled={saving}
-                color={FITNESS_COLOR}
-              />
+              {/* Text Inputs */}
+              <View style={{ flex: 1, gap: 10 }}>
+                <TextInput
+                  placeholder="What's on your plate?"
+                  value={notes}
+                  onChangeText={setNotes}
+                  multiline={false}
+                />
+                <TextInput
+                  placeholder="Calories (optional)"
+                  value={calories}
+                  onChangeText={setCalories}
+                  keyboardType="numeric"
+                  rightContent={
+                    <Text
+                      style={{ opacity: 0.5, marginRight: 8, fontSize: 12 }}
+                    >
+                      kcal
+                    </Text>
+                  }
+                />
+              </View>
             </View>
 
-            <View style={styles.divider} />
+            {/* Quick Tags */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginTop: 12 }}
+            >
+              {QUICK_TAGS.map((tag) => (
+                <TouchableOpacity
+                  key={tag}
+                  onPress={() => addTag(tag)}
+                  style={[
+                    styles.tagChip,
+                    {
+                      backgroundColor: isDarkmode ? "#374151" : "#fff",
+                      borderColor: isDarkmode ? "#4b5563" : "#e5e7eb",
+                    },
+                  ]}
+                >
+                  <Text size="sm" style={{ opacity: 0.8 }}>
+                    + {tag}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
 
-            {/* SECTION 3: timeline */}
-            <View style={{ flex: 1, paddingHorizontal: 16 }}>
-              <Text size="h4" fontWeight="bold" style={{ marginBottom: 12 }}>
+            <Button
+              text={saving ? "Saving..." : "Log Meal"}
+              onPress={saveMeal}
+              style={{ marginTop: 16 }}
+              disabled={saving}
+              color={activeColor}
+              rightContent={
+                saving ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Ionicons name="arrow-forward" color="#fff" />
+                )
+              }
+            />
+          </View>
+
+          {/* SECTION 3: Timeline History */}
+          <View style={{ paddingHorizontal: 16, paddingTop: 24 }}>
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: 16,
+              }}
+            >
+              <Text size="h4" fontWeight="bold">
                 Today's History
               </Text>
-
-              {loadingMeals ? (
-                <Text style={{ opacity: 0.6 }}>Loading history...</Text>
-              ) : todayMeals.length === 0 ? (
-                <View
-                  style={{ alignItems: "center", marginTop: 20, opacity: 0.5 }}
+              <View style={styles.totalBadge}>
+                <Ionicons name="flame" size={14} color="#F59E0B" />
+                <Text
+                  style={{ fontSize: 12, fontWeight: "bold", marginLeft: 4 }}
                 >
-                  <Ionicons name="fast-food-outline" size={40} color="gray" />
-                  <Text style={{ marginTop: 8 }}>
-                    No meals logged today yet.
-                  </Text>
-                </View>
-              ) : (
-                <FlatList
-                  data={todayMeals}
-                  keyExtractor={(item) => item.id}
-                  renderItem={renderTimelineItem}
-                  showsVerticalScrollIndicator={false}
-                  contentContainerStyle={{ paddingBottom: 20 }}
-                />
-              )}
+                  {totalCalories} kcal
+                </Text>
+              </View>
             </View>
+
+            {loadingMeals ? (
+              <ActivityIndicator size="small" style={{ marginTop: 20 }} />
+            ) : todayMeals.length === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons
+                  name="fast-food-outline"
+                  size={48}
+                  color={isDarkmode ? "#374151" : "#d1d5db"}
+                />
+                <Text style={{ marginTop: 8, opacity: 0.5 }}>
+                  No meals logged yet today.
+                </Text>
+              </View>
+            ) : (
+              <FlatList
+                data={todayMeals}
+                keyExtractor={(item) => item.id}
+                renderItem={renderTimelineItem}
+                scrollEnabled={false} // Let parent ScrollView handle scrolling
+              />
+            )}
           </View>
         </ScrollView>
 
@@ -617,7 +649,7 @@ export default function LogMealScreen({ navigation }: Props) {
                   {preview?.title || "Preview"}
                 </Text>
                 <TouchableOpacity onPress={() => setPreview(null)}>
-                  <Ionicons name="close" size={22} color="#6B7280" />
+                  <Ionicons name="close" size={24} color="#6B7280" />
                 </TouchableOpacity>
               </View>
               {preview?.uri && (
@@ -635,99 +667,128 @@ export default function LogMealScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: "transparent" },
   gridContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 10,
-    marginTop: 10,
+    gap: 12,
   },
   gridButton: {
     width: "48%",
-    paddingVertical: 16,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
+    shadowOffset: { width: 0, height: 2 },
+    shadowRadius: 4,
+    elevation: 2,
   },
-  summaryRow: { flexDirection: "row", gap: 10, marginTop: 12 } as any,
-  summaryPill: {
-    flexDirection: "row",
+  formSection: {
+    padding: 16,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
+  },
+  photoBox: {
+    width: 80,
+    height: 80,
+    borderRadius: 12,
+    borderWidth: 2,
+    borderStyle: "dashed",
     alignItems: "center",
-    gap: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(0,0,0,0.04)",
-  } as any,
-  summaryText: { fontSize: 12, opacity: 0.8 },
+    justifyContent: "center",
+    overflow: "hidden",
+    backgroundColor: "rgba(0,0,0,0.02)",
+  },
+  removePhotoBtn: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    borderRadius: 10,
+    padding: 2,
+  },
   tagChip: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
+    paddingVertical: 8,
+    borderRadius: 8,
     marginRight: 8,
-  },
-  photoRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: 12,
-    justifyContent: "space-between",
+    borderWidth: 1,
   },
 
-  divider: {
-    height: 1,
-    backgroundColor: "#e5e7eb",
-    marginVertical: 16,
-    opacity: 0.5,
+  // Timeline Styles
+  timelineRow: { flexDirection: "row", minHeight: 80 },
+  timelineLeft: { width: 50, alignItems: "center", marginRight: 10 },
+  timeText: { fontSize: 11, fontWeight: "bold", marginBottom: 6, opacity: 0.6 },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 6,
+    zIndex: 2,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
-
-  // Timeline
-  timelineRow: { flexDirection: "row", marginBottom: 0, minHeight: 70 },
-  timelineLeft: { width: 60, alignItems: "center", marginRight: 10 },
-  timeText: { fontSize: 11, fontWeight: "bold", marginBottom: 4, opacity: 0.7 },
-  timelineDot: { width: 10, height: 10, borderRadius: 5, zIndex: 2 },
   timelineLine: {
     width: 2,
     backgroundColor: "#e5e7eb",
     flex: 1,
     marginTop: -2,
   },
+
   timelineCard: {
     flex: 1,
     borderRadius: 12,
-    padding: 12,
     marginBottom: 16,
     borderWidth: 1,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  cardContent: {
+    padding: 12,
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+  },
+  calBadge: {
+    backgroundColor: "#f3f4f6",
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
   },
   thumbnail: {
-    width: 40,
-    height: 40,
-    borderRadius: 6,
+    width: 48,
+    height: 48,
+    borderRadius: 8,
     marginLeft: 10,
     backgroundColor: "#eee",
   },
-  miniPill: {
+  totalBadge: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 6,
+    backgroundColor: "rgba(245, 158, 11, 0.1)",
     paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 999,
-    backgroundColor: "rgba(107,114,128,0.08)",
-  } as any,
-  miniPillText: { fontSize: 11, color: "#6B7280" },
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  emptyState: {
+    alignItems: "center",
+    paddingVertical: 32,
+    opacity: 0.8,
+  },
 
   // Modal
   modalBackdrop: {
     flex: 1,
-    backgroundColor: "rgba(0,0,0,0.6)",
+    backgroundColor: "rgba(0,0,0,0.8)",
     alignItems: "center",
     justifyContent: "center",
-    padding: 16,
+    padding: 20,
   },
   modalCard: {
     width: "100%",
-    maxWidth: 520,
     borderRadius: 16,
     backgroundColor: "#fff",
     overflow: "hidden",
@@ -735,10 +796,9 @@ const styles = StyleSheet.create({
   modalHeader: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    padding: 12,
     borderBottomWidth: 1,
-    borderBottomColor: "#E5E7EB",
+    borderBottomColor: "#eee",
   },
-  previewImage: { width: "100%", height: 320, resizeMode: "cover" },
+  previewImage: { width: "100%", height: 350, resizeMode: "cover" },
 });

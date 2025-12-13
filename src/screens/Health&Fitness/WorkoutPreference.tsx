@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   StyleSheet,
@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  RefreshControl,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -45,7 +46,7 @@ const FITNESS_COLOR = "#22C55E"; // Keep for save button / main accents
 const recommendMinutes = (difficulty: "easy" | "moderate" | "hard") => {
   if (difficulty === "easy") return 20;
   if (difficulty === "moderate") return 30;
-  return 45; // increased hard to 45
+  return 45;
 };
 
 export default function WorkoutPreferenceScreen({ navigation }: Props) {
@@ -69,10 +70,11 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
   const [weight, setWeight] = useState("");
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // --- Load Data ---
-  useEffect(() => {
+  // --- Load Data Function ---
+  const loadData = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) {
       setLoading(false);
@@ -80,28 +82,36 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     }
 
     const ref = doc(db, "WorkoutPreference", user.uid);
-
-    (async () => {
-      try {
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          const data = snap.data() as any;
-          setGoal(data.goal || "");
-          setDifficulty(data.difficulty || "easy");
-          setSelectedDays(data.workoutDays || ["Mon", "Wed", "Fri"]);
-          setSessionLength(
-            data.sessionLengthMinutes ? String(data.sessionLengthMinutes) : "20"
-          );
-          setHeight(data.height ? String(data.height) : "");
-          setWeight(data.weight ? String(data.weight) : "");
-        }
-      } catch (err) {
-        console.log("Error loading preference:", err);
-      } finally {
-        setLoading(false);
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        setGoal(data.goal || "");
+        setDifficulty(data.difficulty || "easy");
+        setSelectedDays(data.workoutDays || ["Mon", "Wed", "Fri"]);
+        setSessionLength(
+          data.sessionLengthMinutes ? String(data.sessionLengthMinutes) : "20"
+        );
+        setHeight(data.height ? String(data.height) : "");
+        setWeight(data.weight ? String(data.weight) : "");
       }
-    })();
-  }, []);
+    } catch (err) {
+      console.log("Error loading preference:", err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [auth.currentUser, db]);
+
+  // Initial Load
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
 
   const toggleDay = (day: string) => {
     setSelectedDays((prev) =>
@@ -246,6 +256,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={{ paddingBottom: 32 }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           >
             {/* 1) About You (Blue) */}
             <Section style={styles.card}>
