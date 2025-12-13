@@ -969,7 +969,9 @@ export default function Profile({ navigation }: Props) {
                       )}
                     </View>
                   )}
-                  {/* Logout (scrolls with content, not fixed) */}
+                  
+                </View>
+                {/* Logout (scrolls with content, not fixed) */}
                   <View style={{ marginTop: 10, marginBottom: 40 }}>
                     <Button
                       text="Logout"
@@ -984,7 +986,6 @@ export default function Profile({ navigation }: Props) {
                       onPress={() => signOut(auth)}
                     />
                   </View>
-                </View>
               </View>
             </View>
           )}
