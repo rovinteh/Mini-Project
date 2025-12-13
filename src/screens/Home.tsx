@@ -2,7 +2,7 @@
 import React from "react";
 import { View, ScrollView, TouchableOpacity } from "react-native";
 import { MainStackParamList } from "../types/navigation";
-import { getAuth, signOut } from "firebase/auth";
+import { getAuth } from "firebase/auth";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   Layout,
@@ -240,7 +240,7 @@ export default function Home({ navigation }: Props) {
               {
                 label: "Fitness",
                 icon: "fitness-outline",
-                route: "FitnessMenu",
+                route: "LogMeal",
               },
             ].map((item) => (
               <TouchableOpacity
