@@ -1,5 +1,4 @@
-// src/screens/MemoryBook/MemoryChat.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   View,
   FlatList,
@@ -43,7 +42,6 @@ interface ChatMessage {
 }
 
 function buildChatId(a: string, b: string) {
-  // sort ids so the chat id is always the same for this pair
   return [a, b].sort().join("_");
 }
 
@@ -62,7 +60,6 @@ export default function MemoryChat({ route, navigation }: Props) {
 
   const flatListRef = useRef<FlatList<ChatMessage> | null>(null);
 
-  // load messages
   useEffect(() => {
     if (!meId) return;
 
@@ -81,7 +78,6 @@ export default function MemoryChat({ route, navigation }: Props) {
       }));
       setMessages(arr);
 
-      // scroll to bottom when new messages come
       setTimeout(() => {
         flatListRef.current?.scrollToEnd({ animated: true });
       }, 50);
@@ -92,6 +88,7 @@ export default function MemoryChat({ route, navigation }: Props) {
 
   const handleSend = async () => {
     if (!meId || !chatId) return;
+
     const trimmed = text.trim();
     if (!trimmed) return;
 
@@ -99,14 +96,14 @@ export default function MemoryChat({ route, navigation }: Props) {
 
     const chatDocRef = doc(firestore, "chats", chatId);
 
-    // 1) add message to subcollection
+    // 1) add message
     await addDoc(collection(chatDocRef, "messages"), {
       text: trimmed,
       senderId: meId,
       createdAt: serverTimestamp(),
     });
 
-    // 2) upsert chat metadata for chat list
+    // 2) upsert chat meta
     await setDoc(
       chatDocRef,
       {
@@ -117,6 +114,16 @@ export default function MemoryChat({ route, navigation }: Props) {
       },
       { merge: true }
     );
+
+    // 3) ✅ create notification doc for receiver
+    await addDoc(collection(firestore, "notifications", peerId, "items"), {
+      type: "message",
+      text: trimmed,
+      fromUid: meId,
+      chatId,
+      read: false,
+      createdAt: serverTimestamp(),
+    });
   };
 
   const primary = isDarkmode ? themeColor.white100 : themeColor.dark;
@@ -188,7 +195,6 @@ export default function MemoryChat({ route, navigation }: Props) {
           }}
         />
 
-        {/* input bar */}
         <View
           style={{
             flexDirection: "row",

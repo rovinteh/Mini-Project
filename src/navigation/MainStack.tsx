@@ -1,6 +1,7 @@
-import React from "react";
+import React, { useEffect } from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import MainTabs from "./MainTabs";
+
 import MemoryFeed from "../screens/MemoryBook/MemoryFeed";
 import MemoryUpload from "../screens/MemoryBook/MemoryUpload";
 import MemoryComments from "../screens/MemoryBook/MemoryComments";
@@ -14,21 +15,32 @@ import MemoryChatsList from "../screens/MemoryBook/MemoryChatsList";
 import MemoryMoodCalendar from "../screens/MemoryBook/MemoryMoodCalendar";
 import MemoryAlbum from "../screens/MemoryBook/MemoryAlbum";
 import MemoryFloatingMenu from "../screens/MemoryBook/MemoryFloatingMenu";
+
 import FitnessMenu from "../screens/Health&Fitness/FitnessMenu";
 import LogMeal from "../screens/Health&Fitness/LogMeal";
 import WeeklySummary from "../screens/Health&Fitness/WeeklySummary";
 import WorkoutPreference from "../screens/Health&Fitness/WorkoutPreference";
 import WorkoutSession from "../screens/Health&Fitness/WorkoutSession";
+
 import TaskManagementMenu from "../screens/TaskManagementModule.tsx/TaskManagementMenu";
 import TaskAdd from "../screens/TaskManagementModule.tsx/TaskAdd";
 import TaskList from "../screens/TaskManagementModule.tsx/TaskList";
 import TaskCalendar from "../screens/TaskManagementModule.tsx/TaskCalendar";
 import AIAnalytics from "../screens/TaskManagementModule.tsx/AIAnalytics";
 import TeamManagement from "../screens/TaskManagementModule.tsx/TeamManagement";
+import MemoryNotifications from "../screens/MemoryBook/MemoryNotifications";
+import { startNotificationListener } from "../screens/MemoryBook/NotificationService";
 
 const MainStack = createNativeStackNavigator();
 
 const Main = () => {
+  useEffect(() => {
+    const unsub = startNotificationListener();
+    return () => {
+      if (unsub) unsub();
+    };
+  }, []);
+
   return (
     <MainStack.Navigator
       screenOptions={{
@@ -55,6 +67,11 @@ const Main = () => {
         name="MemoryFloatingMenu"
         component={MemoryFloatingMenu}
       />
+      <MainStack.Screen
+        name="MemoryNotifications"
+        component={MemoryNotifications}
+      />
+
       <MainStack.Screen name="FitnessMenu" component={FitnessMenu} />
       <MainStack.Screen name="LogMeal" component={LogMeal} />
       <MainStack.Screen name="WeeklySummary" component={WeeklySummary} />
@@ -63,6 +80,7 @@ const Main = () => {
         component={WorkoutPreference}
       />
       <MainStack.Screen name="WorkoutSession" component={WorkoutSession} />
+
       <MainStack.Screen name="TaskAdd" component={TaskAdd} />
       <MainStack.Screen name="TaskList" component={TaskList} />
       <MainStack.Screen name="TaskCalendar" component={TaskCalendar} />

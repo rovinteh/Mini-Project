@@ -1,12 +1,13 @@
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
-  ScrollView,
   TouchableOpacity,
   Image,
   KeyboardAvoidingView,
   Modal,
   Alert,
+  FlatList,
+  Platform,
 } from "react-native";
 import { MainStackParamList } from "../types/navigation";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -23,11 +24,7 @@ import QRCode from "react-native-qrcode-svg";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Contacts from "expo-contacts";
 
-import {
-  getAuth,
-  updateProfile as updateAuthProfile,
-  User,
-} from "firebase/auth";
+import { getAuth, updateProfile as updateAuthProfile, User } from "firebase/auth";
 import {
   getFirestore,
   doc,
@@ -45,9 +42,9 @@ import { Calendar } from "react-native-calendars";
 import DropDownPicker from "react-native-dropdown-picker";
 import { TextInputMask } from "react-native-masked-text";
 
-export default function ({
-  navigation,
-}: NativeStackScreenProps<MainStackParamList, "MainTabs">) {
+type Props = NativeStackScreenProps<MainStackParamList, "MainTabs">;
+
+export default function Profile({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const auth = getAuth();
   const db = getFirestore();
@@ -55,9 +52,7 @@ export default function ({
   const uid = auth.currentUser?.uid || "";
 
   // -------- State --------
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(
-    auth.currentUser
-  );
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(auth.currentUser);
 
   const [qrValue, setQrValue] = useState("");
   const [qrTab, setQrTab] = useState<"myqr" | "scan">("myqr");
@@ -100,10 +95,9 @@ export default function ({
   const currentYear = new Date().getFullYear();
   const years = useMemo(
     () =>
-      Array.from(
-        { length: currentYear - 1950 + 1 },
-        (_, i) => currentYear - i
-      ).map((y) => ({ label: String(y), value: y })),
+      Array.from({ length: currentYear - 1950 + 1 }, (_, i) => currentYear - i).map(
+        (y) => ({ label: String(y), value: y })
+      ),
     [currentYear]
   );
 
@@ -133,8 +127,7 @@ export default function ({
   // request gallery permission
   useEffect(() => {
     (async () => {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
@@ -154,7 +147,6 @@ export default function ({
         if (snap.exists()) {
           const data = snap.data() as any;
 
-          // QR data that others will scan and save as contact
           setQrValue(
             JSON.stringify({
               name: data.displayName || "",
@@ -163,7 +155,7 @@ export default function ({
             })
           );
 
-          if (data.gender) setGender(data.gender);
+          if (data.gender) setGender(String(data.gender));
 
           if (data.birthDate) {
             const d = new Date(data.birthDate);
@@ -217,7 +209,6 @@ export default function ({
   // -------- Scan handler: save QR as phone contact --------
   const handleQrScanned = async (qrData: string) => {
     try {
-      // Ask for contacts permission
       const { status } = await Contacts.requestPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
@@ -227,7 +218,6 @@ export default function ({
         return;
       }
 
-      // Parse QR (expected JSON)
       const parsed = JSON.parse(qrData || "{}");
       const displayName =
         parsed.name || parsed.displayName || firebaseUser?.displayName || "";
@@ -239,7 +229,7 @@ export default function ({
         return;
       }
 
-      const [firstName, ...restName] = displayName.split(" ");
+      const [firstName, ...restName] = String(displayName).split(" ");
       const lastName = restName.join(" ");
 
       const contact: any = {
@@ -248,9 +238,7 @@ export default function ({
       };
 
       if (phone && phone !== "-") {
-        contact[Contacts.Fields.PhoneNumbers] = [
-          { label: "mobile", number: phone },
-        ];
+        contact[Contacts.Fields.PhoneNumbers] = [{ label: "mobile", number: phone }];
       }
 
       if (email && email !== "-") {
@@ -261,12 +249,7 @@ export default function ({
 
       Alert.alert(
         "Contact Saved",
-        `${displayName || email || phone} has been added to your contacts.`,
-        [
-          {
-            text: "OK",
-          },
-        ]
+        `${displayName || email || phone} has been added to your contacts.`
       );
     } catch (err) {
       console.log("Error parsing/saving QR contact", err);
@@ -279,8 +262,15 @@ export default function ({
     if (!uid) return;
 
     try {
+      // Keep compatibility: newer docs say MediaType is preferred,
+      // but your expo-image-picker typings may not have it.
+      const mediaTypesCompat =
+        (ImagePicker as any).MediaType?.Images
+          ? [(ImagePicker as any).MediaType.Images]
+          : ImagePicker.MediaTypeOptions.Images;
+
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: mediaTypesCompat as any,
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
@@ -296,29 +286,21 @@ export default function ({
       await uploadBytes(storageRef, blob);
       const downloadURL = await getDownloadURL(storageRef);
 
-      // 1) update Firestore users/{uid}
       await updateDoc(doc(db, "users", uid), {
         photoURL: downloadURL,
         updatedAt: new Date().toISOString(),
       });
 
-      // 2) update Firebase Auth profile
       if (auth.currentUser) {
-        await updateAuthProfile(auth.currentUser, {
-          photoURL: downloadURL,
-        });
+        await updateAuthProfile(auth.currentUser, { photoURL: downloadURL });
         setFirebaseUser(auth.currentUser);
       }
 
       setPhotoURL(downloadURL);
 
-      // 3) OPTIONAL: update CreatedUserPhoto in Topic documents
       try {
         const topicsRef = collection(db, "Topic");
-        const q = query(
-          topicsRef,
-          where("CreatedUser.CreatedUserId", "==", uid)
-        );
+        const q = query(topicsRef, where("CreatedUser.CreatedUserId", "==", uid));
         const snap = await getDocs(q);
         if (!snap.empty) {
           const batch = writeBatch(db);
@@ -357,19 +339,12 @@ export default function ({
     }
 
     if (!/^[0-9]{9,11}$/.test(phoneDigits)) {
-      Alert.alert(
-        "Validation",
-        "Please enter a valid Malaysian phone number (9–11 digits)."
-      );
+      Alert.alert("Validation", "Please enter a valid Malaysian phone number (9–11 digits).");
       return;
     }
 
     const today = new Date();
-    const onlyToday = new Date(
-      today.getFullYear(),
-      today.getMonth(),
-      today.getDate()
-    );
+    const onlyToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
     const onlyBirth = new Date(
       birthDate.getFullYear(),
       birthDate.getMonth(),
@@ -379,11 +354,11 @@ export default function ({
       Alert.alert("Validation", "Birth date cannot be in the future.");
       return;
     }
+
     setLoading(true);
     try {
       const fullPhone = `${countryCode}${phoneDigits}`;
 
-      // 1) Update Firestore
       await updateDoc(doc(db, "users", uid), {
         gender,
         birthDate: birthDate.toISOString(),
@@ -391,7 +366,6 @@ export default function ({
         updatedAt: new Date().toISOString(),
       });
 
-      // 2) Immediately refresh the QR value with the new phone number
       setQrValue(
         JSON.stringify({
           name: firebaseUser?.displayName || "",
@@ -400,14 +374,9 @@ export default function ({
         })
       );
 
-      Alert.alert(
-        "Profile Updated",
-        "Your profile has been saved successfully.",
-        [{ text: "OK" }]
-      );
+      Alert.alert("Profile Updated", "Your profile has been saved successfully.");
     } catch (e) {
       console.log("Error updating profile", e);
-      setLoading(false);
       Alert.alert("Error", "Failed to update profile.");
     } finally {
       setLoading(false);
@@ -416,474 +385,468 @@ export default function ({
 
   const avatarSource = photoURL && photoURL !== "-" ? { uri: photoURL } : null;
 
-  // -------- UI --------
+  // -------- Styles helpers --------
+  const bgMain = isDarkmode ? themeColor.dark : themeColor.white;
+  const bgCard = isDarkmode ? themeColor.dark200 : "#f7f7f7";
+  const textMain = isDarkmode ? themeColor.white100 : themeColor.dark;
+
+  const dropdownBaseStyle = {
+    backgroundColor: isDarkmode ? themeColor.dark200 : themeColor.white,
+    borderColor: "#ccc",
+  };
+
+  const dropdownTextStyle = {
+    color: isDarkmode ? themeColor.white100 : themeColor.dark,
+    fontSize: 14,
+  };
+
+  const dropdownListLabelStyle = {
+    color: isDarkmode ? themeColor.white100 : themeColor.dark,
+  };
+
+  // -------- UI (use FlatList to avoid VirtualizedList-in-ScrollView warning) --------
   return (
-    <KeyboardAvoidingView behavior="height" enabled style={{ flex: 1 }}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      enabled
+      style={{ flex: 1 }}
+    >
       <Layout>
-        <ScrollView contentContainerStyle={{ flexGrow: 1 }}>
-          {/* Header with avatar */}
-          <View
-            style={{
-              paddingTop: 40,
-              paddingBottom: 20,
-              alignItems: "center",
-              backgroundColor: isDarkmode ? "#17171E" : themeColor.white100,
-            }}
-          >
-            {avatarSource ? (
-              <Image
-                source={avatarSource}
+        <FlatList
+          data={[{ key: "content" }]}
+          keyExtractor={(item) => item.key}
+          contentContainerStyle={{ paddingBottom: 30 }}
+          renderItem={() => (
+            <View>
+              {/* Header */}
+              <View
                 style={{
-                  width: 110,
-                  height: 110,
-                  borderRadius: 55,
-                  borderWidth: 2,
-                  borderColor: themeColor.info,
-                  marginBottom: 10,
-                }}
-              />
-            ) : (
-              <Ionicons
-                name="person-circle-outline"
-                size={110}
-                color={themeColor.info}
-                style={{ marginBottom: 10 }}
-              />
-            )}
-
-            <TouchableOpacity onPress={handleChangePhoto}>
-              <Text
-                style={{
-                  color: themeColor.info,
-                  fontWeight: "bold",
-                  marginBottom: 10,
+                  paddingTop: 40,
+                  paddingBottom: 20,
+                  alignItems: "center",
+                  backgroundColor: isDarkmode ? "#17171E" : themeColor.white100,
                 }}
               >
-                Change Profile Photo
-              </Text>
-            </TouchableOpacity>
-
-            <Text size="h4" fontWeight="bold">
-              {firebaseUser?.displayName ?? "My Profile"}
-            </Text>
-            <Text style={{ opacity: 0.7 }}>{firebaseUser?.email}</Text>
-
-            <TouchableOpacity
-              onPress={() =>
-                isDarkmode ? setTheme("light") : setTheme("dark")
-              }
-              style={{ marginTop: 10 }}
-            >
-              <Text size="md" fontWeight="bold">
-                {isDarkmode ? "☀️ light theme" : "🌑 dark theme"}
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Editable fields */}
-          <View
-            style={{
-              flex: 1,
-              paddingHorizontal: 20,
-              paddingBottom: 30,
-              paddingTop: 10,
-              backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
-            }}
-          >
-            <Text
-              fontWeight="bold"
-              size="h4"
-              style={{ alignSelf: "center", marginVertical: 20 }}
-            >
-              Edit Profile
-            </Text>
-
-            {/* Email (read only) */}
-            <Text>Email (read only)</Text>
-            <TextInput
-              containerStyle={{ marginTop: 10 }}
-              value={firebaseUser?.email || ""}
-              editable={false}
-            />
-
-            {/* Gender */}
-            <Text style={{ marginTop: 20 }}>Gender</Text>
-            <View style={{ marginTop: 10, zIndex: 3000 }}>
-              <DropDownPicker
-                open={genderOpen}
-                value={gender}
-                items={genderItems}
-                setOpen={setGenderOpen}
-                setValue={setGender}
-                setItems={setGenderItems}
-                placeholder="Select your gender"
-                style={{
-                  backgroundColor: isDarkmode
-                    ? themeColor.dark200
-                    : themeColor.white,
-                  borderColor: "#ccc",
-                }}
-                textStyle={{
-                  color: isDarkmode ? themeColor.white : themeColor.dark,
-                }}
-                dropDownContainerStyle={{
-                  backgroundColor: isDarkmode
-                    ? themeColor.dark200
-                    : themeColor.white,
-                  borderColor: "#ccc",
-                }}
-              />
-            </View>
-
-            {/* Birth Date */}
-            <Text style={{ marginTop: 20 }}>Birth Date</Text>
-            <TouchableOpacity
-              onPress={() => {
-                const d = birthDate;
-                setYear(d.getFullYear());
-                setMonth(d.getMonth() + 1);
-                setShowCalendar(true);
-              }}
-              style={{
-                marginTop: 10,
-                padding: 15,
-                borderRadius: 5,
-                borderWidth: 1,
-                borderColor: "#ccc",
-                backgroundColor: isDarkmode ? themeColor.dark200 : "#f5f5f5",
-              }}
-            >
-              <Text>{formatDate(birthDate)}</Text>
-            </TouchableOpacity>
-
-            {/* Calendar modal */}
-            {showCalendar && (
-              <Modal
-                visible={showCalendar}
-                transparent
-                animationType="fade"
-                onRequestClose={() => setShowCalendar(false)}
-              >
-                <View
-                  style={{
-                    flex: 1,
-                    backgroundColor: "rgba(0,0,0,0.5)",
-                    justifyContent: "center",
-                    alignItems: "center",
-                  }}
-                >
-                  <View
+                {avatarSource ? (
+                  <Image
+                    source={avatarSource}
                     style={{
-                      backgroundColor: isDarkmode
-                        ? themeColor.dark
-                        : themeColor.white,
-                      borderRadius: 10,
-                      padding: 20,
-                      width: "90%",
-                      maxWidth: 420,
+                      width: 110,
+                      height: 110,
+                      borderRadius: 55,
+                      borderWidth: 2,
+                      borderColor: themeColor.info,
+                      marginBottom: 10,
+                    }}
+                  />
+                ) : (
+                  <Ionicons
+                    name="person-circle-outline"
+                    size={110}
+                    color={themeColor.info}
+                    style={{ marginBottom: 10 }}
+                  />
+                )}
+
+                <TouchableOpacity onPress={handleChangePhoto}>
+                  <Text
+                    style={{
+                      color: themeColor.info,
+                      fontWeight: "bold",
+                      marginBottom: 10,
                     }}
                   >
-                    {/* Year / Month selectors */}
-                    <View
-                      style={{
-                        flexDirection: "row",
-                        gap: 10,
-                        marginBottom: 12,
-                        zIndex: 9999,
-                      }}
-                    >
-                      <View style={{ flex: 1, zIndex: 9999 }}>
-                        <DropDownPicker
-                          open={yearOpen}
-                          value={year}
-                          items={years}
-                          setOpen={setYearOpen}
-                          setValue={setYear}
-                          setItems={() => {}}
-                          placeholder="Year"
-                          style={{
-                            backgroundColor: isDarkmode
-                              ? themeColor.dark200
-                              : themeColor.white,
-                            borderColor: "#ccc",
-                            minHeight: 46,
-                          }}
-                          dropDownContainerStyle={{
-                            backgroundColor: isDarkmode
-                              ? themeColor.dark200
-                              : themeColor.white,
-                            borderColor: "#ccc",
-                          }}
-                        />
-                      </View>
-                      <View style={{ flex: 1, zIndex: 9998 }}>
-                        <DropDownPicker
-                          open={monthOpen}
-                          value={month}
-                          items={months}
-                          setOpen={setMonthOpen}
-                          setValue={setMonth}
-                          setItems={() => {}}
-                          placeholder="Month"
-                          style={{
-                            backgroundColor: isDarkmode
-                              ? themeColor.dark200
-                              : themeColor.white,
-                            borderColor: "#ccc",
-                            minHeight: 46,
-                          }}
-                          dropDownContainerStyle={{
-                            backgroundColor: isDarkmode
-                              ? themeColor.dark200
-                              : themeColor.white,
-                            borderColor: "#ccc",
-                          }}
-                        />
-                      </View>
-                    </View>
+                    Change Profile Photo
+                  </Text>
+                </TouchableOpacity>
 
-                    <Calendar
-                      key={calendarCurrent}
-                      current={calendarCurrent}
-                      onDayPress={onDateSelect}
-                      maxDate={new Date().toISOString().split("T")[0]}
-                      markedDates={{
-                        [birthDate.toISOString().split("T")[0]]: {
-                          selected: true,
-                          selectedColor: themeColor.primary,
-                        },
-                      }}
-                      theme={{
-                        backgroundColor: isDarkmode
-                          ? themeColor.dark
-                          : themeColor.white,
-                        calendarBackground: isDarkmode
-                          ? themeColor.dark
-                          : themeColor.white,
-                        textSectionTitleColor: isDarkmode
-                          ? themeColor.white
-                          : themeColor.dark,
-                        selectedDayBackgroundColor: themeColor.primary,
-                        selectedDayTextColor: themeColor.white,
-                        todayTextColor: themeColor.primary,
-                        dayTextColor: isDarkmode
-                          ? themeColor.white
-                          : themeColor.dark,
-                        textDisabledColor: "#888",
-                        monthTextColor: isDarkmode
-                          ? themeColor.white
-                          : themeColor.dark,
-                        arrowColor: themeColor.primary,
-                      }}
-                    />
+                {/* ✅ Rapi-UI sizes: use h3 (not h4) */}
+                <Text size="h3" fontWeight="bold">
+                  {firebaseUser?.displayName ?? "My Profile"}
+                </Text>
+                <Text style={{ opacity: 0.7, color: textMain }}>{firebaseUser?.email}</Text>
 
-                    <TouchableOpacity
-                      onPress={() => setShowCalendar(false)}
-                      style={{
-                        marginTop: 20,
-                        padding: 12,
-                        backgroundColor: themeColor.primary,
-                        borderRadius: 5,
-                        alignItems: "center",
-                      }}
-                    >
-                      <Text
-                        style={{
-                          color: themeColor.white,
-                          fontWeight: "bold",
-                        }}
-                      >
-                        Close
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                </View>
-              </Modal>
-            )}
-
-            {/* Phone Number */}
-            <Text style={{ marginTop: 20 }}>Phone Number</Text>
-            <View
-              style={{
-                flexDirection: "row",
-                marginTop: 10,
-                gap: 10,
-                zIndex: 2000,
-              }}
-            >
-              <View style={{ flex: 1, zIndex: 2000 }}>
-                <DropDownPicker
-                  open={countryCodeOpen}
-                  value={countryCode}
-                  items={countryCodeItems}
-                  setOpen={setCountryCodeOpen}
-                  setValue={setCountryCode}
-                  setItems={setCountryCodeItems}
-                  placeholder="+60"
-                  style={{
-                    backgroundColor: isDarkmode
-                      ? themeColor.dark200
-                      : themeColor.white,
-                    borderColor: "#ccc",
-                    minHeight: 50,
-                  }}
-                  textStyle={{
-                    color: isDarkmode ? themeColor.white : themeColor.dark,
-                    fontSize: 14,
-                  }}
-                  dropDownContainerStyle={{
-                    backgroundColor: isDarkmode
-                      ? themeColor.dark200
-                      : themeColor.white,
-                    borderColor: "#ccc",
-                  }}
-                  listItemLabelStyle={{
-                    color: isDarkmode ? themeColor.white : themeColor.dark,
-                  }}
-                />
+                <TouchableOpacity
+                  onPress={() => setTheme(isDarkmode ? "light" : "dark")}
+                  style={{ marginTop: 10 }}
+                >
+                  <Text size="md" fontWeight="bold" style={{ color: textMain }}>
+                    {isDarkmode ? "☀️ light theme" : "🌑 dark theme"}
+                  </Text>
+                </TouchableOpacity>
               </View>
 
-              <View style={{ flex: 2 }}>
-                <TextInputMask
-                  type={"custom"}
-                  options={{ mask: "99-9999999" }}
-                  placeholder="12-4567890"
-                  value={phoneNumber}
-                  keyboardType="phone-pad"
-                  onChangeText={(text) =>
-                    setPhoneNumber(text.replace(/[^0-9]/g, ""))
-                  }
+              {/* Editable fields */}
+              <View
+                style={{
+                  flex: 1,
+                  paddingHorizontal: 20,
+                  paddingTop: 10,
+                  backgroundColor: bgMain,
+                }}
+              >
+                <Text
+                  fontWeight="bold"
+                  size="h3"
+                  style={{ alignSelf: "center", marginVertical: 20, color: textMain }}
+                >
+                  Edit Profile
+                </Text>
+
+                {/* Email */}
+                <Text style={{ color: textMain }}>Email (read only)</Text>
+                <TextInput containerStyle={{ marginTop: 10 }} value={firebaseUser?.email || ""} editable={false} />
+
+                {/* Gender (✅ MODAL mode avoids VirtualizedList nesting issue) */}
+                <Text style={{ marginTop: 20, color: textMain }}>Gender</Text>
+                <View style={{ marginTop: 10 }}>
+                  <DropDownPicker
+                    open={genderOpen}
+                    value={gender}
+                    items={genderItems}
+                    setOpen={setGenderOpen}
+                    setValue={setGender as any}
+                    setItems={setGenderItems}
+                    placeholder="Select your gender"
+                    listMode="MODAL"
+                    modalTitle="Select gender"
+                    modalProps={{ animationType: "fade" }}
+                    modalContentContainerStyle={{
+                      backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                    }}
+                    modalTitleStyle={{
+                      color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                      fontWeight: "bold",
+                    }}
+                    style={dropdownBaseStyle}
+                    textStyle={dropdownTextStyle}
+                    placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" }}
+                    dropDownContainerStyle={dropdownBaseStyle}
+                    listItemLabelStyle={dropdownListLabelStyle}
+                  />
+                </View>
+
+                {/* Birth Date */}
+                <Text style={{ marginTop: 20, color: textMain }}>Birth Date</Text>
+                <TouchableOpacity
+                  onPress={() => {
+                    const d = birthDate;
+                    setYear(d.getFullYear());
+                    setMonth(d.getMonth() + 1);
+                    setShowCalendar(true);
+                  }}
                   style={{
+                    marginTop: 10,
                     padding: 15,
                     borderRadius: 5,
                     borderWidth: 1,
                     borderColor: "#ccc",
-                    backgroundColor: isDarkmode
-                      ? themeColor.dark200
-                      : themeColor.white,
-                    color: isDarkmode ? themeColor.white : themeColor.dark,
-                    height: 50,
+                    backgroundColor: isDarkmode ? themeColor.dark200 : "#f5f5f5",
                   }}
-                />
-              </View>
-            </View>
+                >
+                  <Text style={{ color: textMain }}>{formatDate(birthDate)}</Text>
+                </TouchableOpacity>
 
-            {/* Save button */}
-            <Button
-              text={loading ? "Saving..." : "Save Changes"}
-              onPress={handleSave}
-              style={{ marginTop: 25 }}
-              disabled={loading || !userDocLoaded}
-            />
-          </View>
+                {/* Calendar modal */}
+                {showCalendar && (
+                  <Modal
+                    visible={showCalendar}
+                    transparent
+                    animationType="fade"
+                    onRequestClose={() => setShowCalendar(false)}
+                  >
+                    <View
+                      style={{
+                        flex: 1,
+                        backgroundColor: "rgba(0,0,0,0.5)",
+                        justifyContent: "center",
+                        alignItems: "center",
+                      }}
+                    >
+                      <View
+                        style={{
+                          backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                          borderRadius: 10,
+                          padding: 20,
+                          width: "90%",
+                          maxWidth: 420,
+                        }}
+                      >
+                        {/* Year / Month selectors (✅ make text white in dark mode) */}
+                        <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
+                          <View style={{ flex: 1 }}>
+                            <DropDownPicker
+                              open={yearOpen}
+                              value={year}
+                              items={years}
+                              setOpen={setYearOpen}
+                              setValue={setYear as any}
+                              setItems={() => {}}
+                              placeholder="Year"
+                              listMode="MODAL"
+                              modalTitle="Select year"
+                              modalProps={{ animationType: "fade" }}
+                              modalContentContainerStyle={{
+                                backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                              }}
+                              modalTitleStyle={{
+                                color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                                fontWeight: "bold",
+                              }}
+                              style={{ ...dropdownBaseStyle, minHeight: 46 }}
+                              textStyle={dropdownTextStyle} // ✅ white in dark
+                              placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" }}
+                              listItemLabelStyle={dropdownListLabelStyle}
+                              ArrowDownIconComponent={() => (
+                                <Ionicons
+                                  name="chevron-down"
+                                  size={18}
+                                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                                />
+                              )}
+                              ArrowUpIconComponent={() => (
+                                <Ionicons
+                                  name="chevron-up"
+                                  size={18}
+                                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                                />
+                              )}
+                            />
+                          </View>
 
-          {/* QR + Camera Scanner Section */}
-          <View
-            style={{
-              marginTop: 30,
-              marginHorizontal: 20,
-              marginBottom: 30,
-              padding: 20,
-              borderWidth: 1,
-              borderColor: "#ccc",
-              borderRadius: 10,
-              backgroundColor: isDarkmode ? themeColor.dark200 : "#f7f7f7",
-            }}
-          >
-            {/* Tabs: My QR / Scan */}
-            <View
-              style={{
-                flexDirection: "row",
-                justifyContent: "center",
-                marginBottom: 15,
-              }}
-            >
-              <TouchableOpacity
-                onPress={() => setQrTab("myqr")}
-                style={{
-                  paddingVertical: 8,
-                  paddingHorizontal: 18,
-                  backgroundColor:
-                    qrTab === "myqr" ? themeColor.primary : "#ccc",
-                  borderRadius: 8,
-                  marginRight: 10,
-                }}
-              >
-                <Text style={{ color: themeColor.white }}>My QR</Text>
-              </TouchableOpacity>
+                          <View style={{ flex: 1 }}>
+                            <DropDownPicker
+                              open={monthOpen}
+                              value={month}
+                              items={months}
+                              setOpen={setMonthOpen}
+                              setValue={setMonth as any}
+                              setItems={() => {}}
+                              placeholder="Month"
+                              listMode="MODAL"
+                              modalTitle="Select month"
+                              modalProps={{ animationType: "fade" }}
+                              modalContentContainerStyle={{
+                                backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                              }}
+                              modalTitleStyle={{
+                                color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                                fontWeight: "bold",
+                              }}
+                              style={{ ...dropdownBaseStyle, minHeight: 46 }}
+                              textStyle={dropdownTextStyle} // ✅ white in dark
+                              placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" }}
+                              listItemLabelStyle={dropdownListLabelStyle}
+                              ArrowDownIconComponent={() => (
+                                <Ionicons
+                                  name="chevron-down"
+                                  size={18}
+                                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                                />
+                              )}
+                              ArrowUpIconComponent={() => (
+                                <Ionicons
+                                  name="chevron-up"
+                                  size={18}
+                                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                                />
+                              )}
+                            />
+                          </View>
+                        </View>
 
-              <TouchableOpacity
-                onPress={() => setQrTab("scan")}
-                style={{
-                  paddingVertical: 8,
-                  paddingHorizontal: 18,
-                  backgroundColor:
-                    qrTab === "scan" ? themeColor.primary : "#ccc",
-                  borderRadius: 8,
-                }}
-              >
-                <Text style={{ color: themeColor.white }}>Scan QR</Text>
-              </TouchableOpacity>
-            </View>
+                        <Calendar
+                          key={calendarCurrent}
+                          current={calendarCurrent}
+                          onDayPress={onDateSelect}
+                          maxDate={new Date().toISOString().split("T")[0]}
+                          markedDates={{
+                            [birthDate.toISOString().split("T")[0]]: {
+                              selected: true,
+                              selectedColor: themeColor.primary,
+                            },
+                          }}
+                          theme={{
+                            backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                            calendarBackground: isDarkmode ? themeColor.dark : themeColor.white,
+                            textSectionTitleColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                            selectedDayBackgroundColor: themeColor.primary,
+                            selectedDayTextColor: themeColor.white100,
+                            todayTextColor: themeColor.primary,
+                            dayTextColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                            textDisabledColor: "#888",
+                            monthTextColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                            arrowColor: themeColor.primary,
+                          }}
+                        />
 
-            {/* ---- MY QR ---- */}
-            {qrTab === "myqr" && (
-              <View style={{ alignItems: "center", paddingVertical: 20 }}>
-                {qrValue ? (
-                  <QRCode value={qrValue} size={220} />
-                ) : (
-                  <Text>No QR data available</Text>
+                        <TouchableOpacity
+                          onPress={() => setShowCalendar(false)}
+                          style={{
+                            marginTop: 20,
+                            padding: 12,
+                            backgroundColor: themeColor.primary,
+                            borderRadius: 5,
+                            alignItems: "center",
+                          }}
+                        >
+                          <Text style={{ color: themeColor.white100, fontWeight: "bold" }}>
+                            Close
+                          </Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </Modal>
                 )}
-              </View>
-            )}
 
-            {/* ---- CAMERA SCAN ---- */}
-            {qrTab === "scan" && (
-              <View style={{ alignItems: "center" }}>
-                {/* Permission states */}
-                {!permission && <Text>Checking camera permission...</Text>}
-
-                {permission && !permission.granted && (
-                  <View style={{ alignItems: "center" }}>
-                    <Text style={{ marginBottom: 10 }}>
-                      Camera access is required to scan QR codes.
-                    </Text>
-                    <Button
-                      text="Allow Camera"
-                      onPress={requestPermission}
-                      size="md"
+                {/* Phone Number */}
+                <Text style={{ marginTop: 20, color: textMain }}>Phone Number</Text>
+                <View style={{ flexDirection: "row", marginTop: 10, gap: 10 }}>
+                  <View style={{ flex: 1 }}>
+                    {/* ✅ MODAL mode again (avoid nested list warnings) */}
+                    <DropDownPicker
+                      open={countryCodeOpen}
+                      value={countryCode}
+                      items={countryCodeItems}
+                      setOpen={setCountryCodeOpen}
+                      setValue={setCountryCode as any}
+                      setItems={setCountryCodeItems}
+                      placeholder="+60"
+                      listMode="MODAL"
+                      modalTitle="Select country code"
+                      modalProps={{ animationType: "fade" }}
+                      modalContentContainerStyle={{
+                        backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                      }}
+                      modalTitleStyle={{
+                        color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                        fontWeight: "bold",
+                      }}
+                      style={{ ...dropdownBaseStyle, minHeight: 50 }}
+                      textStyle={dropdownTextStyle}
+                      placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" }}
+                      listItemLabelStyle={dropdownListLabelStyle}
                     />
                   </View>
-                )}
 
-                {permission && permission.granted && (
-                  <View
-                    style={{
-                      width: 260,
-                      height: 260,
-                      overflow: "hidden",
-                      borderRadius: 16,
-                      marginTop: 10,
-                    }}
-                  >
-                    <CameraView
-                      style={{ flex: 1 }}
-                      facing="back"
-                      barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
-                      onBarcodeScanned={({ data }) => {
-                        // if we already handled one scan, ignore further scans
-                        if (scanned) return;
-
-                        setScanned(true);
-                        handleQrScanned(data);
+                  <View style={{ flex: 2 }}>
+                    <TextInputMask
+                      type={"custom"}
+                      options={{ mask: "99-9999999" }}
+                      placeholder="12-4567890"
+                      value={phoneNumber}
+                      keyboardType="phone-pad"
+                      onChangeText={(text) => setPhoneNumber(text.replace(/[^0-9]/g, ""))}
+                      style={{
+                        padding: 15,
+                        borderRadius: 5,
+                        borderWidth: 1,
+                        borderColor: "#ccc",
+                        backgroundColor: isDarkmode ? themeColor.dark200 : themeColor.white,
+                        color: textMain,
+                        height: 50,
                       }}
                     />
                   </View>
-                )}
+                </View>
+
+                <Button
+                  text={loading ? "Saving..." : "Save Changes"}
+                  onPress={handleSave}
+                  style={{ marginTop: 25 }}
+                  disabled={loading || !userDocLoaded}
+                />
+
+                {/* QR + Camera Scanner Section */}
+                <View
+                  style={{
+                    marginTop: 30,
+                    marginBottom: 30,
+                    padding: 20,
+                    borderWidth: 1,
+                    borderColor: "#ccc",
+                    borderRadius: 10,
+                    backgroundColor: bgCard,
+                  }}
+                >
+                  {/* Tabs */}
+                  <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 15 }}>
+                    <TouchableOpacity
+                      onPress={() => setQrTab("myqr")}
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 18,
+                        backgroundColor: qrTab === "myqr" ? themeColor.primary : "#ccc",
+                        borderRadius: 8,
+                        marginRight: 10,
+                      }}
+                    >
+                      <Text style={{ color: themeColor.white100 }}>My QR</Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      onPress={() => setQrTab("scan")}
+                      style={{
+                        paddingVertical: 8,
+                        paddingHorizontal: 18,
+                        backgroundColor: qrTab === "scan" ? themeColor.primary : "#ccc",
+                        borderRadius: 8,
+                      }}
+                    >
+                      <Text style={{ color: themeColor.white100 }}>Scan QR</Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {/* MY QR */}
+                  {qrTab === "myqr" && (
+                    <View style={{ alignItems: "center", paddingVertical: 20 }}>
+                      {qrValue ? <QRCode value={qrValue} size={220} /> : <Text style={{ color: textMain }}>No QR data available</Text>}
+                    </View>
+                  )}
+
+                  {/* SCAN */}
+                  {qrTab === "scan" && (
+                    <View style={{ alignItems: "center" }}>
+                      {!permission && <Text style={{ color: textMain }}>Checking camera permission...</Text>}
+
+                      {permission && !permission.granted && (
+                        <View style={{ alignItems: "center" }}>
+                          <Text style={{ marginBottom: 10, color: textMain }}>
+                            Camera access is required to scan QR codes.
+                          </Text>
+                          <Button text="Allow Camera" onPress={requestPermission} size="md" />
+                        </View>
+                      )}
+
+                      {permission && permission.granted && (
+                        <View
+                          style={{
+                            width: 260,
+                            height: 260,
+                            overflow: "hidden",
+                            borderRadius: 16,
+                            marginTop: 10,
+                          }}
+                        >
+                          <CameraView
+                            style={{ flex: 1 }}
+                            facing="back"
+                            barcodeScannerSettings={{ barcodeTypes: ["qr"] }}
+                            onBarcodeScanned={({ data }) => {
+                              if (scanned) return;
+                              setScanned(true);
+                              handleQrScanned(data);
+                            }}
+                          />
+                        </View>
+                      )}
+                    </View>
+                  )}
+                </View>
               </View>
-            )}
-          </View>
-        </ScrollView>
+            </View>
+          )}
+        />
       </Layout>
     </KeyboardAvoidingView>
   );

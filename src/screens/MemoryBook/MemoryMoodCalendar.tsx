@@ -1,7 +1,13 @@
 // src/screens/MemoryBook/MemoryMoodCalendar.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { View, TouchableOpacity, ScrollView } from "react-native";
-import { Layout, TopNav, Text, useTheme, themeColor } from "react-native-rapi-ui";
+import {
+  Layout,
+  TopNav,
+  Text,
+  useTheme,
+  themeColor,
+} from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
@@ -18,6 +24,8 @@ import {
   onSnapshot,
   writeBatch,
   Timestamp,
+  addDoc,
+  serverTimestamp,
 } from "firebase/firestore";
 
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
@@ -50,10 +58,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   // ----- derived month values -----
   const currentYear = monthDate.getFullYear();
   const currentMonthIndex = monthDate.getMonth(); // 0-11
-  const currentMonthKey = `${currentYear}-${String(currentMonthIndex + 1).padStart(
-    2,
-    "0"
-  )}`;
+  const currentMonthKey = `${currentYear}-${String(
+    currentMonthIndex + 1
+  ).padStart(2, "0")}`;
 
   const monthNames = [
     "January",
@@ -84,6 +91,25 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       d.getDate()
     ).padStart(2, "0")}`;
 
+  const labelFromEmoji = (emoji: string) => {
+    switch (emoji) {
+      case "😊":
+        return "Happy";
+      case "😢":
+        return "Sad";
+      case "😴":
+        return "Tired";
+      case "😐":
+      default:
+        return "Neutral";
+    }
+  };
+
+  // keep latest mood map for change detection
+  const moodsRef = useRef<Record<string, string>>({});
+  // prevent duplicate mood-change notifications
+  const lastMoodNotifyKeyRef = useRef<string>("");
+
   // ---- load user display name ----
   useEffect(() => {
     if (!uid) return;
@@ -110,7 +136,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     setMoods({});
 
     const postsCol = collection(firestore, "posts");
-    const qPosts = query(postsCol, where("CreatedUser.CreatedUserId", "==", uid));
+    const qPosts = query(
+      postsCol,
+      where("CreatedUser.CreatedUserId", "==", uid)
+    );
 
     const unsub = onSnapshot(qPosts, (snap) => {
       const map: Record<string, string> = {};
@@ -123,11 +152,83 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
         }
       });
 
+      moodsRef.current = map;
       setMoods(map);
     });
 
     return () => unsub();
   }, [uid, firestore, currentMonthKey]);
+
+  // ✅ Notify user when TODAY mood emoji changes
+  // This listens only to today's mood value (independent of month page)
+  useEffect(() => {
+    if (!uid) return;
+
+    const todayKey = dateKeyFromDate(new Date());
+    const postsCol = collection(firestore, "posts");
+
+    // We query only posts of current user that already have mood for today
+    const qToday = query(
+      postsCol,
+      where("CreatedUser.CreatedUserId", "==", uid),
+      where("mood.date", "==", todayKey)
+    );
+
+    const unsub = onSnapshot(qToday, async (snap) => {
+      // Determine "today emoji" by majority from the docs in snapshot
+      const counts: Record<string, number> = {};
+      snap.forEach((ds) => {
+        const data: any = ds.data();
+        const emo = data?.mood?.emoji;
+        if (!emo) return;
+        counts[emo] = (counts[emo] || 0) + 1;
+      });
+
+      let bestEmoji: string | null = null;
+      let bestCount = 0;
+      Object.entries(counts).forEach(([emo, c]) => {
+        if (c > bestCount) {
+          bestCount = c;
+          bestEmoji = emo;
+        }
+      });
+
+      // ✅ if no emoji, stop (so bestEmoji becomes string below)
+      if (!bestEmoji) return;
+
+      const prevEmoji = moodsRef.current[todayKey];
+
+      // only notify if changed
+      if (bestEmoji !== prevEmoji) {
+        const notifyKey = `${todayKey}:${bestEmoji}`;
+
+        if (lastMoodNotifyKeyRef.current !== notifyKey) {
+          lastMoodNotifyKeyRef.current = notifyKey;
+
+          try {
+            await addDoc(collection(firestore, "notifications", uid, "items"), {
+              type: "mood",
+              text: `Your current mood is ${labelFromEmoji(
+                bestEmoji
+              )} ${bestEmoji}`,
+              fromUid: uid, // self
+              read: false,
+              delivered: false,
+              createdAt: serverTimestamp(),
+            });
+          } catch (e) {
+            console.log("Failed to create mood notification:", e);
+          }
+        }
+
+        // update local map so UI also stays consistent
+        moodsRef.current = { ...moodsRef.current, [todayKey]: bestEmoji };
+        setMoods((prev) => ({ ...prev, [todayKey]: bestEmoji }));
+      }
+    });
+
+    return () => unsub();
+  }, [uid, firestore]);
 
   // ---------- helper: score & category ----------
   const scoreFromLabel = (label?: string | null) => {
@@ -185,7 +286,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
     if (bestCount === 0) return null;
 
-    const topCats = entries.filter(([, c]) => c === bestCount).map(([cat]) => cat);
+    const topCats = entries
+      .filter(([, c]) => c === bestCount)
+      .map(([cat]) => cat);
 
     if (topCats.length > 1) return "😐";
 
@@ -208,10 +311,12 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     if (!uid) return;
 
     const postsCol = collection(firestore, "posts");
-    const qPosts = query(postsCol, where("CreatedUser.CreatedUserId", "==", uid));
+    const qPosts = query(
+      postsCol,
+      where("CreatedUser.CreatedUserId", "==", uid)
+    );
 
     const unsub = onSnapshot(qPosts, async (snap) => {
-      // Group posts by dateKey
       const postsByDate: Record<string, { ref: any; data: any }[]> = {};
 
       snap.forEach((ds) => {
@@ -238,7 +343,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       const batch = writeBatch(firestore);
       const dateKeysWithPosts = new Set<string>();
 
-      // For each day -> compute emoji -> write into every post of that day
       Object.entries(postsByDate).forEach(([dateKey, list]) => {
         const counts = { positive: 0, neutral: 0, tired: 0, sad: 0 };
 
@@ -265,7 +369,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
         });
       });
 
-      // Optional cleanup: if a post has mood but its dateKey is no longer valid (rare)
+      // cleanup if needed
       snap.forEach((ds) => {
         const data: any = ds.data();
         const m = data.mood;
@@ -303,7 +407,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
   const renderMoodCalendar = () => {
     const cells: (number | null)[] = [];
-
     for (let i = 0; i < firstDayIndex; i++) cells.push(null);
     for (let d = 1; d <= daysInMonth; d++) cells.push(d);
 
@@ -328,11 +431,21 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             }}
           >
             <TouchableOpacity onPress={goToPrevMonth} style={{ padding: 4 }}>
-              <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
+              <Ionicons
+                name="chevron-back"
+                size={20}
+                color={primaryTextColor}
+              />
             </TouchableOpacity>
 
             <View style={{ alignItems: "center" }}>
-              <Text style={{ fontWeight: "bold", fontSize: 16, color: primaryTextColor }}>
+              <Text
+                style={{
+                  fontWeight: "bold",
+                  fontSize: 16,
+                  color: primaryTextColor,
+                }}
+              >
                 {monthNames[currentMonthIndex]} {currentYear}
               </Text>
               <Text
@@ -348,7 +461,11 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             </View>
 
             <TouchableOpacity onPress={goToNextMonth} style={{ padding: 4 }}>
-              <Ionicons name="chevron-forward" size={20} color={primaryTextColor} />
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color={primaryTextColor}
+              />
             </TouchableOpacity>
           </View>
 
@@ -413,8 +530,12 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                       backgroundColor: isDarkmode ? "#1f2933" : "#f3f4f6",
                     }}
                   >
-                    <Text style={{ fontSize: 11, color: primaryTextColor }}>{day}</Text>
-                    <Text style={{ fontSize: 16, marginTop: 2 }}>{emoji || " "}</Text>
+                    <Text style={{ fontSize: 11, color: primaryTextColor }}>
+                      {day}
+                    </Text>
+                    <Text style={{ fontSize: 16, marginTop: 2 }}>
+                      {emoji || " "}
+                    </Text>
                   </View>
                 </View>
               );
@@ -446,7 +567,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                 }}
               >
                 <Text style={{ fontSize: 16, marginRight: 4 }}>{emo}</Text>
-                <Text style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}>
+                <Text
+                  style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}
+                >
                   {label}
                 </Text>
               </View>
@@ -479,7 +602,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
           }
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
         />
-        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+        <View
+          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
+        >
           <Text>Please sign in to use the mood calendar.</Text>
         </View>
       </Layout>

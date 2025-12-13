@@ -31,6 +31,7 @@ import {
   arrayUnion,
   arrayRemove,
   deleteDoc,
+  where, // ✅ IMPORTANT for unread notifications
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage, ref, deleteObject } from "firebase/storage";
@@ -167,8 +168,8 @@ const PostItem: React.FC<PostItemProps> = ({
 
         const normalizeType = (t?: string) => {
           if (!t) return "image";
-          if (t.startsWith("image")) return "image";
-          if (t.startsWith("video")) return "video";
+          if ((t as string).startsWith("image")) return "image";
+          if ((t as string).startsWith("video")) return "video";
           return t === "video" ? "video" : "image";
         };
 
@@ -184,7 +185,7 @@ const PostItem: React.FC<PostItemProps> = ({
         const hasMultipleImages = allImages && urls.length > 1;
         // card has padding 8, list has horizontal padding 16: subtract 32 + 16
         const containerWidth = Dimensions.get("window").width - 48;
-        const mediaHeight = containerWidth; // square-ish to show full image without cropping
+        const mediaHeight = containerWidth; // square-ish
 
         // if we have multiple images → horizontal swipe
         if (hasMultipleImages) {
@@ -224,6 +225,7 @@ const PostItem: React.FC<PostItemProps> = ({
                   </View>
                 ))}
               </ScrollView>
+
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onOpenFullView(post, activeIndex)}
@@ -238,6 +240,7 @@ const PostItem: React.FC<PostItemProps> = ({
               >
                 <Ionicons name="expand" size={18} color="#fff" />
               </TouchableOpacity>
+
               <View
                 style={{
                   position: "absolute",
@@ -288,6 +291,7 @@ const PostItem: React.FC<PostItemProps> = ({
                 style={{ width: "100%", height: "100%" }}
                 resizeMode="contain"
               />
+
               <TouchableOpacity
                 activeOpacity={0.8}
                 onPress={() => onOpenFullView(post, 0)}
@@ -327,6 +331,7 @@ const PostItem: React.FC<PostItemProps> = ({
                 nativeControls
               />
             )}
+
             <TouchableOpacity
               activeOpacity={0.8}
               onPress={() => onOpenFullView(post, 0)}
@@ -419,13 +424,7 @@ const PostItem: React.FC<PostItemProps> = ({
 
       {/* date */}
       {post.createdAt && (
-        <Text
-          style={{
-            marginTop: 4,
-            fontSize: 12,
-            opacity: 0.7,
-          }}
-        >
+        <Text style={{ marginTop: 4, fontSize: 12, opacity: 0.7 }}>
           {formatDateTime(post.createdAt)}
         </Text>
       )}
@@ -443,6 +442,25 @@ export default function MemoryFeed({ navigation }: Props) {
   const [posts, setPosts] = useState<Post[]>([]);
   const [optionsVisible, setOptionsVisible] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
+
+  // ✅ RED DOT state (bell)
+  const [hasUnreadNotif, setHasUnreadNotif] = useState(false);
+
+  // ✅ listen unread notifications once (not inside PostItem)
+  useEffect(() => {
+    if (!currentUserId) return;
+
+    const qUnread = query(
+      collection(firestore, "notifications", currentUserId, "items"),
+      where("read", "==", false)
+    );
+
+    const unsub = onSnapshot(qUnread, (snap) => {
+      setHasUnreadNotif(!snap.empty);
+    });
+
+    return () => unsub();
+  }, [currentUserId]);
 
   // unified card style
   const cardBg = isDarkmode ? themeColor.dark100 : "#dfe3eb";
@@ -463,10 +481,7 @@ export default function MemoryFeed({ navigation }: Props) {
   };
 
   useEffect(() => {
-    const q = query(
-      collection(firestore, "posts"),
-      orderBy("createdAt", "desc")
-    );
+    const q = query(collection(firestore, "posts"), orderBy("createdAt", "desc"));
 
     const unsub = onSnapshot(q, (snapshot) => {
       const data: Post[] = [];
@@ -474,8 +489,7 @@ export default function MemoryFeed({ navigation }: Props) {
         const d = docSnap.data() as any;
         const created = d.CreatedUser || {};
         const userId: string = created.CreatedUserId || d.userId || "";
-        const username: string =
-          created.CreatedUserName || d.username || "User";
+        const username: string = created.CreatedUserName || d.username || "User";
 
         data.push({
           id: docSnap.id,
@@ -499,6 +513,7 @@ export default function MemoryFeed({ navigation }: Props) {
       });
       setPosts(data);
     });
+
     return () => unsub();
   }, []);
 
@@ -508,9 +523,7 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadyLiked = post.likes?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      likes: alreadyLiked
-        ? arrayRemove(currentUserId)
-        : arrayUnion(currentUserId),
+      likes: alreadyLiked ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
     });
   };
 
@@ -520,9 +533,7 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadySaved = post.savedBy?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      savedBy: alreadySaved
-        ? arrayRemove(currentUserId)
-        : arrayUnion(currentUserId),
+      savedBy: alreadySaved ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
     });
   };
 
@@ -530,11 +541,8 @@ export default function MemoryFeed({ navigation }: Props) {
   const deletePostWithMedia = async (post: Post) => {
     try {
       setPosts((prev) => prev.filter((p) => p.id !== post.id));
-
       await deleteDoc(doc(firestore, "posts", post.id));
-      console.log("Document successfully deleted!");
 
-      // delete all media urls if exist
       const urls =
         post.mediaUrls && post.mediaUrls.length > 0
           ? post.mediaUrls
@@ -546,7 +554,6 @@ export default function MemoryFeed({ navigation }: Props) {
         try {
           const desertRef = ref(storage, url);
           await deleteObject(desertRef);
-          console.log("Media successfully deleted:", url);
         } catch (error) {
           console.log("Error deleting media:", error);
         }
@@ -562,7 +569,7 @@ export default function MemoryFeed({ navigation }: Props) {
       editMode: true,
       postId: post.id,
       postData: post,
-    });
+    } as any);
   };
 
   const handleDeletePressed = () => {
@@ -596,10 +603,10 @@ export default function MemoryFeed({ navigation }: Props) {
     setOptionsVisible(true);
   };
 
-  const handleOpenFullView = (post: Post) => {
+  const handleOpenFullView = (post: Post, _startIndex?: number) => {
     navigation.navigate("MemoryPostView", {
       postId: post.id,
-    });
+    } as any);
   };
 
   return (
@@ -615,13 +622,43 @@ export default function MemoryFeed({ navigation }: Props) {
         }
         leftAction={() => navigation.popToTop()}
         rightContent={
-          <Ionicons
-            name={isDarkmode ? "sunny" : "moon"}
-            size={20}
-            color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          />
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            {/* 🔔 Notification Bell + 🔴 Red Dot */}
+            <TouchableOpacity
+              onPress={() => navigation.navigate("MemoryNotifications")}
+              style={{ marginRight: 14 }}
+            >
+              <View style={{ position: "relative" }}>
+                <Ionicons
+                  name="notifications-outline"
+                  size={20}
+                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
+                />
+                {hasUnreadNotif && (
+                  <View
+                    style={{
+                      position: "absolute",
+                      top: -2,
+                      right: -2,
+                      width: 8,
+                      height: 8,
+                      borderRadius: 4,
+                      backgroundColor: "red",
+                    }}
+                  />
+                )}
+              </View>
+            </TouchableOpacity>
+
+            {/* 🌙 Theme Toggle */}
+            <Ionicons
+              name={isDarkmode ? "sunny" : "moon"}
+              size={20}
+              color={isDarkmode ? themeColor.white100 : themeColor.dark}
+              onPress={() => setTheme(isDarkmode ? "light" : "dark")}
+            />
+          </View>
         }
-        rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
 
       {/* Stories row */}
@@ -654,14 +691,9 @@ export default function MemoryFeed({ navigation }: Props) {
 
           {/* Existing stories */}
           {stories.map((story) => (
-            <View
-              key={story.id}
-              style={{ alignItems: "center", marginRight: 12 }}
-            >
+            <View key={story.id} style={{ alignItems: "center", marginRight: 12 }}>
               <TouchableOpacity
-                onPress={() =>
-                  navigation.navigate("MemoryStoryView", { postId: story.id })
-                }
+                onPress={() => navigation.navigate("MemoryStoryView", { postId: story.id } as any)}
                 style={{
                   width: 70,
                   height: 70,
@@ -726,9 +758,7 @@ export default function MemoryFeed({ navigation }: Props) {
               width: 260,
               borderRadius: 16,
               padding: 16,
-              backgroundColor: isDarkmode
-                ? themeColor.dark100
-                : themeColor.white100,
+              backgroundColor: isDarkmode ? themeColor.dark100 : themeColor.white100,
             }}
           >
             <Text fontWeight="bold" style={{ marginBottom: 12, fontSize: 16 }}>
@@ -749,10 +779,7 @@ export default function MemoryFeed({ navigation }: Props) {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleDeletePressed}
-              style={{ paddingVertical: 10 }}
-            >
+            <TouchableOpacity onPress={handleDeletePressed} style={{ paddingVertical: 10 }}>
               <Text style={{ fontSize: 14, color: "red" }}>Delete</Text>
             </TouchableOpacity>
 
@@ -773,6 +800,7 @@ export default function MemoryFeed({ navigation }: Props) {
           </View>
         </View>
       </Modal>
+
       <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );

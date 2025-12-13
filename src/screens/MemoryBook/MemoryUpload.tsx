@@ -1,6 +1,13 @@
 // src/screens/MyModule/MemoryUpload.tsx
-import React, { useState, useEffect } from "react";
-import { View, Image, Alert, ScrollView, TouchableOpacity } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  View,
+  Image,
+  Alert,
+  ScrollView,
+  TouchableOpacity,
+  ActivityIndicator,
+} from "react-native";
 import {
   Layout,
   TopNav,
@@ -28,13 +35,16 @@ import {
 } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 
+// ✅ expo-video (new API)
+import { useVideoPlayer, VideoView } from "expo-video";
+
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
 
 // For multiple selection
 type SelectedMedia = {
   uri: string;
   type: "image" | "video";
-  base64?: string | null; // for vision AI
+  base64?: string | null; // for vision AI (images only)
 };
 
 // For place search (IG-style location search)
@@ -45,16 +55,33 @@ type PlaceOption = {
   longitude: number;
 };
 
-// ----- Types for face-recognition responses -----
+// ----- Face-recognition types (your Node returns faces[] with matches[]) -----
 type FaceMatch = {
-  box: { x: number; y: number; width: number; height: number };
-  personId: string | null;
-  name: string | null;
+  name: string;
   distance: number;
 };
 
-type FaceRecognizeResponse = {
+type FaceMatchesPerFace = {
+  faceIndex: number;
   matches: FaceMatch[];
+};
+
+type FaceRecognizeResponse = {
+  ok?: boolean;
+  faces: FaceMatchesPerFace[];
+};
+
+type FaceBatchItem = {
+  index: number;
+  ok?: boolean;
+  faces: FaceMatchesPerFace[];
+  error?: string;
+};
+
+type FaceBatchResponse = {
+  ok: boolean;
+  count: number;
+  results: FaceBatchItem[];
 };
 
 // ✅ Album info stored under posts
@@ -63,8 +90,46 @@ type AlbumInfo = {
   name: string;
 };
 
+function VideoPreview({ uri }: { uri: string }) {
+  const player = useVideoPlayer(uri, (p) => {
+    p.loop = true;
+    try {
+      p.play();
+    } catch {}
+  });
+
+  return (
+    <View style={{ width: "100%", height: "100%", backgroundColor: "#000" }}>
+      <VideoView
+        player={player}
+        style={{ width: "100%", height: "100%" }}
+        allowsFullscreen
+      />
+      <View
+        style={{
+          position: "absolute",
+          bottom: 10,
+          left: 10,
+          paddingHorizontal: 8,
+          paddingVertical: 4,
+          borderRadius: 999,
+          backgroundColor: "rgba(0,0,0,0.5)",
+          flexDirection: "row",
+          alignItems: "center",
+        }}
+      >
+        <Ionicons name="videocam" size={14} color="#fff" />
+        <Text style={{ marginLeft: 6, fontSize: 11, color: "#fff" }}>
+          Video
+        </Text>
+      </View>
+    </View>
+  );
+}
+
 export default function MemoryUpload({ navigation, route }: Props) {
-  const { isDarkmode } = useTheme();
+  const theme = useTheme();
+  const isDarkmode = !!theme.isDarkmode;
 
   const auth = getAuth();
   const firestore = getFirestore();
@@ -81,7 +146,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ? params.selectedAlbums
     : [];
 
-  // 用户输入的 draft/keywords
+  // draft/keywords
   const [draft, setDraft] = useState("");
 
   // initial values if editing
@@ -138,7 +203,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
-  // ✅ albums state (so you can keep passed albums OR editing albums)
+  // ✅ albums state
   const [albumIds, setAlbumIds] = useState<string[]>(
     selectedAlbums.length ? selectedAlbums.map((a) => a.id) : initialAlbumIds
   );
@@ -163,7 +228,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [placeOptions, setPlaceOptions] = useState<PlaceOption[]>([]);
   const [isSearchingPlace, setIsSearchingPlace] = useState(false);
 
-  // For Expo web / Android emulator on same PC.
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
   const LOCAL_AI_SERVER = "http://192.168.0.18:3000";
 
@@ -184,7 +248,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
       setLocationCoords({ latitude, longitude });
 
-      // 1) Try Nominatim reverse geocode with English first
+      // 1) Nominatim reverse geocode (English)
       try {
         const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1&accept-language=en`;
         const resp = await fetch(url, {
@@ -216,7 +280,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         console.log("Nominatim reverse error:", e);
       }
 
-      // 2) Fallback to Expo reverseGeocode (may be device-language)
+      // 2) Fallback Expo reverseGeocode
       try {
         const places = await Location.reverseGeocodeAsync({
           latitude,
@@ -247,6 +311,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   useEffect(() => {
     autoDetectLocation();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------------------------------------------------------
@@ -301,7 +366,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // Helper: call local AI server (caption + hashtags + friendTags)
+  // Helper: call AI server (caption + hashtags + friendTags)
   // -------------------------------------------------------
   const callAiForPostMeta = async (
     captionDraft: string,
@@ -314,7 +379,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       },
       body: JSON.stringify({
         captionDraft,
-        imageBase64List, // 多张图片一起给 AI
+        imageBase64List,
       }),
     });
 
@@ -332,16 +397,17 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // Helper – call face-recognition endpoint (single image)
+  // Face: single image recognize (kept for other usage)
   // -------------------------------------------------------
   const callFaceRecognize = async (
-    imageBase64: string
+    imageBase64: string,
+    threshold?: number
   ): Promise<FaceRecognizeResponse | null> => {
     try {
       const resp = await fetch(`${LOCAL_AI_SERVER}/faces/recognize`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64 }),
+        body: JSON.stringify({ imageBase64, threshold }),
       });
 
       if (!resp.ok) {
@@ -354,6 +420,34 @@ export default function MemoryUpload({ navigation, route }: Props) {
       return data;
     } catch (err) {
       console.log("Face recognize error:", err);
+      return null;
+    }
+  };
+
+  // -------------------------------------------------------
+  // ✅ Face: batch recognize (multiple images)
+  // -------------------------------------------------------
+  const callFaceRecognizeBatch = async (
+    imageBase64List: string[],
+    threshold?: number
+  ): Promise<FaceBatchResponse | null> => {
+    try {
+      const resp = await fetch(`${LOCAL_AI_SERVER}/faces/recognize_batch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ imageBase64List, threshold }),
+      });
+
+      if (!resp.ok) {
+        console.log("Face batch HTTP error:", resp.status);
+        return null;
+      }
+
+      const data = (await resp.json()) as FaceBatchResponse;
+      console.log("[CLIENT] /faces/recognize_batch result:", data);
+      return data;
+    } catch (err) {
+      console.log("Face batch error:", err);
       return null;
     }
   };
@@ -383,120 +477,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     return data;
   };
 
-  // ⭐ Merge recognized names into friendTagsText using functional setState
-  const mergeFriendTagsFromFaces = (matches: FaceMatch[]) => {
-    if (!matches || !matches.length) return;
-
-    const recognizedNames = matches
-      .map((m) => (m.name || "").trim())
-      .filter((n) => n.length > 0);
-
-    if (!recognizedNames.length) return;
-
-    setFriendTagsText((prev: string) => {
-      const existing: string[] = prev
-        .split(/[,@\s]+/)
-        .map((t: string) => t.trim())
-        .filter((t: string) => t.length > 0);
-
-      const mergedSet = new Set<string>(existing);
-      recognizedNames.forEach((n) => mergedSet.add(n));
-
-      const mergedList = Array.from(mergedSet);
-      console.log(
-        "[CLIENT] mergeFriendTagsFromFaces prev=",
-        prev,
-        "recognized=",
-        recognizedNames,
-        "merged=",
-        mergedList
-      );
-      return mergedList.join(", ");
-    });
-  };
-
-  // -------------------------------------------------------
-  // Auto-generate AI caption & tags + face-based names
-  // -------------------------------------------------------
-  const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
-    const user = auth.currentUser;
-    if (!user) {
-      Alert.alert("Error", "You need to be logged in.");
-      return;
-    }
-
-    if (!mediaItems.length) {
-      Alert.alert("No media", "Please select at least one photo or video.");
-      return;
-    }
-
-    try {
-      setIsGeneratingAI(true);
-
-      const imageBase64List = mediaItems
-        .filter((m) => m.type === "image" && m.base64)
-        .map((m) => m.base64 as string);
-
-      if (!imageBase64List.length) {
-        Alert.alert(
-          "Need photo data",
-          "To let AI read your photos, please re-select them from gallery."
-        );
-        setIsGeneratingAI(false);
-        return;
-      }
-
-      let captionDraft = "";
-      if (options?.useDraft) {
-        captionDraft = draft || "";
-      } else {
-        captionDraft = caption || "";
-      }
-
-      const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
-
-      const stripHashtags = (text: string) =>
-        (text || "")
-          .replace(/(^|\s)#\S+/g, " ")
-          .replace(/\s+/g, " ")
-          .trim();
-
-      if (aiResult.caption) {
-        setCaption(stripHashtags(aiResult.caption));
-      }
-
-      if (Array.isArray(aiResult.hashtags)) {
-        const formatted = aiResult.hashtags.map((h) =>
-          h.trim().startsWith("#") ? h.trim() : `#${h.trim()}`
-        );
-        setHashtagsText(formatted.join(" "));
-      }
-
-      if (Array.isArray(aiResult.friendTags) && aiResult.friendTags.length) {
-        console.log("[CLIENT] Friend tags from AI:", aiResult.friendTags);
-        setFriendTagsText(aiResult.friendTags.join(", "));
-      }
-
-      const firstImageBase64 = imageBase64List[0];
-      if (firstImageBase64) {
-        const faceResult = await callFaceRecognize(firstImageBase64);
-        if (faceResult && Array.isArray(faceResult.matches)) {
-          mergeFriendTagsFromFaces(faceResult.matches);
-        }
-      }
-
-      console.log("AI caption, tags & faces generated.");
-    } catch (e: any) {
-      console.log("AI generate error:", e);
-      Alert.alert(
-        "AI Error",
-        "Failed to generate caption. Please check AI / face server."
-      );
-    } finally {
-      setIsGeneratingAI(false);
-    }
-  };
-
   // -------------------------------------------------------
   // Remember-this-face handler
   // -------------------------------------------------------
@@ -519,6 +499,30 @@ export default function MemoryUpload({ navigation, route }: Props) {
       Alert.alert(
         "No image data",
         "Please select a photo again so we can read the face."
+      );
+      return;
+    }
+    // ✅ Safety: only allow Remember when exactly ONE face is detected
+    const FACE_THRESHOLD = 0.37;
+
+    const recognize = await callFaceRecognize(
+      firstImage.base64,
+      FACE_THRESHOLD
+    );
+    const faces = Array.isArray(recognize?.faces) ? recognize.faces : [];
+
+    if (faces.length === 0) {
+      Alert.alert(
+        "No face found",
+        "Please choose a clearer photo with one person."
+      );
+      return;
+    }
+
+    if (faces.length > 1) {
+      Alert.alert(
+        "Multiple people detected",
+        "Please choose a photo with ONLY one person to remember."
       );
       return;
     }
@@ -556,34 +560,70 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // Media picking: show options (Camera / Gallery)
+  // ✅ Remove selected media (X button)
   // -------------------------------------------------------
-  const pickFromLibrary = async () => {
+  const removeMediaAt = (indexToRemove: number) => {
+    setMediaItems((prev) => prev.filter((_, idx) => idx !== indexToRemove));
+  };
+
+  // -------------------------------------------------------
+  // Media picking
+  // -------------------------------------------------------
+  const pickPhotosFromLibrary = async () => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
       Alert.alert(
         "Permission needed",
-        "We need access to your photos and videos to upload memories."
+        "We need access to your photos to upload memories."
       );
       return;
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images", "videos"],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.85,
       allowsMultipleSelection: true,
-      base64: true,
+      base64: true, // ✅ images only
     });
 
     if (result.canceled) return;
 
     const selected: SelectedMedia[] = result.assets.map((asset) => ({
       uri: asset.uri,
-      type: asset.type === "video" ? "video" : "image",
+      type: "image",
       base64: asset.base64 ?? null,
     }));
 
     setMediaItems((prev) => [...prev, ...selected]);
+  };
+
+  const pickVideoFromLibrary = async () => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission needed",
+        "We need access to your videos to upload memories."
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+      quality: 1,
+      allowsMultipleSelection: false,
+      base64: false,
+    });
+
+    if (result.canceled) return;
+
+    const asset = result.assets[0];
+    const item: SelectedMedia = {
+      uri: asset.uri,
+      type: "video",
+      base64: null,
+    };
+
+    setMediaItems((prev) => [...prev, item]);
   };
 
   const captureWithCamera = async () => {
@@ -597,9 +637,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ["images", "videos"],
+      mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
-      base64: true,
+      base64: true, // ✅ photos have base64, videos will be null
     });
 
     if (result.canceled || !result.assets || !result.assets.length) return;
@@ -608,7 +648,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     const item: SelectedMedia = {
       uri: asset.uri,
       type: asset.type === "video" ? "video" : "image",
-      base64: asset.base64 ?? null,
+      base64: asset.type === "video" ? null : asset.base64 ?? null,
     };
 
     setMediaItems((prev) => [...prev, item]);
@@ -625,7 +665,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
     Alert.alert("Add Media", "Choose photo / video from:", [
       { text: "Camera", onPress: () => captureWithCamera() },
-      { text: "Gallery", onPress: () => pickFromLibrary() },
+      { text: "Pick Photos (multi)", onPress: () => pickPhotosFromLibrary() },
+      { text: "Pick Video (single)", onPress: () => pickVideoFromLibrary() },
       { text: "Cancel", style: "cancel" },
     ]);
   };
@@ -639,10 +680,119 @@ export default function MemoryUpload({ navigation, route }: Props) {
     return {
       date: `${yyyy}-${mm}-${dd}`, // YYYY-MM-DD
       monthKey: `${yyyy}-${mm}`, // YYYY-MM
-      emoji: "😐", // default (MoodCalendar will later overwrite based on posts)
+      emoji: "😐",
     };
   };
 
+  // -------------------------------------------------------
+  // ✅ AI generate (caption + hashtags + friend tags)
+  // Uses MULTI-image base64, and batch face recognize for better tags.
+  // -------------------------------------------------------
+  const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
+    const user = auth.currentUser;
+    if (!user) {
+      Alert.alert("Error", "You need to be logged in.");
+      return;
+    }
+
+    if (!mediaItems.length) {
+      Alert.alert("No media", "Please select at least one photo or video.");
+      return;
+    }
+
+    try {
+      setIsGeneratingAI(true);
+
+      // only images (videos have no base64)
+      const imageBase64List = mediaItems
+        .filter((m) => m.type === "image" && m.base64)
+        .map((m) => m.base64 as string);
+
+      if (!imageBase64List.length) {
+        Alert.alert(
+          "Need photo data",
+          "To use AI + face recognition, please select at least 1 photo (not only video)."
+        );
+        setIsGeneratingAI(false);
+        return;
+      }
+
+      let captionDraft = "";
+      if (options?.useDraft) captionDraft = draft || "";
+      else captionDraft = caption || "";
+
+      // 1) Caption + hashtags from your Node (/generatePostMeta already supports multi images)
+      const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
+
+      const stripHashtags = (text: string) =>
+        (text || "")
+          .replace(/(^|\s)#\S+/g, " ")
+          .replace(/\s+/g, " ")
+          .trim();
+
+      if (aiResult.caption) setCaption(stripHashtags(aiResult.caption));
+
+      if (Array.isArray(aiResult.hashtags)) {
+        const formatted = aiResult.hashtags
+          .map((h) => String(h || "").trim())
+          .filter((h) => h.length > 0)
+          .map((h) => (h.startsWith("#") ? h : `#${h}`));
+        setHashtagsText(formatted.join(" "));
+      }
+
+      // 2) Friend tags from AI (text model) - keep it if provided
+      if (Array.isArray(aiResult.friendTags) && aiResult.friendTags.length) {
+        setFriendTagsText(aiResult.friendTags.join(", "));
+      }
+
+      // 3) ✅ Face recognition batch across multiple images (faster + better)
+      const FACE_THRESHOLD = 0.37;
+
+      // scan first 3 images max for speed
+      const scanImages = imageBase64List.slice(0, 3);
+      const batch = await callFaceRecognizeBatch(scanImages, FACE_THRESHOLD);
+
+      if (batch && Array.isArray(batch.results)) {
+        const names: string[] = [];
+
+        for (const item of batch.results) {
+          const faces = Array.isArray(item.faces) ? item.faces : [];
+          for (const f of faces) {
+            const matches = Array.isArray(f.matches) ? f.matches : [];
+            for (const m of matches) {
+              const n = String(m.name || "").trim();
+              if (n) names.push(n);
+            }
+          }
+        }
+
+        if (names.length) {
+          setFriendTagsText((prev: string) => {
+            const existing = prev
+              .split(/[,@\s]+/)
+              .map((t) => t.trim())
+              .filter(Boolean);
+            const merged = new Set([...existing, ...names]);
+            return Array.from(merged).join(", ");
+          });
+        }
+      }
+
+      console.log("AI caption/tags generated.");
+    } catch (e: any) {
+      console.log("AI generate error:", e);
+      Alert.alert(
+        "AI Error",
+        "Failed to generate caption. Please check AI / face server."
+      );
+    } finally {
+      setIsGeneratingAI(false);
+    }
+  };
+
+  // -------------------------------------------------------
+  // Upload
+  // -------------------------------------------------------
   const handleUpload = async () => {
     const user = auth.currentUser;
     if (!user) {
@@ -663,11 +813,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
         .map((t: string) => t.trim())
         .filter((t: string) => t.length > 0) || [];
 
-    // ✅ album values to store under posts
     const safeAlbums: AlbumInfo[] = Array.isArray(albums) ? albums : [];
     const safeAlbumIds: string[] = Array.isArray(albumIds) ? albumIds : [];
 
-    // ---- EDIT MODE: update text fields (and also mood/album if you want) ----
+    // ---- EDIT MODE ----
     if (editMode && editingPostId) {
       try {
         setIsUploading(true);
@@ -682,8 +831,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
           friendTags: friendTagList,
-
-          // ✅ keep mood + album under posts
           mood: postData?.mood || getTodayMoodObject(),
           albums: safeAlbums,
           albumIds: safeAlbumIds,
@@ -717,9 +864,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
       for (const item of mediaItems) {
         const blob = await (await fetch(item.uri)).blob();
+        const ext = item.type === "video" ? "mp4" : "jpg";
         const filename = `posts/${user.uid}/${Date.now()}-${Math.random()
           .toString(36)
-          .slice(2)}`;
+          .slice(2)}.${ext}`;
+
         const storageRef = ref(storage, filename);
         await uploadBytes(storageRef, blob);
         const downloadURL = await getDownloadURL(storageRef);
@@ -751,11 +900,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         savedBy: [],
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
-
-        // ✅ mood stored under posts
         mood: getTodayMoodObject(),
-
-        // ✅ album stored under posts
         albums: safeAlbums,
         albumIds: safeAlbumIds,
       });
@@ -770,13 +915,23 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
+  // UI states
   const arrowColor = isDarkmode ? themeColor.white : "#999";
-  const canUseAI = mediaItems.length > 0 && !isGeneratingAI;
+
+  // ✅ AI enabled only if there is at least one image with base64
+  const canUseAI = useMemo(() => {
+    return (
+      mediaItems.some((m) => m.type === "image" && !!m.base64) &&
+      !isGeneratingAI
+    );
+  }, [mediaItems, isGeneratingAI]);
 
   return (
     <Layout>
       <TopNav
-        middleContent={<Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>}
+        middleContent={
+          <Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>
+        }
         leftAction={() => navigation.goBack()}
         leftContent={
           <Ionicons
@@ -804,6 +959,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         {mediaItems.length > 0 && (
           <View style={{ marginTop: 20 }}>
             <Text>Selected files: {mediaItems.length}</Text>
+
             <ScrollView
               horizontal
               pagingEnabled
@@ -813,20 +969,66 @@ export default function MemoryUpload({ navigation, route }: Props) {
               {mediaItems.map((item, index) => (
                 <View
                   key={`${item.uri}-${index}`}
-                  style={{ width: 320, height: "100%", marginRight: 12 }}
+                  style={{
+                    width: 320,
+                    height: "100%",
+                    marginRight: 12,
+                    borderRadius: 12,
+                    overflow: "hidden",
+                    position: "relative",
+                    backgroundColor: isDarkmode ? "#111" : "#eee",
+                  }}
                 >
-                  <Image
-                    source={{ uri: item.uri }}
-                    style={{ width: "100%", height: "100%" }}
-                    resizeMode="cover"
-                  />
+                  {/* ❌ Delete button */}
+                  {!editMode && (
+                    <TouchableOpacity
+                      onPress={() => removeMediaAt(index)}
+                      style={{
+                        position: "absolute",
+                        top: 10,
+                        right: 10,
+                        zIndex: 10,
+                        width: 32,
+                        height: 32,
+                        borderRadius: 16,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: "rgba(0,0,0,0.55)",
+                      }}
+                    >
+                      <Ionicons name="close" size={18} color="#fff" />
+                    </TouchableOpacity>
+                  )}
+
+                  {/* Media preview */}
+                  {item.type === "video" ? (
+                    <VideoPreview uri={item.uri} />
+                  ) : (
+                    <Image
+                      source={{ uri: item.uri }}
+                      style={{ width: "100%", height: "100%" }}
+                      resizeMode="cover"
+                    />
+                  )}
                 </View>
               ))}
             </ScrollView>
+
+            {!editMode && (
+              <Text
+                style={{
+                  marginTop: 8,
+                  fontSize: 12,
+                  color: isDarkmode ? "#aaa" : "#777",
+                }}
+              >
+                Tip: Tap the “X” to remove a wrong file.
+              </Text>
+            )}
           </View>
         )}
 
-        {/* 📍 Location (auto-detect + IG-style search) */}
+        {/* 📍 Location */}
         <View style={{ marginTop: 16 }}>
           <View
             style={{
@@ -835,7 +1037,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
               justifyContent: "space-between",
             }}
           >
-            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+            <View
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+            >
               <Ionicons
                 name="location-outline"
                 size={18}
@@ -857,13 +1061,17 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </View>
 
             <TouchableOpacity onPress={autoDetectLocation}>
-              <Text style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}>
+              <Text
+                style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}
+              >
                 Detect again
               </Text>
             </TouchableOpacity>
           </View>
 
-          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}>
+          <View
+            style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}
+          >
             <View style={{ flex: 1, marginRight: 8 }}>
               <TextInput
                 placeholder="Search for a place (optional)"
@@ -883,11 +1091,15 @@ export default function MemoryUpload({ navigation, route }: Props) {
               }}
               disabled={isSearchingPlace}
             >
-              <Ionicons
-                name="search-outline"
-                size={18}
-                color={isDarkmode ? themeColor.white : "#555"}
-              />
+              {isSearchingPlace ? (
+                <ActivityIndicator />
+              ) : (
+                <Ionicons
+                  name="search-outline"
+                  size={18}
+                  color={isDarkmode ? themeColor.white : "#555"}
+                />
+              )}
             </TouchableOpacity>
           </View>
 
@@ -901,14 +1113,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
                 backgroundColor: isDarkmode ? "#111" : "#fff",
               }}
             >
-              {placeOptions.map((p) => (
+              {placeOptions.map((p, idx) => (
                 <TouchableOpacity
                   key={p.id}
                   onPress={() => handleSelectPlace(p)}
                   style={{
                     paddingVertical: 8,
                     paddingHorizontal: 10,
-                    borderBottomWidth: 1,
+                    borderBottomWidth: idx === placeOptions.length - 1 ? 0 : 1,
                     borderBottomColor: isDarkmode ? "#222" : "#eee",
                   }}
                 >
@@ -1008,7 +1220,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
         />
 
         {/* Remember this face */}
-        <Text style={{ marginTop: 24, marginBottom: 8 }}>Remember this face</Text>
+        <Text style={{ marginTop: 24, marginBottom: 8 }}>
+          Remember this face
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1038,7 +1252,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color={isDarkmode ? themeColor.white : "#444"}
               style={{ marginRight: 8 }}
             />
-            <Text style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}>
+            <Text
+              style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}
+            >
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
@@ -1049,8 +1265,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color: isDarkmode ? "#aaa" : "#777",
             }}
           >
-            When enabled, this memory will appear as a story and disappear after 24
-            hours.
+            When enabled, this memory will appear as a story and disappear after
+            24 hours.
           </Text>
         </View>
 
@@ -1072,6 +1288,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           />
         </View>
       </ScrollView>
+
       <MemoryFloatingMenu navigation={navigation} />
     </Layout>
   );

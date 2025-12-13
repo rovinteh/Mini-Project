@@ -29,6 +29,8 @@ import {
   arrayRemove,
   query,
   where,
+  addDoc,
+  serverTimestamp,
   orderBy,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
@@ -118,6 +120,7 @@ export default function MemorySearch({ navigation }: Props) {
   };
 
   // ---------- Toggle follow from selected profile ----------
+  // ✅ FIXED: also creates follow notification for the target user
   const handleFollowToggle = async () => {
     if (!selectedUser || !currentUser) return;
     if (selectedUser.id === currentUser.uid) return;
@@ -144,6 +147,22 @@ export default function MemorySearch({ navigation }: Props) {
         }),
       ]);
 
+      // ✅ Only create notification when FOLLOW (not unfollow)
+      if (!currently) {
+        await addDoc(
+          collection(firestore, "notifications", selectedUser.id, "items"),
+          {
+            type: "follow",
+            text: `${
+              currentUser.displayName || currentUser.email || "Someone"
+            } started following you`,
+            fromUid: currentUser.uid,
+            read: false,
+            createdAt: serverTimestamp(),
+          }
+        );
+      }
+
       setIsFollowing(!currently);
       setSelectedUser((prev) =>
         prev
@@ -163,7 +182,8 @@ export default function MemorySearch({ navigation }: Props) {
     }
   };
 
-  // ---------- Toggle follow from user list (still used in logic, but no heart UI now) ----------
+  // ---------- Toggle follow from user list ----------
+  // (Currently not used by UI because you removed heart button, but keeping it is ok.)
   const toggleFollowUser = async (user: UserType) => {
     if (!currentUser) return;
     if (user.id === currentUser.uid) return;
@@ -191,8 +211,23 @@ export default function MemorySearch({ navigation }: Props) {
         }),
       ]);
 
+      // ✅ Only create notification when FOLLOW (not unfollow)
+      if (!currentlyFollowing) {
+        await addDoc(collection(firestore, "notifications", user.id, "items"), {
+          type: "follow",
+          text: `${
+            currentUser.displayName || currentUser.email || "Someone"
+          } started following you`,
+          fromUid: currentUser.uid,
+          read: false,
+          createdAt: serverTimestamp(),
+        });
+      }
+
       setUsers((prev) =>
-        prev.map((u) => (u.id === user.id ? { ...u, followers: newFollowers } : u))
+        prev.map((u) =>
+          u.id === user.id ? { ...u, followers: newFollowers } : u
+        )
       );
 
       setSelectedUser((prev) =>
@@ -394,69 +429,64 @@ export default function MemorySearch({ navigation }: Props) {
                 Users
               </Text>
 
-              {filteredUsers.map((user) => {
-                return (
-                  <View
-                    key={user.id}
+              {filteredUsers.map((user) => (
+                <View
+                  key={user.id}
+                  style={{
+                    flexDirection: "row",
+                    alignItems: "center",
+                    paddingVertical: 8,
+                    borderBottomWidth: 0.3,
+                    borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
+                  }}
+                >
+                  <TouchableOpacity
+                    onPress={() => handleSelectUser(user)}
                     style={{
                       flexDirection: "row",
                       alignItems: "center",
-                      paddingVertical: 8,
-                      borderBottomWidth: 0.3,
-                      borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
+                      flex: 1,
                     }}
                   >
-                    {/* Avatar + text (tap → open profile) */}
-                    <TouchableOpacity
-                      onPress={() => handleSelectUser(user)}
-                      style={{
-                        flexDirection: "row",
-                        alignItems: "center",
-                        flex: 1,
-                      }}
-                    >
-                      {user.photoURL ? (
-                        <Image
-                          source={{ uri: user.photoURL }}
-                          style={{
-                            width: 40,
-                            height: 40,
-                            borderRadius: 20,
-                            backgroundColor: "#d1d5db",
-                          }}
-                        />
-                      ) : (
-                        <Ionicons
-                          name="person-circle-outline"
-                          size={40}
-                          color={themeColor.info}
-                        />
-                      )}
-                      <View style={{ marginLeft: 10 }}>
-                        <Text
-                          style={{
-                            fontSize: 14,
-                            fontWeight: "bold",
-                            color: primaryTextColor,
-                          }}
-                        >
-                          {user.displayName || "No name"}
-                        </Text>
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            color: secondaryTextColor,
-                          }}
-                        >
-                          {user.email}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-
-                    {/* ❌ Heart (follow) removed from list */}
-                  </View>
-                );
-              })}
+                    {user.photoURL ? (
+                      <Image
+                        source={{ uri: user.photoURL }}
+                        style={{
+                          width: 40,
+                          height: 40,
+                          borderRadius: 20,
+                          backgroundColor: "#d1d5db",
+                        }}
+                      />
+                    ) : (
+                      <Ionicons
+                        name="person-circle-outline"
+                        size={40}
+                        color={themeColor.info}
+                      />
+                    )}
+                    <View style={{ marginLeft: 10 }}>
+                      <Text
+                        style={{
+                          fontSize: 14,
+                          fontWeight: "bold",
+                          color: primaryTextColor,
+                        }}
+                      >
+                        {user.displayName || "No name"}
+                      </Text>
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          color: secondaryTextColor,
+                        }}
+                      >
+                        {user.email}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              ))}
             </View>
           )}
 
@@ -527,12 +557,7 @@ export default function MemorySearch({ navigation }: Props) {
 
                 {/* Follow + Message */}
                 {currentUser && currentUser.uid !== selectedUser.id && (
-                  <View
-                    style={{
-                      flexDirection: "row",
-                      marginTop: 12,
-                    }}
-                  >
+                  <View style={{ flexDirection: "row", marginTop: 12 }}>
                     <TouchableOpacity
                       onPress={handleFollowToggle}
                       style={{

@@ -19,9 +19,7 @@ app.use(bodyParser.json({ limit: "20mb" }));
 
 // ---- Ollama config (adjust if needed) ----
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-// DeepSeek 专门用来“改写 + 输出 JSON”
 const OLLAMA_TEXT_MODEL = "deepseek-r1:7b"; // text-only caption helper
-// 视觉模型只负责看图描述（不再直接输出 JSON）
 const OLLAMA_VISION_MODEL = "llava-phi3:latest"; // real image-based caption
 
 // -------------------------
@@ -34,7 +32,7 @@ function countWords(str) {
     .filter(Boolean).length;
 }
 
-// 🔹 最稳健的 caption 剪裁：不加句子、不改风格、不截断半句
+// 🔹 Most robust caption trimming: don't add sentence, don't break half sentence
 function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
@@ -76,8 +74,8 @@ function enforceFirstPerson(caption) {
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog","dogs","puppy","puppies","cat","cats","kitten","kittens",
-  "bear","bears","bunny","bunnies","rabbit","rabbits",
+  "dog", "dogs", "puppy", "puppies", "cat", "cats", "kitten", "kittens",
+  "bear", "bears", "bunny", "bunnies", "rabbit", "rabbits",
 ];
 
 function fixPlushAnimalHallucination(caption, captionDraft) {
@@ -92,9 +90,9 @@ function fixPlushAnimalHallucination(caption, captionDraft) {
   return result;
 }
 
-// 🔹 Hashtag 最小处理：去空、去重、小写、过滤敏感词、最多 5 个
+// 🔹 Hashtag minimal processing: trim, dedup, lowercase, filter sensitive, max 5
 const SENSITIVE_TAGS_REQUIRE_DRAFT = [
-  "birthday","cake","cakes","dessert","desserts","party","celebration","boh",
+  "birthday", "cake", "cakes", "dessert", "desserts", "party", "celebration", "boh",
 ];
 
 function adjustHashtags(hashtags, captionDraft) {
@@ -122,8 +120,8 @@ function adjustHashtags(hashtags, captionDraft) {
 }
 
 const BANNED_BACKGROUND_WORDS = [
-  "matches","matchbox","box of matches","pencil","pencils","pen","pens",
-  "marker","markers","notebook","notebooks","remote control","remote",
+  "matches", "matchbox", "box of matches", "pencil", "pencils", "pen", "pens",
+  "marker", "markers", "notebook", "notebooks", "remote control", "remote",
 ];
 
 function removeBannedWords(text) {
@@ -136,10 +134,10 @@ function removeBannedWords(text) {
 }
 
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes","take notes","doing homework","do homework","studying",
-  "study session","working on my notes","working on notes","working on homework",
-  "working on assignments","doing my assignment","doing assignments",
-  "preparing for exams","studying for exams",
+  "taking notes", "take notes", "doing homework", "do homework", "studying",
+  "study session", "working on my notes", "working on notes", "working on homework",
+  "working on assignments", "doing my assignment", "doing assignments",
+  "preparing for exams", "studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
@@ -179,8 +177,8 @@ function fallbackTagsFromDraft(captionDraft, max = 3) {
     .split(/[,;\n\r\t ]+/)
     .map((t) => t.trim())
     .filter(Boolean)
-    .filter((t) => t.length >= 3) // avoid "a", "i"
-    .filter((t) => /^[a-z0-9]+$/i.test(t)); // simple safe tags only
+    .filter((t) => t.length >= 3)
+    .filter((t) => /^[a-z0-9]+$/i.test(t));
 
   return Array.from(new Set(cleaned)).slice(0, max);
 }
@@ -274,6 +272,37 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
 
   console.log("[VISION] Combined per-photo description:\n", combined);
   return combined;
+}
+
+// -------------------------
+// ✅ Helper: recognize faces for MULTIPLE images (batch)
+// (Node will loop recognizeFace() to avoid changing your face-service.js)
+// -------------------------
+async function recognizeFaceBatch(imageBase64List, threshold) {
+  const safeList = Array.isArray(imageBase64List) ? imageBase64List.filter(Boolean) : [];
+  const MAX_IMAGES = 6; // keep it safe & fast (base64 is heavy)
+  const images = safeList.slice(0, MAX_IMAGES);
+
+  const results = [];
+  for (let i = 0; i < images.length; i++) {
+    try {
+      const pyResp = await recognizeFace(images[i], threshold);
+      results.push({
+        index: i,
+        ok: pyResp.ok !== false,
+        faces: Array.isArray(pyResp.faces) ? pyResp.faces : [],
+      });
+    } catch (e) {
+      results.push({
+        index: i,
+        ok: false,
+        faces: [],
+        error: String(e?.message || e),
+      });
+    }
+  }
+
+  return { ok: true, count: images.length, results };
 }
 
 // -------------------------
@@ -391,64 +420,70 @@ Neutral description of the photo(s) from a vision model (may be empty):
       if (fallback.length > 0) hashtags = fallback;
     }
 
-    // -------- Face recognition for friendTags (STRICT multi-face) --------
+    // -------- Face recognition for friendTags (STRICT multi-face, MULTI-IMAGE) --------
     const FACE_THRESHOLD = 0.37; // strict
     const MIN_GAP = 0.06;
     const MAX_TAGS = 5;
 
     let friendTagsMerged = [];
 
+    // helper: pick names from ONE faceResp
+    const pickNamesFromFaceResp = (faceResp) => {
+      const faces = Array.isArray(faceResp?.faces) ? faceResp.faces : [];
+      const pickedNames = [];
+
+      for (const f of faces) {
+        const matches = Array.isArray(f.matches) ? f.matches : [];
+        if (!matches.length) continue;
+
+        let candidates = matches
+          .map((m) => ({
+            name: String(m.name || "").trim(),
+            distance: typeof m.distance === "number" ? m.distance : Number(m.distance) || 999,
+          }))
+          .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
+          .sort((a, b) => a.distance - b.distance);
+
+        if (!candidates.length) continue;
+
+        const top = candidates[0];
+        const next = candidates[1];
+
+        // GAP RULE: only accept if clearly better than next
+        if (next && Math.abs(next.distance - top.distance) < MIN_GAP) {
+          continue;
+        }
+
+        pickedNames.push(top.name);
+        if (pickedNames.length >= MAX_TAGS) break;
+      }
+
+      return pickedNames;
+    };
+
     if (images.length > 0) {
       try {
-        const faceResp = await recognizeFace(images[0], FACE_THRESHOLD);
-        const faces = Array.isArray(faceResp.faces) ? faceResp.faces : [];
+        // ✅ Use up to first 3 images to improve accuracy, keep it fast
+        const FACE_IMAGES_LIMIT = 3;
+        const scanImages = images.slice(0, FACE_IMAGES_LIMIT);
 
-        // ✅ PROOF: print full distances (0.xxxxxx)
+        // Batch loop (Node loops recognizeFace internally)
+        const batch = await recognizeFaceBatch(scanImages, FACE_THRESHOLD);
+
         console.log(
-          "[VISION] FaceResp FULL:\n",
-          util.inspect(faceResp, { depth: null, colors: true })
+          "[VISION] FaceBatch FULL:\n",
+          util.inspect(batch, { depth: null, colors: true })
         );
-        console.log("[VISION] FaceResp JSON:\n", JSON.stringify(faceResp, null, 2));
 
-        for (const f of faces) {
-          const matches = Array.isArray(f.matches) ? f.matches : [];
-          console.log(
-            `Face ${f.faceIndex} distances:`,
-            matches.map((m) => `${m.name}:${Number(m.distance).toFixed(6)}`).join(", ")
-          );
+        const allPicked = [];
+        for (const item of batch.results || []) {
+          const faceRespLike = { faces: item.faces || [] };
+          const names = pickNamesFromFaceResp(faceRespLike);
+          allPicked.push(...names);
+          if (allPicked.length >= MAX_TAGS) break;
         }
 
-        const pickedNames = [];
-
-        for (const f of faces) {
-          const matches = Array.isArray(f.matches) ? f.matches : [];
-          if (!matches.length) continue;
-
-          let candidates = matches
-            .map((m) => ({
-              name: String(m.name || "").trim(),
-              distance:
-                typeof m.distance === "number"
-                  ? m.distance
-                  : Number(m.distance) || 999,
-            }))
-            .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
-            .sort((a, b) => a.distance - b.distance);
-
-          if (!candidates.length) continue;
-
-          // GAP RULE (only use top match per face if clearly better than next)
-          const top = candidates[0];
-          const next = candidates[1];
-          if (next && Math.abs(next.distance - top.distance) < MIN_GAP) {
-            continue; // ambiguous
-          }
-
-          pickedNames.push(top.name);
-          if (pickedNames.length >= MAX_TAGS) break;
-        }
-
-        friendTagsMerged = Array.from(new Set(pickedNames)).slice(0, MAX_TAGS);
+        friendTagsMerged = Array.from(new Set(allPicked)).slice(0, MAX_TAGS);
       } catch (err) {
         console.log("Face recognition in /generatePostMeta failed:", err);
       }
@@ -527,6 +562,26 @@ app.post("/faces/recognize", async (req, res) => {
   } catch (err) {
     console.error("❌ /faces/recognize proxy error:", err);
     res.status(500).json({ error: "Face recognize failed" });
+  }
+});
+
+// -------------------------
+// ✅ /faces/recognize_batch  (MULTIPLE IMAGES)
+// Body: { imageBase64List: [..], threshold?: number }
+// Returns: { ok, count, results: [{ index, ok, faces, error? }] }
+// -------------------------
+app.post("/faces/recognize_batch", async (req, res) => {
+  const { imageBase64List, threshold } = req.body || {};
+  if (!Array.isArray(imageBase64List) || imageBase64List.length === 0) {
+    return res.status(400).json({ error: "imageBase64List must be a non-empty array." });
+  }
+
+  try {
+    const batch = await recognizeFaceBatch(imageBase64List, threshold);
+    res.json(batch);
+  } catch (err) {
+    console.error("❌ /faces/recognize_batch proxy error:", err);
+    res.status(500).json({ error: "Face recognize batch failed" });
   }
 });
 
