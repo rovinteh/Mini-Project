@@ -60,7 +60,9 @@ export default function Profile({ navigation }: Props) {
   const uid = auth.currentUser?.uid || "";
 
   // -------- State --------
-  const [firebaseUser, setFirebaseUser] = useState<User | null>(auth.currentUser);
+  const [firebaseUser, setFirebaseUser] = useState<User | null>(
+    auth.currentUser
+  );
 
   const [qrValue, setQrValue] = useState("");
   const [qrTab, setQrTab] = useState<"myqr" | "scan">("myqr");
@@ -103,9 +105,10 @@ export default function Profile({ navigation }: Props) {
   const currentYear = new Date().getFullYear();
   const years = useMemo(
     () =>
-      Array.from({ length: currentYear - 1950 + 1 }, (_, i) => currentYear - i).map(
-        (y) => ({ label: String(y), value: y })
-      ),
+      Array.from(
+        { length: currentYear - 1950 + 1 },
+        (_, i) => currentYear - i
+      ).map((y) => ({ label: String(y), value: y })),
     [currentYear]
   );
 
@@ -135,7 +138,8 @@ export default function Profile({ navigation }: Props) {
   // request gallery permission
   useEffect(() => {
     (async () => {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
@@ -246,7 +250,9 @@ export default function Profile({ navigation }: Props) {
       };
 
       if (phone && phone !== "-") {
-        contact[Contacts.Fields.PhoneNumbers] = [{ label: "mobile", number: phone }];
+        contact[Contacts.Fields.PhoneNumbers] = [
+          { label: "mobile", number: phone },
+        ];
       }
 
       if (email && email !== "-") {
@@ -272,7 +278,7 @@ export default function Profile({ navigation }: Props) {
     try {
       const mediaTypesCompat = (ImagePicker as any).MediaType?.Images
         ? [(ImagePicker as any).MediaType.Images]
-        : ImagePicker.MediaTypeOptions.Images;
+        : (ImagePicker as any).MediaTypeOptions?.Images;
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: mediaTypesCompat as any,
@@ -305,7 +311,10 @@ export default function Profile({ navigation }: Props) {
 
       try {
         const topicsRef = collection(db, "Topic");
-        const q = query(topicsRef, where("CreatedUser.CreatedUserId", "==", uid));
+        const q = query(
+          topicsRef,
+          where("CreatedUser.CreatedUserId", "==", uid)
+        );
         const snap = await getDocs(q);
         if (!snap.empty) {
           const batch = writeBatch(db);
@@ -344,13 +353,24 @@ export default function Profile({ navigation }: Props) {
     }
 
     if (!/^[0-9]{9,11}$/.test(phoneDigits)) {
-      Alert.alert("Validation", "Please enter a valid Malaysian phone number (9–11 digits).");
+      Alert.alert(
+        "Validation",
+        "Please enter a valid Malaysian phone number (9–11 digits)."
+      );
       return;
     }
 
     const today = new Date();
-    const onlyToday = new Date(today.getFullYear(), today.getMonth(), today.getDate());
-    const onlyBirth = new Date(birthDate.getFullYear(), birthDate.getMonth(), birthDate.getDate());
+    const onlyToday = new Date(
+      today.getFullYear(),
+      today.getMonth(),
+      today.getDate()
+    );
+    const onlyBirth = new Date(
+      birthDate.getFullYear(),
+      birthDate.getMonth(),
+      birthDate.getDate()
+    );
     if (onlyBirth > onlyToday) {
       Alert.alert("Validation", "Birth date cannot be in the future.");
       return;
@@ -375,7 +395,10 @@ export default function Profile({ navigation }: Props) {
         })
       );
 
-      Alert.alert("Profile Updated", "Your profile has been saved successfully.");
+      Alert.alert(
+        "Profile Updated",
+        "Your profile has been saved successfully."
+      );
     } catch (e) {
       console.log("Error updating profile", e);
       Alert.alert("Error", "Failed to update profile.");
@@ -439,7 +462,13 @@ export default function Profile({ navigation }: Props) {
         )}
 
         <TouchableOpacity onPress={handleChangePhoto}>
-          <Text style={{ color: themeColor.info, fontWeight: "bold", marginBottom: 10 }}>
+          <Text
+            style={{
+              color: themeColor.info,
+              fontWeight: "bold",
+              marginBottom: 10,
+            }}
+          >
             Change Profile Photo
           </Text>
         </TouchableOpacity>
@@ -447,7 +476,9 @@ export default function Profile({ navigation }: Props) {
         <Text size="h3" fontWeight="bold">
           {firebaseUser?.displayName ?? "My Profile"}
         </Text>
-        <Text style={{ opacity: 0.7, color: textMain }}>{firebaseUser?.email}</Text>
+        <Text style={{ opacity: 0.7, color: textMain }}>
+          {firebaseUser?.email}
+        </Text>
 
         <TouchableOpacity
           onPress={() => setTheme(isDarkmode ? "light" : "dark")}
@@ -460,7 +491,13 @@ export default function Profile({ navigation }: Props) {
       </View>
 
       {/* Editable fields */}
-      <View style={{ paddingHorizontal: 20, paddingTop: 10, backgroundColor: bgMain }}>
+      <View
+        style={{
+          paddingHorizontal: 20,
+          paddingTop: 10,
+          backgroundColor: bgMain,
+        }}
+      >
         <Text
           size="h3"
           style={{
@@ -475,7 +512,11 @@ export default function Profile({ navigation }: Props) {
 
         {/* Email */}
         <Text style={{ color: textMain }}>Email (read only)</Text>
-        <TextInput containerStyle={{ marginTop: 10 }} value={firebaseUser?.email || ""} editable={false} />
+        <TextInput
+          containerStyle={{ marginTop: 10 }}
+          value={firebaseUser?.email || ""}
+          editable={false}
+        />
 
         {/* Gender */}
         <Text style={{ marginTop: 20, color: textMain }}>Gender</Text>
@@ -545,14 +586,18 @@ export default function Profile({ navigation }: Props) {
             >
               <View
                 style={{
-                  backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                  backgroundColor: isDarkmode
+                    ? themeColor.dark
+                    : themeColor.white,
                   borderRadius: 10,
                   padding: 20,
                   width: "90%",
                   maxWidth: 420,
                 }}
               >
-                <View style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}>
+                <View
+                  style={{ flexDirection: "row", gap: 10, marginBottom: 12 }}
+                >
                   <View style={{ flex: 1 }}>
                     <DropDownPicker
                       open={yearOpen}
@@ -566,15 +611,21 @@ export default function Profile({ navigation }: Props) {
                       modalTitle="Select year"
                       modalProps={{ animationType: "fade" }}
                       modalContentContainerStyle={{
-                        backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                        backgroundColor: isDarkmode
+                          ? themeColor.dark
+                          : themeColor.white,
                       }}
                       modalTitleStyle={{
-                        color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                        color: isDarkmode
+                          ? themeColor.white100
+                          : themeColor.dark,
                         fontWeight: "bold",
                       }}
                       style={{ ...(dropdownBaseStyle as any), minHeight: 46 }}
                       textStyle={dropdownTextStyle as any}
-                      placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" } as any}
+                      placeholderStyle={
+                        { color: isDarkmode ? "#aaa" : "#777" } as any
+                      }
                       listItemLabelStyle={dropdownListLabelStyle as any}
                     />
                   </View>
@@ -592,15 +643,21 @@ export default function Profile({ navigation }: Props) {
                       modalTitle="Select month"
                       modalProps={{ animationType: "fade" }}
                       modalContentContainerStyle={{
-                        backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                        backgroundColor: isDarkmode
+                          ? themeColor.dark
+                          : themeColor.white,
                       }}
                       modalTitleStyle={{
-                        color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                        color: isDarkmode
+                          ? themeColor.white100
+                          : themeColor.dark,
                         fontWeight: "bold",
                       }}
                       style={{ ...(dropdownBaseStyle as any), minHeight: 46 }}
                       textStyle={dropdownTextStyle as any}
-                      placeholderStyle={{ color: isDarkmode ? "#aaa" : "#777" } as any}
+                      placeholderStyle={
+                        { color: isDarkmode ? "#aaa" : "#777" } as any
+                      }
                       listItemLabelStyle={dropdownListLabelStyle as any}
                     />
                   </View>
@@ -618,15 +675,25 @@ export default function Profile({ navigation }: Props) {
                     },
                   }}
                   theme={{
-                    backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
-                    calendarBackground: isDarkmode ? themeColor.dark : themeColor.white,
-                    textSectionTitleColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                    backgroundColor: isDarkmode
+                      ? themeColor.dark
+                      : themeColor.white,
+                    calendarBackground: isDarkmode
+                      ? themeColor.dark
+                      : themeColor.white,
+                    textSectionTitleColor: isDarkmode
+                      ? themeColor.white100
+                      : themeColor.dark,
                     selectedDayBackgroundColor: themeColor.primary,
                     selectedDayTextColor: themeColor.white100,
                     todayTextColor: themeColor.primary,
-                    dayTextColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                    dayTextColor: isDarkmode
+                      ? themeColor.white100
+                      : themeColor.dark,
                     textDisabledColor: "#888",
-                    monthTextColor: isDarkmode ? themeColor.white100 : themeColor.dark,
+                    monthTextColor: isDarkmode
+                      ? themeColor.white100
+                      : themeColor.dark,
                     arrowColor: themeColor.primary,
                   }}
                 />
@@ -641,7 +708,11 @@ export default function Profile({ navigation }: Props) {
                     alignItems: "center",
                   }}
                 >
-                  <Text style={{ color: themeColor.white100, fontWeight: "bold" }}>Close</Text>
+                  <Text
+                    style={{ color: themeColor.white100, fontWeight: "bold" }}
+                  >
+                    Close
+                  </Text>
                 </TouchableOpacity>
               </View>
             </View>
@@ -664,7 +735,9 @@ export default function Profile({ navigation }: Props) {
               modalTitle="Select country code"
               modalProps={{ animationType: "fade" }}
               modalContentContainerStyle={{
-                backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                backgroundColor: isDarkmode
+                  ? themeColor.dark
+                  : themeColor.white,
               }}
               modalTitleStyle={{
                 color: isDarkmode ? themeColor.white100 : themeColor.dark,
@@ -684,13 +757,17 @@ export default function Profile({ navigation }: Props) {
               placeholder="12-4567890"
               value={phoneNumber}
               keyboardType="phone-pad"
-              onChangeText={(text) => setPhoneNumber(text.replace(/[^0-9]/g, ""))}
+              onChangeText={(text) =>
+                setPhoneNumber(text.replace(/[^0-9]/g, ""))
+              }
               style={{
                 padding: 15,
                 borderRadius: 5,
                 borderWidth: 1,
                 borderColor: "#ccc",
-                backgroundColor: isDarkmode ? themeColor.dark200 : themeColor.white,
+                backgroundColor: isDarkmode
+                  ? themeColor.dark200
+                  : themeColor.white,
                 color: textMain,
                 height: 50,
               }}
@@ -717,7 +794,13 @@ export default function Profile({ navigation }: Props) {
             backgroundColor: bgCard,
           }}
         >
-          <View style={{ flexDirection: "row", justifyContent: "center", marginBottom: 15 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "center",
+              marginBottom: 15,
+            }}
+          >
             <TouchableOpacity
               onPress={() => setQrTab("myqr")}
               style={{
@@ -749,20 +832,32 @@ export default function Profile({ navigation }: Props) {
 
           {qrTab === "myqr" && (
             <View style={{ alignItems: "center", paddingVertical: 20 }}>
-              {qrValue ? <QRCode value={qrValue} size={220} /> : <Text style={{ color: textMain }}>No QR data available</Text>}
+              {qrValue ? (
+                <QRCode value={qrValue} size={220} />
+              ) : (
+                <Text style={{ color: textMain }}>No QR data available</Text>
+              )}
             </View>
           )}
 
           {qrTab === "scan" && (
             <View style={{ alignItems: "center" }}>
-              {!permission && <Text style={{ color: textMain }}>Checking camera permission...</Text>}
+              {!permission && (
+                <Text style={{ color: textMain }}>
+                  Checking camera permission...
+                </Text>
+              )}
 
               {permission && !permission.granted && (
                 <View style={{ alignItems: "center" }}>
                   <Text style={{ marginBottom: 10, color: textMain }}>
                     Camera access is required to scan QR codes.
                   </Text>
-                  <Button text="Allow Camera" onPress={requestPermission} size="md" />
+                  <Button
+                    text="Allow Camera"
+                    onPress={requestPermission}
+                    size="md"
+                  />
                 </View>
               )}
 
@@ -797,7 +892,13 @@ export default function Profile({ navigation }: Props) {
           <Button
             text="Logout"
             status="danger"
-            leftContent={<Ionicons name="log-out-outline" size={18} color={themeColor.white100} />}
+            leftContent={
+              <Ionicons
+                name="log-out-outline"
+                size={18}
+                color={themeColor.white100}
+              />
+            }
             onPress={() => signOut(auth)}
           />
         </View>
@@ -814,9 +915,9 @@ export default function Profile({ navigation }: Props) {
     >
       <Layout>
         <FlatList
-          data={[]} // ✅ no nested VirtualizedLists, no fake item needed
-          keyExtractor={(_, index) => String(index)}
-          renderItem={null as any}
+          data={[{ key: "only" }]}
+          keyExtractor={(item) => item.key}
+          renderItem={() => null}
           ListHeaderComponent={Header}
           keyboardShouldPersistTaps="handled"
           contentContainerStyle={{ paddingBottom: 30 }}
