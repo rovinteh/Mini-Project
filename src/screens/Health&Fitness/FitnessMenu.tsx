@@ -1,10 +1,11 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   StyleSheet,
   ScrollView,
   ActivityIndicator,
   Alert,
+  RefreshControl, // <--- 1. Imported here
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -26,10 +27,11 @@ import {
   collection,
   query,
   where,
-  getDocs,
   Timestamp,
   addDoc,
   serverTimestamp,
+  onSnapshot,
+  orderBy,
 } from "firebase/firestore";
 
 type Props = NativeStackScreenProps<MainStackParamList, "FitnessMenu">;
@@ -39,12 +41,18 @@ type PrefData = {
   difficulty: "easy" | "moderate" | "hard";
   workoutDays: string[];
   sessionLengthMinutes: number;
-  height?: number;
-  weight?: number;
+  height?: number | null;
+  weight?: number | null;
 };
 
-const FITNESS_COLOR = "#22C55E";
-const WATER_COLOR = "#3B82F6";
+// --- Color Palette ---
+const FITNESS_COLOR = "#22C55E"; // Green accent
+const WORKOUT_COLOR = "#3B82F6"; // Blue
+const MEAL_COLOR = "#F97316"; // Orange
+const WATER_COLOR = "#0EA5E9"; // Sky Blue
+const GOAL_COLOR = "#8B5CF6"; // Purple
+const DIFF_COLOR = "#F59E0B"; // Amber
+const SCHED_COLOR = "#10B981"; // Emerald
 
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -59,10 +67,21 @@ export default function FitnessMenu({ navigation }: Props) {
   const db = getFirestore();
 
   const [pref, setPref] = useState<PrefData | null>(null);
+
+  // Dashboard stats
   const [workoutsThisWeek, setWorkoutsThisWeek] = useState(0);
+  const [workoutMinutesThisWeek, setWorkoutMinutesThisWeek] = useState(0);
   const [mealsToday, setMealsToday] = useState(0);
+
+  const [waterMlToday, setWaterMlToday] = useState(0);
+  const [pendingWaterMl, setPendingWaterMl] = useState(0);
+
   const [streakDays, setStreakDays] = useState(0);
+
   const [loading, setLoading] = useState(true);
+
+  // --- 2. Refresh State ---
+  const [refreshing, setRefreshing] = useState(false);
   const [addingWater, setAddingWater] = useState(false);
 
   const userName =
@@ -76,7 +95,7 @@ export default function FitnessMenu({ navigation }: Props) {
     month: "short",
   });
 
-  // --- Helpers for Display ---
+  // --- Display Helpers ---
   const difficultyText =
     pref?.difficulty === "easy"
       ? "Beginner Friendly"
@@ -103,9 +122,12 @@ export default function FitnessMenu({ navigation }: Props) {
 
   // --- BMI Calculation ---
   const bmiData = useMemo(() => {
-    if (!pref?.height || !pref?.weight) return null;
-    const hM = pref.height / 100;
-    const val = pref.weight / (hM * hM);
+    const h = pref?.height ?? null;
+    const w = pref?.weight ?? null;
+    if (!h || !w) return null;
+
+    const hM = h / 100;
+    const val = w / (hM * hM);
     const score = val.toFixed(1);
 
     let label = "Normal";
@@ -114,19 +136,41 @@ export default function FitnessMenu({ navigation }: Props) {
     if (val < 18.5) {
       label = "Underweight";
       color = "#F59E0B";
-    } // Amber
-    else if (val >= 25 && val < 30) {
+    } else if (val >= 25 && val < 30) {
       label = "Overweight";
       color = "#F59E0B";
     } else if (val >= 30) {
       label = "Obese";
       color = "#EF4444";
-    } // Red
+    }
 
     return { score, label, color };
   }, [pref?.height, pref?.weight]);
 
-  // --- Load Data ---
+  // --- Load Data Function ---
+  const loadOnce = useCallback(async () => {
+    const user = auth.currentUser;
+    if (!user) return;
+    const prefRef = doc(db, "WorkoutPreference", user.uid);
+    const prefSnap = await getDoc(prefRef);
+    setPref(prefSnap.exists() ? (prefSnap.data() as PrefData) : null);
+  }, [auth.currentUser, db]);
+
+  // --- 3. Refresh Handler ---
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    try {
+      // Reload preference data
+      await loadOnce();
+      // Note: Live stats (workouts/meals) update automatically via onSnapshot,
+      // but this pause gives the user visual feedback that "refreshing" happened.
+    } catch (e) {
+      console.log(e);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [loadOnce]);
+
   useEffect(() => {
     const user = auth.currentUser;
     if (!user) {
@@ -134,125 +178,138 @@ export default function FitnessMenu({ navigation }: Props) {
       return;
     }
 
-    const run = async () => {
-      setLoading(true);
-      try {
-        // 1. Preference (Profile)
-        const prefRef = doc(db, "WorkoutPreference", user.uid);
-        const prefSnap = await getDoc(prefRef);
-        if (prefSnap.exists()) {
-          setPref(prefSnap.data() as PrefData);
-        } else {
-          setPref(null);
-        }
+    setLoading(true);
+    loadOnce().catch(() => {});
 
-        // 2. Workouts (Completed this week)
-        const now = new Date();
-        const sevenDaysAgo = startOfDay(
-          new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)
-        );
-        const startWeekTs = Timestamp.fromDate(sevenDaysAgo);
+    // Live Workouts Listener
+    const now = new Date();
+    const sevenDaysAgo = startOfDay(
+      new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)
+    );
+    const startWeekTs = Timestamp.fromDate(sevenDaysAgo);
 
-        const workoutQ = query(
-          collection(db, "WorkoutSession"),
-          where("userId", "==", user.uid),
-          where("createdAtClient", ">=", startWeekTs)
-        );
-        const workoutSnap = await getDocs(workoutQ);
+    const workoutQ = query(
+      collection(db, "WorkoutSession"),
+      where("userId", "==", user.uid),
+      where("createdAtClient", ">=", startWeekTs),
+      orderBy("createdAtClient", "asc")
+    );
+
+    const unsubWorkouts = onSnapshot(
+      workoutQ,
+      (snap) => {
         let completed = 0;
-        workoutSnap.forEach((d) => {
-          if (d.data().status === "completed") completed++;
-        });
-        setWorkoutsThisWeek(completed);
-
-        // 3. Meals Today
-        const todayStart = startOfDay(now);
-        const todayTs = Timestamp.fromDate(todayStart);
-
-        const mealQ = query(
-          collection(db, "MealEntry"),
-          where("userId", "==", user.uid),
-          where("mealTimeClient", ">=", todayTs)
-        );
-        const mealSnap = await getDocs(mealQ);
-        setMealsToday(mealSnap.size);
-
-        // 4. Streak Logic
-        // (Simplified: checks last 30 days for any completed workout)
-        const thirtyDaysAgo = startOfDay(
-          new Date(now.getFullYear(), now.getMonth(), now.getDate() - 29)
-        );
-        const streakTs = Timestamp.fromDate(thirtyDaysAgo);
-        const streakQ = query(
-          collection(db, "WorkoutSession"),
-          where("userId", "==", user.uid),
-          where("createdAtClient", ">=", streakTs)
-        );
-        const streakSnap = await getDocs(streakQ);
+        let minutes = 0;
         const completedDates = new Set<string>();
-        streakSnap.forEach((d) => {
-          if (
-            d.data().status === "completed" &&
-            d.data().createdAtClient?.toDate
-          ) {
-            completedDates.add(dateKey(d.data().createdAtClient.toDate()));
+
+        snap.forEach((d) => {
+          const data: any = d.data();
+          const created = data.createdAtClient?.toDate?.();
+          if (!created) return;
+
+          if (data.status === "completed") {
+            completed += 1;
+            const mins =
+              typeof data.actualDurationSec === "number"
+                ? Math.round(data.actualDurationSec / 60)
+                : 0;
+            minutes += mins;
+            completedDates.add(dateKey(created));
           }
         });
 
+        setWorkoutsThisWeek(completed);
+        setWorkoutMinutesThisWeek(minutes);
+
         let s = 0;
-        // Check backwards from today
         for (let i = 0; i < 30; i++) {
           const checkDate = new Date(now);
           checkDate.setDate(now.getDate() - i);
-          if (completedDates.has(dateKey(checkDate))) {
-            s++;
-          } else {
-            // Allow missing today if it's still early, otherwise break
-            if (i !== 0) break;
-          }
+          if (completedDates.has(dateKey(checkDate))) s++;
+          else if (i !== 0) break;
         }
         setStreakDays(s);
-      } catch (err) {
-        console.log("FitnessMenu load error:", err);
-      } finally {
+        setLoading(false);
+      },
+      (err) => {
+        console.log("FitnessMenu workouts listener error:", err);
         setLoading(false);
       }
+    );
+
+    // Live Meals Listener
+    const todayStart = startOfDay(now);
+    const todayTs = Timestamp.fromDate(todayStart);
+
+    const mealQ = query(
+      collection(db, "MealEntry"),
+      where("userId", "==", user.uid),
+      where("mealTimeClient", ">=", todayTs),
+      orderBy("mealTimeClient", "desc")
+    );
+
+    const unsubMeals = onSnapshot(
+      mealQ,
+      (snap) => {
+        let mealCount = 0;
+        let waterMl = 0;
+        snap.forEach((d) => {
+          const data: any = d.data();
+          if (data?.isWater) {
+            waterMl += typeof data.volumeMl === "number" ? data.volumeMl : 0;
+          } else {
+            mealCount += 1;
+          }
+        });
+        setMealsToday(mealCount);
+        setWaterMlToday(waterMl);
+        setPendingWaterMl(0);
+      },
+      (err) => console.log("FitnessMenu meals listener error:", err)
+    );
+
+    return () => {
+      unsubWorkouts();
+      unsubMeals();
     };
+  }, [auth.currentUser, db, loadOnce]);
 
-    run();
-  }, []);
-
-  // --- Quick Actions ---
   const addWater = async () => {
     if (addingWater) return;
     setAddingWater(true);
+    setPendingWaterMl((p) => p + 250);
+
     try {
       const user = auth.currentUser;
       if (!user) return;
-
       const now = new Date();
-      // Write to DB
       await addDoc(collection(db, "MealEntry"), {
         userId: user.uid,
-        mealType: "snack",
+        mealType: "water",
         category: "beverage",
-        notes: "Quick Water (250ml) 💧",
+        notes: "Quick Water 💧",
         photoURL: null,
+        isWater: true,
+        volumeMl: 250,
         mealTimeClient: Timestamp.fromDate(now),
         createdAtClient: Timestamp.fromDate(now),
         mealTime: serverTimestamp(),
         createdAt: serverTimestamp(),
       });
-
-      // Optimistic UI Update
-      setMealsToday((prev) => prev + 1);
-      Alert.alert("Hydration Saved", "Good job staying hydrated! 💧");
     } catch (e) {
+      setPendingWaterMl((p) => Math.max(0, p - 250));
       Alert.alert("Error", "Could not save water entry.");
     } finally {
       setAddingWater(false);
     }
   };
+
+  const waterGoalMl = 2000;
+  const waterMlTodayLive = waterMlToday + pendingWaterMl;
+  const waterPct = Math.min(
+    100,
+    Math.round((waterMlTodayLive / waterGoalMl) * 100)
+  );
 
   return (
     <Layout>
@@ -286,34 +343,49 @@ export default function FitnessMenu({ navigation }: Props) {
           style={styles.scroll}
           contentContainerStyle={{ paddingBottom: 32 }}
           showsVerticalScrollIndicator={false}
+          // --- 4. Attached here ---
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
-          {/* 1. Hero / Welcome Card */}
-          <Section style={[styles.card, styles.heroCard]}>
+          {/* 1) Hero Section - Standard Card Style */}
+          <Section
+            style={[
+              styles.card,
+              { borderColor: isDarkmode ? "#262626" : "#e2e8f0" },
+            ]}
+          >
             <View style={styles.heroHeader}>
               <View>
-                <Text size="h3" fontWeight="bold" style={{ color: "#fff" }}>
+                <Text size="h3" fontWeight="bold">
                   Hello, {userName}
                 </Text>
-                <Text style={{ color: "rgba(255,255,255,0.8)", marginTop: 2 }}>
-                  {todayStr}
-                </Text>
+                <Text style={{ opacity: 0.5, marginTop: 2 }}>{todayStr}</Text>
               </View>
-              <View style={styles.streakBadge}>
-                <Ionicons name="flame" size={20} color="#fff" />
-                <Text
-                  fontWeight="bold"
-                  style={{ color: "#fff", marginLeft: 4 }}
-                >
+
+              <View
+                style={[
+                  styles.streakBadge,
+                  { backgroundColor: isDarkmode ? "#374151" : "#f3f4f6" },
+                ]}
+              >
+                <Ionicons name="flame" size={20} color="#F97316" />
+                <Text fontWeight="bold" style={{ marginLeft: 4 }}>
                   {streakDays}
                 </Text>
               </View>
             </View>
 
             <View style={styles.heroFooter}>
-              <Text style={{ color: "rgba(255,255,255,0.9)", fontSize: 13 }}>
+              <Text style={{ opacity: 0.8, fontSize: 13, marginBottom: 6 }}>
                 {weeklyProgressLabel}
               </Text>
-              <View style={styles.progressBarBg}>
+              <View
+                style={[
+                  styles.progressBarBg,
+                  { backgroundColor: isDarkmode ? "#374151" : "#e5e7eb" },
+                ]}
+              >
                 <View
                   style={[
                     styles.progressBarFill,
@@ -322,14 +394,40 @@ export default function FitnessMenu({ navigation }: Props) {
                         100,
                         (workoutsThisWeek / (weeklyGoal || 1)) * 100
                       )}%`,
+                      backgroundColor: FITNESS_COLOR,
                     },
                   ]}
                 />
               </View>
+
+              <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
+                <View
+                  style={[
+                    styles.pill,
+                    { backgroundColor: isDarkmode ? "#374151" : "#f3f4f6" },
+                  ]}
+                >
+                  <Ionicons name="time" size={14} color={WORKOUT_COLOR} />
+                  <Text style={{ fontSize: 12, opacity: 0.8 }}>
+                    {workoutMinutesThisWeek} min
+                  </Text>
+                </View>
+                <View
+                  style={[
+                    styles.pill,
+                    { backgroundColor: isDarkmode ? "#374151" : "#f3f4f6" },
+                  ]}
+                >
+                  <Ionicons name="restaurant" size={14} color={MEAL_COLOR} />
+                  <Text style={{ fontSize: 12, opacity: 0.8 }}>
+                    {mealsToday} meals
+                  </Text>
+                </View>
+              </View>
             </View>
           </Section>
 
-          {/* 2. Stats Grid */}
+          {/* 2) Stats Grid */}
           <View style={styles.row}>
             <Section
               style={[
@@ -338,11 +436,11 @@ export default function FitnessMenu({ navigation }: Props) {
                 { borderColor: isDarkmode ? "#262626" : "#f1f5f9" },
               ]}
             >
-              <Ionicons name="barbell" size={24} color={FITNESS_COLOR} />
+              <Ionicons name="barbell" size={24} color={WORKOUT_COLOR} />
               <Text size="h2" fontWeight="bold" style={{ marginTop: 8 }}>
                 {workoutsThisWeek}
               </Text>
-              <Text style={styles.statLabel}>Workouts</Text>
+              <Text style={styles.statLabel}>Workouts (7d)</Text>
             </Section>
 
             <Section
@@ -352,15 +450,15 @@ export default function FitnessMenu({ navigation }: Props) {
                 { borderColor: isDarkmode ? "#262626" : "#f1f5f9" },
               ]}
             >
-              <Ionicons name="restaurant" size={24} color="#F97316" />
+              <Ionicons name="restaurant" size={24} color={MEAL_COLOR} />
               <Text size="h2" fontWeight="bold" style={{ marginTop: 8 }}>
                 {mealsToday}
               </Text>
-              <Text style={styles.statLabel}>Meals Logged</Text>
+              <Text style={styles.statLabel}>Meals Today</Text>
             </Section>
           </View>
 
-          {/* 3. NEW: Quick Hydration Widget */}
+          {/* 3) Hydration */}
           <Section
             style={[
               styles.card,
@@ -368,26 +466,35 @@ export default function FitnessMenu({ navigation }: Props) {
             ]}
           >
             <View style={styles.waterRow}>
-              <View>
+              <View style={{ flex: 1 }}>
                 <Text size="h4" fontWeight="bold">
-                  Stay Hydrated
+                  Quick Water
                 </Text>
                 <Text style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
-                  Quickly log 250ml of water
+                  {waterMlTodayLive}ml / {waterGoalMl}ml ({waterPct}%)
                 </Text>
+                <View style={[styles.progressBarBg, { marginTop: 10 }]}>
+                  <View
+                    style={[
+                      styles.progressBarFill,
+                      { width: `${waterPct}%`, backgroundColor: WATER_COLOR },
+                    ]}
+                  />
+                </View>
               </View>
+
               <Button
-                text={addingWater ? "..." : "+ Add"}
+                text={addingWater ? "..." : "+250ml"}
                 color={WATER_COLOR}
                 size="sm"
                 onPress={addWater}
                 disabled={addingWater}
-                leftContent={<Ionicons name="water" size={16} color="#fff" />}
+                leftContent={<Ionicons name="add" size={16} color="#fff" />}
               />
             </View>
           </Section>
 
-          {/* 4. NEW: BMI / Body Status (Only if data exists) */}
+          {/* 4) BMI */}
           {bmiData && (
             <Section
               style={[
@@ -408,7 +515,7 @@ export default function FitnessMenu({ navigation }: Props) {
               </View>
               <View style={styles.bmiRow}>
                 <View style={styles.bmiItem}>
-                  <Text style={styles.bmiLabel}>BMI Score</Text>
+                  <Text style={styles.bmiLabel}>BMI</Text>
                   <Text size="h2" fontWeight="bold">
                     {bmiData.score}
                   </Text>
@@ -425,7 +532,7 @@ export default function FitnessMenu({ navigation }: Props) {
             </Section>
           )}
 
-          {/* 5. Workout Plan Card */}
+          {/* 5) Plan */}
           <Section
             style={[
               styles.card,
@@ -442,7 +549,7 @@ export default function FitnessMenu({ navigation }: Props) {
                   <Ionicons
                     name="flag"
                     size={16}
-                    color={FITNESS_COLOR}
+                    color={GOAL_COLOR}
                     style={{ marginRight: 8 }}
                   />
                   <Text>{pref.goal}</Text>
@@ -451,7 +558,7 @@ export default function FitnessMenu({ navigation }: Props) {
                   <Ionicons
                     name="speedometer"
                     size={16}
-                    color={FITNESS_COLOR}
+                    color={DIFF_COLOR}
                     style={{ marginRight: 8 }}
                   />
                   <Text>{difficultyText}</Text>
@@ -460,7 +567,7 @@ export default function FitnessMenu({ navigation }: Props) {
                   <Ionicons
                     name="calendar"
                     size={16}
-                    color={FITNESS_COLOR}
+                    color={SCHED_COLOR}
                     style={{ marginRight: 8 }}
                   />
                   <Text>{daysLabel}</Text>
@@ -469,14 +576,14 @@ export default function FitnessMenu({ navigation }: Props) {
                 <Button
                   text="Start Session"
                   style={{ marginTop: 16 }}
-                  color={FITNESS_COLOR}
+                  color={WORKOUT_COLOR}
                   onPress={() => navigation.navigate("WorkoutSession")}
                 />
                 <Button
                   text="Edit Preference"
                   outline
                   style={{ marginTop: 8 }}
-                  color={FITNESS_COLOR}
+                  color={WORKOUT_COLOR}
                   onPress={() => navigation.navigate("WorkoutPreference")}
                 />
               </View>
@@ -493,14 +600,14 @@ export default function FitnessMenu({ navigation }: Props) {
                 </Text>
                 <Button
                   text="Create Plan"
-                  color={FITNESS_COLOR}
+                  color={WORKOUT_COLOR}
                   onPress={() => navigation.navigate("WorkoutPreference")}
                 />
               </View>
             )}
           </Section>
 
-          {/* 6. Other Actions */}
+          {/* 6) Actions */}
           <View style={styles.actionGrid}>
             <Button
               text="Log Meal"
@@ -524,26 +631,9 @@ export default function FitnessMenu({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  center: {
-    flex: 1,
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  scroll: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  card: {
-    borderRadius: 16,
-    marginBottom: 16,
-    padding: 16,
-    borderWidth: 1,
-  },
-  heroCard: {
-    backgroundColor: "#22C55E", // Green background
-    borderWidth: 0,
-  },
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  card: { borderRadius: 16, marginBottom: 16, padding: 16, borderWidth: 1 },
   heroHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -552,72 +642,49 @@ const styles = StyleSheet.create({
   streakBadge: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: "rgba(255,255,255,0.2)",
     paddingHorizontal: 8,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  heroFooter: {
-    marginTop: 20,
-  },
+  heroFooter: { marginTop: 20 },
+  pill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+  } as any,
   progressBarBg: {
     height: 6,
-    backgroundColor: "rgba(0,0,0,0.1)",
     borderRadius: 4,
     marginTop: 6,
     overflow: "hidden",
   },
-  progressBarFill: {
-    height: "100%",
-    backgroundColor: "#fff",
-    borderRadius: 4,
-  },
-  row: {
-    flexDirection: "row",
-    gap: 12,
-    marginBottom: 16,
-  } as any,
-  statCard: {
-    flex: 1,
-    marginBottom: 0,
-    alignItems: "flex-start",
-  },
-  statLabel: {
-    fontSize: 12,
-    opacity: 0.6,
-    marginTop: 4,
-  },
+  progressBarFill: { height: "100%", borderRadius: 4 },
+  row: { flexDirection: "row", gap: 12, marginBottom: 16 } as any,
+  statCard: { flex: 1, marginBottom: 0, alignItems: "flex-start" },
+  statLabel: { fontSize: 12, opacity: 0.6, marginTop: 4 },
   waterRow: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-  },
+    gap: 12,
+  } as any,
   bmiHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
     marginBottom: 12,
   },
-  bmiRow: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-  },
-  bmiItem: {
-    alignItems: "flex-start",
-  },
+  bmiRow: { flexDirection: "row", justifyContent: "space-between" },
+  bmiItem: { alignItems: "flex-start" },
   bmiLabel: {
     fontSize: 11,
     opacity: 0.6,
     marginBottom: 2,
     textTransform: "uppercase",
   },
-  planRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: 8,
-  },
-  actionGrid: {
-    flexDirection: "row",
-    marginBottom: 32,
-  } as any,
+  planRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
+  actionGrid: { flexDirection: "row", marginBottom: 32 } as any,
 });
