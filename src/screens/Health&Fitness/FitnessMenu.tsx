@@ -458,7 +458,7 @@ export default function FitnessMenu({ navigation }: Props) {
                 </View>
               </View>
               <Button
-                text={addingWater ? "..." : "+250ml"}
+                text={addingWater ? "..." : "250ml"}
                 color={WATER_COLOR}
                 size="sm"
                 onPress={addWater}
