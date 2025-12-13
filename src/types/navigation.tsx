@@ -39,6 +39,30 @@ export type MainStackParamList = {
   WeeklySummary: undefined;
   WorkoutPreference: undefined;
   WorkoutSession: undefined;
+  TaskAdd:
+    | { presetDate?: string; projectId?: string; teamId?: string }
+    | undefined;
+  TaskManagementMenu: undefined;
+  TeamManagement: undefined;
+  AIAnalytics:
+    | {
+        projects?: any[];
+        tasks?: any[];
+        metrics?: {
+          pendingCount: number;
+          dueTodayCount: number;
+          overdueCount: number;
+          urgentCount: number;
+          completedThisWeek: number;
+          plannedThisWeek: number;
+          efficiency: number;
+        };
+      }
+    | undefined;
+  TaskList: undefined;
+  TaskCalendar: undefined;
+  TaskChart: undefined;
+  TaskQRScanner: undefined;
 };
 
 export type AuthStackParamList = {

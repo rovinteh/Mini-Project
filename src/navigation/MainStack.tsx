@@ -1,6 +1,5 @@
 import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-
 import MainTabs from "./MainTabs";
 import MemoryFeed from "../screens/MemoryBook/MemoryFeed";
 import MemoryUpload from "../screens/MemoryBook/MemoryUpload";
@@ -20,6 +19,12 @@ import LogMeal from "../screens/Health&Fitness/LogMeal";
 import WeeklySummary from "../screens/Health&Fitness/WeeklySummary";
 import WorkoutPreference from "../screens/Health&Fitness/WorkoutPreference";
 import WorkoutSession from "../screens/Health&Fitness/WorkoutSession";
+import TaskManagementMenu from "../screens/TaskManagementModule.tsx/TaskManagementMenu";
+import TaskAdd from "../screens/TaskManagementModule.tsx/TaskAdd";
+import TaskList from "../screens/TaskManagementModule.tsx/TaskList";
+import TaskCalendar from "../screens/TaskManagementModule.tsx/TaskCalendar";
+import AIAnalytics from "../screens/TaskManagementModule.tsx/AIAnalytics";
+import TeamManagement from "../screens/TaskManagementModule.tsx/TeamManagement";
 
 const MainStack = createNativeStackNavigator();
 
@@ -58,6 +63,15 @@ const Main = () => {
         component={WorkoutPreference}
       />
       <MainStack.Screen name="WorkoutSession" component={WorkoutSession} />
+      <MainStack.Screen name="TaskAdd" component={TaskAdd} />
+      <MainStack.Screen name="TaskList" component={TaskList} />
+      <MainStack.Screen name="TaskCalendar" component={TaskCalendar} />
+      <MainStack.Screen name="TeamManagement" component={TeamManagement} />
+      <MainStack.Screen name="AIAnalytics" component={AIAnalytics} />
+      <MainStack.Screen
+        name="TaskManagementMenu"
+        component={TaskManagementMenu}
+      />
     </MainStack.Navigator>
   );
 };
