@@ -26,7 +26,10 @@ import {
   Timestamp,
   addDoc,
   serverTimestamp,
+<<<<<<< Updated upstream
   orderBy,
+=======
+>>>>>>> Stashed changes
 } from "firebase/firestore";
 
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
@@ -108,6 +111,14 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     }
   };
 
+<<<<<<< Updated upstream
+=======
+  // keep latest mood map for change detection
+  const moodsRef = useRef<Record<string, string>>({});
+  // prevent duplicate mood-change notifications
+  const lastMoodNotifyKeyRef = useRef<string>("");
+
+>>>>>>> Stashed changes
   // ---- load user display name ----
   useEffect(() => {
     if (!uid) return;
@@ -137,9 +148,13 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     const postsCol = collection(firestore, "posts");
     const qPosts = query(
       postsCol,
+<<<<<<< Updated upstream
       where("CreatedUser.CreatedUserId", "==", uid),
       where("isStory", "==", false),
       orderBy("createdAt", "desc")
+=======
+      where("CreatedUser.CreatedUserId", "==", uid)
+>>>>>>> Stashed changes
     );
 
     const unsub = onSnapshot(qPosts, (snap) => {
@@ -159,6 +174,77 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
     return () => unsub();
   }, [uid, firestore, currentMonthKey]);
+
+  // ✅ Notify user when TODAY mood emoji changes
+  // This listens only to today's mood value (independent of month page)
+  useEffect(() => {
+    if (!uid) return;
+
+    const todayKey = dateKeyFromDate(new Date());
+    const postsCol = collection(firestore, "posts");
+
+    // We query only posts of current user that already have mood for today
+    const qToday = query(
+      postsCol,
+      where("CreatedUser.CreatedUserId", "==", uid),
+      where("mood.date", "==", todayKey)
+    );
+
+    const unsub = onSnapshot(qToday, async (snap) => {
+      // Determine "today emoji" by majority from the docs in snapshot
+      const counts: Record<string, number> = {};
+      snap.forEach((ds) => {
+        const data: any = ds.data();
+        const emo = data?.mood?.emoji;
+        if (!emo) return;
+        counts[emo] = (counts[emo] || 0) + 1;
+      });
+
+      let bestEmoji: string | null = null;
+      let bestCount = 0;
+      Object.entries(counts).forEach(([emo, c]) => {
+        if (c > bestCount) {
+          bestCount = c;
+          bestEmoji = emo;
+        }
+      });
+
+      // ✅ if no emoji, stop (so bestEmoji becomes string below)
+      if (!bestEmoji) return;
+
+      const prevEmoji = moodsRef.current[todayKey];
+
+      // only notify if changed
+      if (bestEmoji !== prevEmoji) {
+        const notifyKey = `${todayKey}:${bestEmoji}`;
+
+        if (lastMoodNotifyKeyRef.current !== notifyKey) {
+          lastMoodNotifyKeyRef.current = notifyKey;
+
+          try {
+            await addDoc(collection(firestore, "notifications", uid, "items"), {
+              type: "mood",
+              text: `Your current mood is ${labelFromEmoji(
+                bestEmoji
+              )} ${bestEmoji}`,
+              fromUid: uid, // self
+              read: false,
+              delivered: false,
+              createdAt: serverTimestamp(),
+            });
+          } catch (e) {
+            console.log("Failed to create mood notification:", e);
+          }
+        }
+
+        // update local map so UI also stays consistent
+        moodsRef.current = { ...moodsRef.current, [todayKey]: bestEmoji };
+        setMoods((prev) => ({ ...prev, [todayKey]: bestEmoji }));
+      }
+    });
+
+    return () => unsub();
+  }, [uid, firestore]);
 
   // ---------- helper: score & category ----------
   const scoreFromLabel = (label?: string | null) => {
@@ -299,7 +385,11 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
         });
       });
 
+<<<<<<< Updated upstream
       // optional cleanup
+=======
+      // cleanup if needed
+>>>>>>> Stashed changes
       snap.forEach((ds) => {
         const data: any = ds.data();
         const m = data.mood;

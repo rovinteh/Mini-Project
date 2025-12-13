@@ -11,6 +11,10 @@ import {
   updateDoc,
 } from "firebase/firestore";
 
+<<<<<<< Updated upstream
+=======
+// ✅ Fix warning: shouldShowAlert deprecated
+>>>>>>> Stashed changes
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -49,6 +53,10 @@ function titleFromType(type?: string) {
 function startFirestoreNotificationListener(uid: string) {
   const db = getFirestore();
 
+<<<<<<< Updated upstream
+=======
+  // Only listen unread
+>>>>>>> Stashed changes
   const qUnread = query(
     collection(db, "notifications", uid, "items"),
     where("read", "==", false)
@@ -58,7 +66,11 @@ function startFirestoreNotificationListener(uid: string) {
     for (const d of snap.docs) {
       const data: any = d.data();
 
+<<<<<<< Updated upstream
       // prevent duplicate popups
+=======
+      // ✅ prevent duplicate popups
+>>>>>>> Stashed changes
       if (data?.delivered === true) continue;
 
       try {
@@ -71,13 +83,21 @@ function startFirestoreNotificationListener(uid: string) {
               notifDocId: d.id,
             },
           },
+<<<<<<< Updated upstream
           trigger: null,
+=======
+          trigger: null, // show immediately
+>>>>>>> Stashed changes
         });
       } catch (e) {
         console.log("scheduleNotificationAsync failed:", e);
       }
 
+<<<<<<< Updated upstream
       // mark delivered (NOT read)
+=======
+      // ✅ mark delivered (NOT read)
+>>>>>>> Stashed changes
       try {
         await updateDoc(doc(db, "notifications", uid, "items", d.id), {
           delivered: true,
@@ -91,9 +111,19 @@ function startFirestoreNotificationListener(uid: string) {
 
 export function startNotificationListener() {
   const auth = getAuth();
+<<<<<<< Updated upstream
   ensureNotificationPermission();
 
   const unsubAuth = onAuthStateChanged(auth, (user) => {
+=======
+
+  // ask permission once
+  ensureNotificationPermission();
+
+  // attach Firestore listener after login
+  const unsubAuth = onAuthStateChanged(auth, (user) => {
+    // clean previous
+>>>>>>> Stashed changes
     if (unsubscribeNotifSnap) {
       unsubscribeNotifSnap();
       unsubscribeNotifSnap = null;
@@ -104,6 +134,10 @@ export function startNotificationListener() {
     }
   });
 
+<<<<<<< Updated upstream
+=======
+  // cleanup function
+>>>>>>> Stashed changes
   return () => {
     if (unsubscribeNotifSnap) unsubscribeNotifSnap();
     unsubAuth();
