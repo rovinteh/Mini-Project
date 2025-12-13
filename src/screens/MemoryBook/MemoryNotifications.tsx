@@ -1,5 +1,4 @@
 // src/screens/MemoryBook/MemoryNotifications.tsx
-<<<<<<< Updated upstream
 import React, { useEffect, useMemo, useState } from "react";
 import { View, TouchableOpacity, ScrollView } from "react-native";
 import {
@@ -15,17 +14,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 
-=======
-import React, { useEffect, useState } from "react";
-import { View, TouchableOpacity, FlatList } from "react-native";
-import { Layout, TopNav, Text, useTheme, themeColor } from "react-native-rapi-ui";
-import { Ionicons } from "@expo/vector-icons";
->>>>>>> Stashed changes
 import { getAuth } from "firebase/auth";
 import {
   getFirestore,
   collection,
-<<<<<<< Updated upstream
   onSnapshot,
   orderBy,
   query,
@@ -39,22 +31,6 @@ type Props = NativeStackScreenProps<MainStackParamList, "MemoryNotifications">;
 type NotiItem = {
   id: string;
   type?: "message" | "follow" | "mood" | string;
-=======
-  query,
-  orderBy,
-  onSnapshot,
-  updateDoc,
-  doc,
-} from "firebase/firestore";
-import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import { MainStackParamList } from "../../types/navigation";
-
-type Props = NativeStackScreenProps<MainStackParamList, "MemoryNotifications">;
-
-type NotifItem = {
-  id: string;
-  type?: "message" | "follow" | string;
->>>>>>> Stashed changes
   text?: string;
   fromUid?: string;
   chatId?: string;
@@ -63,7 +39,6 @@ type NotifItem = {
 };
 
 export default function MemoryNotifications({ navigation }: Props) {
-<<<<<<< Updated upstream
   const { isDarkmode, setTheme } = useTheme();
   const auth = getAuth();
   const firestore = getFirestore();
@@ -79,31 +54,13 @@ export default function MemoryNotifications({ navigation }: Props) {
     if (!uid) return;
 
     const qNoti = query(
-=======
-  const { isDarkmode } = useTheme();
-  const auth = getAuth();
-  const firestore = getFirestore();
-  const [items, setItems] = useState<NotifItem[]>([]);
-
-  useEffect(() => {
-    const uid = auth.currentUser?.uid;
-    if (!uid) {
-      setItems([]);
-      return;
-    }
-
-    const q = query(
->>>>>>> Stashed changes
       collection(firestore, "notifications", uid, "items"),
       orderBy("createdAt", "desc")
     );
 
-<<<<<<< Updated upstream
     const unsub = onSnapshot(qNoti, (snap) => {
       const list: NotiItem[] = [];
-      snap.forEach((d) => {
-        list.push({ id: d.id, ...(d.data() as any) });
-      });
+      snap.forEach((d) => list.push({ id: d.id, ...(d.data() as any) }));
       setItems(list);
     });
 
@@ -131,7 +88,6 @@ export default function MemoryNotifications({ navigation }: Props) {
   const openNoti = async (n: NotiItem) => {
     if (!uid) return;
 
-    // mark read
     try {
       if (n.read === false) {
         await updateDoc(doc(firestore, "notifications", uid, "items", n.id), {
@@ -142,14 +98,13 @@ export default function MemoryNotifications({ navigation }: Props) {
       console.log("Failed to mark read:", e);
     }
 
-    // basic navigation by type (customize as you want)
     if (n.type === "mood") {
       navigation.navigate("MemoryMoodCalendar");
       return;
     }
 
+    // If your MemoryChat route uses params, adjust here.
     if (n.type === "message" && n.chatId) {
-      // If your chat screen route is different, change it here
       navigation.navigate("MemoryChat" as any, { chatId: n.chatId } as any);
       return;
     }
@@ -193,74 +148,10 @@ export default function MemoryNotifications({ navigation }: Props) {
       </Layout>
     );
   }
-=======
-    const unsub = onSnapshot(q, async (snap) => {
-      const arr: NotifItem[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as any),
-      }));
-      setItems(arr);
-
-      // ✅ mark all unread as read (so bell red dot disappears)
-      for (const d of snap.docs) {
-        const data: any = d.data();
-        if (data?.read === false) {
-          await updateDoc(
-            doc(firestore, "notifications", uid, "items", d.id),
-            { read: true }
-          );
-        }
-      }
-    });
-
-    return () => unsub();
-  }, []);
-
-  const primaryTextColor = isDarkmode ? themeColor.white100 : themeColor.dark;
-
-  const renderRow = ({ item }: { item: NotifItem }) => {
-    const iconName =
-      item.type === "message"
-        ? "chatbubble-ellipses-outline"
-        : item.type === "follow"
-        ? "person-add-outline"
-        : "notifications-outline";
-
-    return (
-      <TouchableOpacity
-        style={{
-          padding: 14,
-          borderBottomWidth: 1,
-          borderColor: isDarkmode ? "#222" : "#eee",
-          flexDirection: "row",
-          alignItems: "center",
-        }}
-        activeOpacity={0.8}
-      >
-        <Ionicons
-          name={iconName as any}
-          size={18}
-          color={isDarkmode ? themeColor.white100 : themeColor.dark}
-          style={{ marginRight: 10 }}
-        />
-
-        <View style={{ flex: 1 }}>
-          <Text style={{ color: primaryTextColor }}>
-            {item.text || "New notification"}
-          </Text>
-          <Text style={{ fontSize: 11, color: "#888", marginTop: 4 }}>
-            {item.type || "notification"}
-          </Text>
-        </View>
-      </TouchableOpacity>
-    );
-  };
->>>>>>> Stashed changes
 
   return (
     <Layout>
       <TopNav
-<<<<<<< Updated upstream
         middleContent={
           <Text>
             Notifications{unreadCount > 0 ? ` (${unreadCount})` : ""}
@@ -353,31 +244,6 @@ export default function MemoryNotifications({ navigation }: Props) {
           )}
         </View>
       </ScrollView>
-=======
-        middleContent="Notifications"
-        leftContent={
-          <Ionicons
-            name="chevron-back"
-            size={22}
-            color={isDarkmode ? themeColor.white : themeColor.dark}
-          />
-        }
-        leftAction={() => navigation.goBack()}
-      />
-
-      <FlatList
-        data={items}
-        keyExtractor={(item) => item.id}
-        renderItem={renderRow}
-        ListEmptyComponent={
-          <View style={{ padding: 18 }}>
-            <Text style={{ color: isDarkmode ? "#aaa" : "#666" }}>
-              No notifications yet.
-            </Text>
-          </View>
-        }
-      />
->>>>>>> Stashed changes
     </Layout>
   );
 }

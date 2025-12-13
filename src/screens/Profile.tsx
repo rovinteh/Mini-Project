@@ -25,11 +25,7 @@ import QRCode from "react-native-qrcode-svg";
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Contacts from "expo-contacts";
 
-<<<<<<< Updated upstream
 import { signOut, getAuth, updateProfile as updateAuthProfile, User } from "firebase/auth";
-=======
-import { getAuth, updateProfile as updateAuthProfile, User } from "firebase/auth";
->>>>>>> Stashed changes
 import {
   getFirestore,
   doc,
@@ -852,7 +848,6 @@ export default function Profile({ navigation }: Props) {
             </View>
           )}
         />
-<<<<<<< Updated upstream
         {/* Logout button at bottom */}
         <View style={{ marginTop: 20 }}>
           <Button
@@ -870,8 +865,6 @@ export default function Profile({ navigation }: Props) {
             }}
           />
         </View>
-=======
->>>>>>> Stashed changes
       </Layout>
     </KeyboardAvoidingView>
   );
