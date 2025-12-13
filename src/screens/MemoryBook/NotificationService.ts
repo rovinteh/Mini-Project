@@ -11,7 +11,6 @@ import {
   updateDoc,
 } from "firebase/firestore";
 
-// ✅ Fix warning: shouldShowAlert deprecated
 Notifications.setNotificationHandler({
   handleNotification: async () => ({
     shouldShowBanner: true,
@@ -50,7 +49,6 @@ function titleFromType(type?: string) {
 function startFirestoreNotificationListener(uid: string) {
   const db = getFirestore();
 
-  // Only listen unread
   const qUnread = query(
     collection(db, "notifications", uid, "items"),
     where("read", "==", false)
@@ -60,7 +58,7 @@ function startFirestoreNotificationListener(uid: string) {
     for (const d of snap.docs) {
       const data: any = d.data();
 
-      // ✅ prevent duplicate popups
+      // prevent duplicate popups
       if (data?.delivered === true) continue;
 
       try {
@@ -73,13 +71,13 @@ function startFirestoreNotificationListener(uid: string) {
               notifDocId: d.id,
             },
           },
-          trigger: null, // show immediately
+          trigger: null,
         });
       } catch (e) {
         console.log("scheduleNotificationAsync failed:", e);
       }
 
-      // ✅ mark delivered (NOT read)
+      // mark delivered (NOT read)
       try {
         await updateDoc(doc(db, "notifications", uid, "items", d.id), {
           delivered: true,
@@ -93,13 +91,9 @@ function startFirestoreNotificationListener(uid: string) {
 
 export function startNotificationListener() {
   const auth = getAuth();
-
-  // ask permission once
   ensureNotificationPermission();
 
-  // attach Firestore listener after login
   const unsubAuth = onAuthStateChanged(auth, (user) => {
-    // clean previous
     if (unsubscribeNotifSnap) {
       unsubscribeNotifSnap();
       unsubscribeNotifSnap = null;
@@ -110,7 +104,6 @@ export function startNotificationListener() {
     }
   });
 
-  // cleanup function
   return () => {
     if (unsubscribeNotifSnap) unsubscribeNotifSnap();
     unsubAuth();

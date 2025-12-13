@@ -21,10 +21,11 @@ import {
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import QRCode from "react-native-qrcode-svg";
+
 import { CameraView, useCameraPermissions } from "expo-camera";
 import * as Contacts from "expo-contacts";
 
-import { getAuth, updateProfile as updateAuthProfile, User } from "firebase/auth";
+import { signOut, getAuth, updateProfile as updateAuthProfile, User } from "firebase/auth";
 import {
   getFirestore,
   doc,
@@ -847,6 +848,23 @@ export default function Profile({ navigation }: Props) {
             </View>
           )}
         />
+        {/* Logout button at bottom */}
+        <View style={{ marginTop: 20 }}>
+          <Button
+            text="Logout"
+            status="danger"
+            leftContent={
+              <Ionicons
+                name="log-out-outline"
+                size={18}
+                color={themeColor.white100}
+              />
+            }
+            onPress={() => {
+              signOut(auth);
+            }}
+          />
+        </View>
       </Layout>
     </KeyboardAvoidingView>
   );

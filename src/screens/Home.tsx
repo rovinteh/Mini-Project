@@ -276,23 +276,7 @@ export default function Home({ navigation }: Props) {
           </View>
         </View>
 
-        {/* Logout button at bottom */}
-        <View style={{ marginTop: 20 }}>
-          <Button
-            text="Logout"
-            status="danger"
-            leftContent={
-              <Ionicons
-                name="log-out-outline"
-                size={18}
-                color={themeColor.white100}
-              />
-            }
-            onPress={() => {
-              signOut(auth);
-            }}
-          />
-        </View>
+        
       </ScrollView>
     </Layout>
   );

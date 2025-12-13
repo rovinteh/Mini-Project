@@ -301,6 +301,88 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 bezier
                 style={{ borderRadius: 12, marginVertical: 8 }}
               />
+          {/* Workouts per day chart */}
+          <Section style={styles.card}>
+            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
+              Workouts per day
+            </Text>
+            <BarChart
+              style={{ borderRadius: 12 }}
+              data={{
+                labels,
+                datasets: [{ data: workoutsData }],
+              }}
+              width={screenWidth - 32}
+              height={220}
+              fromZero
+              yAxisLabel="" // ✅ add
+              yAxisSuffix="" // ✅ add
+              chartConfig={chartConfigBase}
+              showBarTops={true}
+              withInnerLines={true}
+            />
+          </Section>
+
+          {/* Workout minutes chart */}
+          <Section style={styles.card}>
+            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
+              Workout minutes per day
+            </Text>
+            <BarChart
+              style={{ borderRadius: 12 }}
+              data={{
+                labels,
+                datasets: [{ data: workoutMinutesData }],
+              }}
+              width={screenWidth - 32}
+              height={220}
+              fromZero
+              yAxisLabel="" // ✅ add
+              yAxisSuffix="" // ✅ add
+              chartConfig={{
+                ...chartConfigBase,
+                color: (opacity = 1) => `rgba(52, 211, 153, ${opacity})`, // green-ish
+              }}
+              showBarTops={true}
+              withInnerLines={true}
+            />
+          </Section>
+
+          {/* Meals per day chart */}
+          <Section style={styles.card}>
+            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
+              Meals logged per day
+            </Text>
+            <BarChart
+              style={{ borderRadius: 12 }}
+              data={{
+                labels,
+                datasets: [{ data: mealsData }],
+              }}
+              width={screenWidth - 32}
+              height={220}
+              fromZero
+              yAxisLabel="" // ✅ add
+              yAxisSuffix="" // ✅ add
+              chartConfig={{
+                ...chartConfigBase,
+                color: (opacity = 1) => `rgba(251, 146, 60, ${opacity})`, // orange-ish
+              }}
+              showBarTops={true}
+              withInnerLines={true}
+            />
+          </Section>
+
+          {/* Simple interpretation */}
+          <Section style={styles.card}>
+            <Text size="lg" fontWeight="bold" style={{ marginBottom: 6 }}>
+              Weekly insights
+            </Text>
+            {totalWorkouts === 0 && (
+              <Text style={styles.cardDesc}>
+                No completed workouts recorded this week. Try starting a short
+                session to build the habit.
+              </Text>
             )}
           </Section>
 
