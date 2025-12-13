@@ -531,6 +531,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                     >
                       <Text
                         style={{
+                          fontSize: 10, // Smaller Font
                           color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
                         }}
                         fontWeight={active ? "bold" : "normal"}
@@ -606,9 +607,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(150,150,150,0.1)",
   },
   dayChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36, // Smaller circle
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,
