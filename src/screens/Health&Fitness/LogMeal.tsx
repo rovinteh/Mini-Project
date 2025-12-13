@@ -1,5 +1,4 @@
-// app/modules/fitness/MealLogAdd.tsx
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Platform,
@@ -7,6 +6,9 @@ import {
   Image,
   StyleSheet,
   FlatList,
+  TouchableOpacity,
+  ScrollView,
+  Alert,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -18,6 +20,7 @@ import {
   themeColor,
   TextInput,
   Button,
+  Section,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { getAuth } from "firebase/auth";
@@ -43,48 +46,66 @@ type MealEntry = {
   category: string;
   notes: string;
   photoURL?: string | null;
-  mealTime?: any;
+  mealTimeClient?: any;
 };
 
+const FITNESS_COLOR = "#22C55E";
+
 const MEAL_TYPES = [
-  { label: "Breakfast", value: "breakfast", icon: "sunny" },
-  { label: "Lunch", value: "lunch", icon: "restaurant" },
-  { label: "Dinner", value: "dinner", icon: "moon" },
-  { label: "Snack", value: "snack", icon: "fast-food" },
+  { label: "Breakfast", value: "breakfast", icon: "sunny", color: "#F59E0B" },
+  { label: "Lunch", value: "lunch", icon: "restaurant", color: "#EF4444" },
+  { label: "Dinner", value: "dinner", icon: "moon", color: "#6366F1" },
+  { label: "Snack", value: "snack", icon: "cafe", color: "#10B981" },
+] as const;
+
+// Common food items for quick tagging
+const QUICK_TAGS = [
+  "Rice",
+  "Chicken",
+  "Noodles",
+  "Egg",
+  "Fish",
+  "Vegetables",
+  "Bread",
+  "Coffee",
+  "Tea",
+  "Fruits",
 ];
 
-const CATEGORIES = [
-  { label: "Home-cooked", value: "home-cooked" },
-  { label: "Restaurant", value: "restaurant" },
-  { label: "Fast food", value: "fast-food" },
-  { label: "Beverage / Dessert", value: "beverage" },
-];
+function startOfDay(d: Date) {
+  return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
+}
 
-export default function MealLogAddScreen({ navigation }: Props) {
+export default function LogMealScreen({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
 
+  // --- Form State ---
   const [image, setImage] = useState<string | null>(null);
-  const [mealType, setMealType] = useState("breakfast");
-  const [category, setCategory] = useState("home-cooked");
+  const [mealType, setMealType] = useState<string>("breakfast");
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
+  // --- Data State ---
   const [todayMeals, setTodayMeals] = useState<MealEntry[]>([]);
   const [loadingMeals, setLoadingMeals] = useState(true);
 
-  // Ask for gallery permission once
+  // --- Permissions ---
   useEffect(() => {
-    if (Platform.OS === "web") return;
-    (async () => {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        alert("Permission to access gallery is required for meal photos.");
-      }
-    })();
+    if (Platform.OS !== "web") {
+      (async () => {
+        const { status } =
+          await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert(
+            "Permission Required",
+            "We need access to your photos to attach meal pictures."
+          );
+        }
+      })();
+    }
   }, []);
 
-  // Listen to today's meals for current user
+  // --- Load Today's Meals ---
   useEffect(() => {
     const auth = getAuth();
     const user = auth.currentUser;
@@ -95,22 +116,14 @@ export default function MealLogAddScreen({ navigation }: Props) {
 
     const db = getFirestore();
     const now = new Date();
-    const startOfDay = new Date(
-      now.getFullYear(),
-      now.getMonth(),
-      now.getDate(),
-      0,
-      0,
-      0,
-      0
-    );
-    const startTs = Timestamp.fromDate(startOfDay);
+    const startTs = Timestamp.fromDate(startOfDay(now));
 
+    // Listen for real-time updates
     const q = query(
       collection(db, "MealEntry"),
       where("userId", "==", user.uid),
-      where("mealTime", ">=", startTs),
-      orderBy("mealTime", "desc")
+      where("mealTimeClient", ">=", startTs),
+      orderBy("mealTimeClient", "desc")
     );
 
     const unsub = onSnapshot(
@@ -118,14 +131,14 @@ export default function MealLogAddScreen({ navigation }: Props) {
       (snap) => {
         const list: MealEntry[] = [];
         snap.forEach((docSnap) => {
-          const data = docSnap.data() as any;
+          const data = docSnap.data();
           list.push({
             id: docSnap.id,
             mealType: data.mealType,
-            category: data.category,
+            category: data.category || "General",
             notes: data.notes,
             photoURL: data.photoURL,
-            mealTime: data.mealTime,
+            mealTimeClient: data.mealTimeClient,
           });
         });
         setTodayMeals(list);
@@ -140,12 +153,13 @@ export default function MealLogAddScreen({ navigation }: Props) {
     return () => unsub();
   }, []);
 
+  // --- Actions ---
   const pickImage = async () => {
     const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ["images"],
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: [4, 3],
-      quality: 1,
+      quality: 0.8, // Compress slightly for speed
     });
 
     if (!result.canceled) {
@@ -153,120 +167,163 @@ export default function MealLogAddScreen({ navigation }: Props) {
     }
   };
 
+  const addTag = (tag: string) => {
+    setNotes((prev) => (prev ? `${prev}, ${tag}` : tag));
+  };
+
   const saveMeal = async () => {
     const auth = getAuth();
     const user = auth.currentUser;
     if (!user) {
-      alert("Please login first.");
+      Alert.alert("Error", "Please login first.");
       return;
     }
 
     if (!notes.trim() && !image) {
-      alert("Please enter some notes or attach a photo.");
+      Alert.alert("Empty Entry", "Please add some notes or a photo.");
       return;
     }
 
     setSaving(true);
     const db = getFirestore();
     const storage = getStorage();
-
     let photoURL: string | null = null;
 
     try {
+      // 1. Upload Image if exists
       if (image) {
         const resp = await fetch(image);
         const blob = await resp.blob();
-        const fileName =
-          "meal_" + Date.now().toString(16) + "_" + Math.random().toString(16);
-        const storageRef = ref(storage, "MealEntries/" + fileName);
+        const fileName = `meals/${user.uid}/${Date.now()}.jpg`;
+        const storageRef = ref(storage, fileName);
         const snap = await uploadBytes(storageRef, blob);
         photoURL = await getDownloadURL(snap.ref);
       }
 
+      // 2. Save Document
+      const now = new Date();
       await addDoc(collection(db, "MealEntry"), {
         userId: user.uid,
         mealType,
-        category,
+        category: "home-cooked", // Defaulting for simplicity, or add selector if needed
         notes: notes.trim(),
         photoURL,
+        mealTimeClient: Timestamp.fromDate(now),
+        createdAtClient: Timestamp.fromDate(now),
         mealTime: serverTimestamp(),
         createdAt: serverTimestamp(),
       });
 
-      // Reset form but stay on page
+      // 3. Reset Form
       setImage(null);
       setNotes("");
-      setMealType("breakfast");
-      setCategory("home-cooked");
-      alert("Meal entry saved.");
+      Alert.alert("Saved", "Meal entry added to your log.");
     } catch (err: any) {
-      alert("Error saving meal: " + err.message);
+      Alert.alert("Error", err.message);
     } finally {
       setSaving(false);
     }
   };
 
+  // --- Render Helpers ---
   const formatTime = (ts?: any) => {
-    if (!ts || !ts.toDate) return "-";
-    const d: Date = ts.toDate();
-    return d.toLocaleTimeString("en-MY", {
-      hour: "2-digit",
-      minute: "2-digit",
-    });
+    if (!ts?.toDate) return "";
+    return ts
+      .toDate()
+      .toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
   };
 
-  const renderMealItem = ({ item }: { item: MealEntry }) => {
-    const mealMeta = MEAL_TYPES.find((m) => m.value === item.mealType);
+  const renderTimelineItem = ({
+    item,
+    index,
+  }: {
+    item: MealEntry;
+    index: number;
+  }) => {
+    const meta = MEAL_TYPES.find((m) => m.value === item.mealType);
+    const isLast = index === todayMeals.length - 1;
+
     return (
-      <View
-        style={[
-          styles.mealCard,
-          {
-            backgroundColor: isDarkmode ? "#111827" : "#f9fafb",
-            borderColor: isDarkmode ? "#1f2937" : "#e5e7eb",
-          },
-        ]}
-      >
-        <View style={{ flexDirection: "row", alignItems: "center" }}>
+      <View style={styles.timelineRow}>
+        {/* Left Column: Time & Line */}
+        <View style={styles.timelineLeft}>
+          <Text style={styles.timeText}>{formatTime(item.mealTimeClient)}</Text>
           <View
             style={[
-              styles.mealIcon,
-              { backgroundColor: isDarkmode ? "#1f2937" : "#eef2ff" },
+              styles.timelineDot,
+              { backgroundColor: meta?.color || "#ccc" },
             ]}
-          >
-            <Ionicons
-              name={(mealMeta?.icon as any) || "fast-food"}
-              size={18}
-              color={themeColor.primary}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text fontWeight="bold">
-              {mealMeta?.label || item.mealType} · {item.category}
-            </Text>
-            <Text style={{ fontSize: 11, opacity: 0.7 }}>
-              {formatTime(item.mealTime)}
-            </Text>
-          </View>
-          {item.photoURL ? (
-            <Image
-              source={{ uri: item.photoURL }}
-              style={{ width: 40, height: 40, borderRadius: 8, marginLeft: 8 }}
-            />
-          ) : null}
+          />
+          {!isLast && <View style={styles.timelineLine} />}
         </View>
-        {item.notes ? (
-          <Text style={{ marginTop: 4, fontSize: 12 }}>{item.notes}</Text>
-        ) : null}
+
+        {/* Right Column: Card */}
+        <View
+          style={[
+            styles.timelineCard,
+            {
+              backgroundColor: isDarkmode ? "#1F2937" : "#fff",
+              borderColor: isDarkmode ? "#374151" : "#e5e7eb",
+            },
+          ]}
+        >
+          <View
+            style={{
+              flexDirection: "row",
+              justifyContent: "space-between",
+              alignItems: "flex-start",
+            }}
+          >
+            <View style={{ flex: 1 }}>
+              <Text
+                fontWeight="bold"
+                style={{ textTransform: "capitalize", color: meta?.color }}
+              >
+                {item.mealType}
+              </Text>
+              {item.notes ? (
+                <Text style={{ marginTop: 4, opacity: 0.8, fontSize: 13 }}>
+                  {item.notes}
+                </Text>
+              ) : (
+                <Text
+                  style={{
+                    marginTop: 4,
+                    opacity: 0.5,
+                    fontSize: 13,
+                    fontStyle: "italic",
+                  }}
+                >
+                  No notes added.
+                </Text>
+              )}
+            </View>
+
+            {/* Thumbnail */}
+            {item.photoURL && (
+              <TouchableOpacity
+                onPress={() => Alert.alert("Photo", item.notes || "Meal Photo")}
+              >
+                <Image
+                  source={{ uri: item.photoURL }}
+                  style={styles.thumbnail}
+                />
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
       </View>
     );
   };
 
   return (
-    <KeyboardAvoidingView behavior="height" style={{ flex: 1 }}>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === "ios" ? "padding" : "height"}
+      style={{ flex: 1 }}
+    >
       <Layout>
         <TopNav
-          middleContent="Log Meal Entry"
+          middleContent="Log Meal"
           leftContent={
             <Ionicons
               name="chevron-back"
@@ -286,111 +343,167 @@ export default function MealLogAddScreen({ navigation }: Props) {
         />
 
         <View style={styles.container}>
-          {/* New meal form */}
-          <View style={styles.section}>
+          {/* --- SECTION 1: VISUAL SELECTOR --- */}
+          <View style={{ paddingHorizontal: 16, marginTop: 10 }}>
             <Text size="h4" fontWeight="bold">
-              Add a new meal
+              What did you eat?
             </Text>
-
-            {/* Meal type chips */}
-            <Text style={{ marginTop: 12, fontWeight: "600" }}>Meal type</Text>
-            <View style={styles.chipRow}>
+            <View style={styles.gridContainer}>
               {MEAL_TYPES.map((m) => {
                 const active = mealType === m.value;
                 return (
-                  <Button
+                  <TouchableOpacity
                     key={m.value}
-                    text={m.label}
-                    leftContent={
-                      <Ionicons
-                        name={m.icon as any}
-                        size={16}
-                        color={active ? "#fff" : themeColor.primary}
-                      />
-                    }
-                    outline={!active}
-                    style={styles.chipButton}
-                    textStyle={{
-                      fontSize: 12,
-                    }}
                     onPress={() => setMealType(m.value)}
-                  />
+                    style={[
+                      styles.gridButton,
+                      {
+                        backgroundColor: active
+                          ? m.color
+                          : isDarkmode
+                          ? "#1f2937"
+                          : "#f9fafb",
+                        borderColor: active
+                          ? "transparent"
+                          : isDarkmode
+                          ? "#374151"
+                          : "#e5e7eb",
+                      },
+                    ]}
+                  >
+                    <Ionicons
+                      name={m.icon as any}
+                      size={24}
+                      color={active ? "#fff" : m.color}
+                    />
+                    <Text
+                      style={{
+                        marginTop: 8,
+                        color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
+                        fontWeight: active ? "bold" : "normal",
+                      }}
+                    >
+                      {m.label}
+                    </Text>
+                  </TouchableOpacity>
                 );
               })}
             </View>
+          </View>
 
-            {/* Category chips */}
-            <Text style={{ marginTop: 12, fontWeight: "600" }}>Category</Text>
-            <View style={styles.chipRow}>
-              {CATEGORIES.map((c) => {
-                const active = category === c.value;
-                return (
-                  <Button
-                    key={c.value}
-                    text={c.label}
-                    outline={!active}
-                    style={styles.chipButton}
-                    textStyle={{ fontSize: 12 }}
-                    onPress={() => setCategory(c.value)}
-                  />
-                );
-              })}
-            </View>
-
-            {/* Notes */}
-            <Text style={{ marginTop: 12, fontWeight: "600" }}>Notes</Text>
+          {/* --- SECTION 2: INPUT & TAGS --- */}
+          <View style={{ paddingHorizontal: 16, marginTop: 16 }}>
+            <Text fontWeight="bold" style={{ marginBottom: 8 }}>
+              Description
+            </Text>
             <TextInput
-              containerStyle={{ marginTop: 8 }}
-              placeholder="e.g. Nasi lemak with fried chicken, shared drink"
+              placeholder="e.g. Nasi Lemak, Apple, Coffee..."
               value={notes}
               onChangeText={setNotes}
               multiline
+              numberOfLines={2}
             />
 
-            {/* Photo */}
-            <View style={{ marginTop: 12 }}>
-              <Button text="Attach photo (optional)" onPress={pickImage} />
-              {image && (
-                <Image
-                  source={{ uri: image }}
-                  style={styles.previewImage}
-                  resizeMode="cover"
+            {/* Horizontal Tags Scroll */}
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              style={{ marginTop: 10, marginBottom: 4 }}
+            >
+              {QUICK_TAGS.map((tag) => (
+                <TouchableOpacity
+                  key={tag}
+                  onPress={() => addTag(tag)}
+                  style={[
+                    styles.tagChip,
+                    { backgroundColor: isDarkmode ? "#374151" : "#eff6ff" },
+                  ]}
+                >
+                  <Text
+                    size="sm"
+                    style={{ color: isDarkmode ? "#fff" : "#2563eb" }}
+                  >
+                    + {tag}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+
+            {/* Photo Button */}
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "center",
+                marginTop: 12,
+                justifyContent: "space-between",
+              }}
+            >
+              <TouchableOpacity
+                onPress={pickImage}
+                style={{ flexDirection: "row", alignItems: "center" }}
+              >
+                <Ionicons
+                  name="camera"
+                  size={20}
+                  color={FITNESS_COLOR}
+                  style={{ marginRight: 6 }}
                 />
+                <Text style={{ color: FITNESS_COLOR, fontWeight: "600" }}>
+                  {image ? "Change Photo" : "Add Photo"}
+                </Text>
+              </TouchableOpacity>
+
+              {image && (
+                <View style={{ flexDirection: "row", alignItems: "center" }}>
+                  <Image
+                    source={{ uri: image }}
+                    style={{
+                      width: 30,
+                      height: 30,
+                      borderRadius: 4,
+                      marginRight: 8,
+                    }}
+                  />
+                  <TouchableOpacity onPress={() => setImage(null)}>
+                    <Ionicons name="close-circle" size={20} color="gray" />
+                  </TouchableOpacity>
+                </View>
               )}
             </View>
 
             <Button
-              text={saving ? "Saving..." : "Save Meal"}
+              text={saving ? "Saving..." : "Save Log"}
               onPress={saveMeal}
               style={{ marginTop: 16 }}
               disabled={saving}
+              color={FITNESS_COLOR}
             />
           </View>
 
-          {/* Divider */}
-          <View
-            style={{ height: 1, backgroundColor: "#e5e7eb", marginVertical: 8 }}
-          />
+          <View style={styles.divider} />
 
-          {/* Today history */}
-          <View style={styles.section}>
-            <Text size="h4" fontWeight="bold">
-              Today&apos;s meals ({todayMeals.length})
+          {/* --- SECTION 3: TIMELINE --- */}
+          <View style={{ flex: 1, paddingHorizontal: 16 }}>
+            <Text size="h4" fontWeight="bold" style={{ marginBottom: 12 }}>
+              Today's History
             </Text>
+
             {loadingMeals ? (
-              <Text style={{ marginTop: 8, opacity: 0.7 }}>
-                Loading your meals...
-              </Text>
+              <Text style={{ opacity: 0.6 }}>Loading history...</Text>
             ) : todayMeals.length === 0 ? (
-              <Text style={{ marginTop: 8, opacity: 0.7 }}>
-                No meals logged yet today. Start by adding one above.
-              </Text>
+              <View
+                style={{ alignItems: "center", marginTop: 20, opacity: 0.5 }}
+              >
+                <Ionicons name="fast-food-outline" size={40} color="gray" />
+                <Text style={{ marginTop: 8 }}>No meals logged today yet.</Text>
+              </View>
             ) : (
               <FlatList
-                style={{ marginTop: 8 }}
                 data={todayMeals}
                 keyExtractor={(item) => item.id}
-                renderItem={renderMealItem}
+                renderItem={renderTimelineItem}
+                showsVerticalScrollIndicator={false}
+                contentContainerStyle={{ paddingBottom: 20 }}
               />
             )}
           </View>
@@ -401,45 +514,75 @@ export default function MealLogAddScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingBottom: 16,
-  },
-  section: {
-    marginTop: 12,
-  },
-  chipRow: {
+  container: { flex: 1, backgroundColor: "transparent" },
+  gridContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginTop: 8,
+    gap: 10,
+    marginTop: 10,
   },
-  chipButton: {
-    marginRight: 6,
-    marginBottom: 6,
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    height: 32,
-    borderRadius: 999,
-  },
-  previewImage: {
-    width: "100%",
-    height: 150,
+  gridButton: {
+    width: "48%", // Approx 2 columns
+    paddingVertical: 16,
     borderRadius: 12,
-    marginTop: 8,
-  },
-  mealCard: {
-    borderWidth: 1,
-    borderRadius: 12,
-    padding: 10,
-    marginBottom: 8,
-  },
-  mealIcon: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
     alignItems: "center",
     justifyContent: "center",
+    borderWidth: 1,
+  },
+  tagChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
     marginRight: 8,
+  },
+  divider: {
+    height: 1,
+    backgroundColor: "#e5e7eb",
+    marginVertical: 16,
+    opacity: 0.5,
+  },
+
+  // Timeline Styles
+  timelineRow: {
+    flexDirection: "row",
+    marginBottom: 0,
+    minHeight: 70,
+  },
+  timelineLeft: {
+    width: 60,
+    alignItems: "center",
+    marginRight: 10,
+  },
+  timeText: {
+    fontSize: 11,
+    fontWeight: "bold",
+    marginBottom: 4,
+    opacity: 0.7,
+  },
+  timelineDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    zIndex: 2,
+  },
+  timelineLine: {
+    width: 2,
+    backgroundColor: "#e5e7eb",
+    flex: 1, // Stretches to fill gap
+    marginTop: -2,
+  },
+  timelineCard: {
+    flex: 1,
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 16,
+    borderWidth: 1,
+  },
+  thumbnail: {
+    width: 40,
+    height: 40,
+    borderRadius: 6,
+    marginLeft: 10,
+    backgroundColor: "#eee",
   },
 });

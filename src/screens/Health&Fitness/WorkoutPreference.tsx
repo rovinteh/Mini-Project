@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   StyleSheet,
@@ -6,6 +6,7 @@ import {
   TouchableOpacity,
   KeyboardAvoidingView,
   Platform,
+  Alert,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -17,6 +18,7 @@ import {
   themeColor,
   TextInput,
   Button,
+  Section,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { getAuth } from "firebase/auth";
@@ -31,12 +33,14 @@ import {
 type Props = NativeStackScreenProps<MainStackParamList, "WorkoutPreference">;
 
 const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const FITNESS_COLOR = "#22C55E";
 
 export default function WorkoutPreferenceScreen({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const auth = getAuth();
   const db = getFirestore();
 
+  // --- Form State ---
   const [goal, setGoal] = useState("");
   const [difficulty, setDifficulty] = useState<"easy" | "moderate" | "hard">(
     "easy"
@@ -46,11 +50,16 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     "Wed",
     "Fri",
   ]);
-  const [sessionLength, setSessionLength] = useState("20"); // minutes
+  const [sessionLength, setSessionLength] = useState("20");
+
+  // New State for BMI
+  const [height, setHeight] = useState("");
+  const [weight, setWeight] = useState("");
+
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
-  // Load existing preference
+  // --- Load Data ---
   useEffect(() => {
     const user = auth.currentUser;
     if (!user) {
@@ -71,6 +80,8 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
           setSessionLength(
             data.sessionLengthMinutes ? String(data.sessionLengthMinutes) : "20"
           );
+          setHeight(data.height ? String(data.height) : "");
+          setWeight(data.weight ? String(data.weight) : "");
         }
       } catch (err) {
         console.log("Error loading preference:", err);
@@ -80,32 +91,65 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     })();
   }, []);
 
+  // --- Helpers ---
   const toggleDay = (day: string) => {
     setSelectedDays((prev) =>
       prev.includes(day) ? prev.filter((d) => d !== day) : [...prev, day]
     );
   };
 
+  // Real-time BMI Calculation
+  const bmiStats = useMemo(() => {
+    const h = parseFloat(height);
+    const w = parseFloat(weight);
+
+    if (!h || !w || h <= 0 || w <= 0) return null;
+
+    const hM = h / 100; // cm to m
+    const bmiVal = w / (hM * hM);
+    const score = bmiVal.toFixed(1);
+
+    let label = "Normal Weight";
+    let color = FITNESS_COLOR;
+
+    if (bmiVal < 18.5) {
+      label = "Underweight";
+      color = "#F59E0B"; // Amber
+    } else if (bmiVal >= 25 && bmiVal < 30) {
+      label = "Overweight";
+      color = "#F59E0B";
+    } else if (bmiVal >= 30) {
+      label = "Obese";
+      color = "#EF4444"; // Red
+    }
+
+    return { score, label, color };
+  }, [height, weight]);
+
+  // --- Save Action ---
   const onSave = async () => {
     const user = auth.currentUser;
     if (!user) {
-      alert("Please log in first.");
+      Alert.alert("Error", "Please log in first.");
       return;
     }
 
     if (!goal.trim()) {
-      alert("Please enter your fitness goal.");
+      Alert.alert("Missing Info", "Please enter your fitness goal.");
       return;
     }
 
     if (selectedDays.length === 0) {
-      alert("Please choose at least one workout day.");
+      Alert.alert("Missing Info", "Please choose at least one workout day.");
       return;
     }
 
     const lengthNumber = parseInt(sessionLength, 10);
-    if (isNaN(lengthNumber) || lengthNumber < 5) {
-      alert("Please enter a valid session length (minimum 5 minutes).");
+    if (isNaN(lengthNumber) || lengthNumber < 5 || lengthNumber > 120) {
+      Alert.alert(
+        "Invalid Input",
+        "Session length must be between 5–120 minutes."
+      );
       return;
     }
 
@@ -119,26 +163,20 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
           difficulty,
           workoutDays: selectedDays,
           sessionLengthMinutes: lengthNumber,
+          height: height ? parseFloat(height) : null,
+          weight: weight ? parseFloat(weight) : null,
           lastUpdated: serverTimestamp(),
         },
         { merge: true }
       );
-      alert("Workout preference profile saved.");
+      Alert.alert("Success", "Your fitness profile has been updated.");
+      navigation.goBack();
     } catch (err: any) {
-      alert("Error saving preference: " + err.message);
+      Alert.alert("Error", err.message);
     } finally {
       setSaving(false);
     }
   };
-
-  // Simple “preview” based on difficulty + days + length
-  const sessionsPerWeek = selectedDays.length;
-  const intensityLabel =
-    difficulty === "easy"
-      ? "Light & beginner-friendly"
-      : difficulty === "moderate"
-      ? "Balanced challenge"
-      : "High intensity";
 
   return (
     <KeyboardAvoidingView
@@ -147,7 +185,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     >
       <Layout>
         <TopNav
-          middleContent="Workout Preference Profile"
+          middleContent="Workout Profile"
           leftContent={
             <Ionicons
               name="chevron-back"
@@ -168,118 +206,231 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
 
         {loading ? (
           <View style={styles.center}>
-            <Text>Loading your preference...</Text>
+            <Text>Loading profile...</Text>
           </View>
         ) : (
           <ScrollView
             style={styles.scroll}
-            contentContainerStyle={{ paddingBottom: 24 }}
+            contentContainerStyle={{ paddingBottom: 32 }}
           >
-            {/* Preview card */}
-            <View
-              style={[
-                styles.card,
-                {
-                  backgroundColor: isDarkmode ? "#17171E" : "#eef2ff",
-                  borderColor: isDarkmode ? "#333" : "#c7d2fe",
-                },
-              ]}
-            >
-              <Text size="h4" fontWeight="bold">
-                Your Current Plan
+            {/* 1. Body Metrics Section (NEW) */}
+            <Section style={styles.card}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Ionicons
+                  name="body"
+                  size={20}
+                  color={FITNESS_COLOR}
+                  style={{ marginRight: 8 }}
+                />
+                <Text size="h4" fontWeight="bold">
+                  About You
+                </Text>
+              </View>
+              <Text style={styles.subtext}>
+                Used to calculate BMI and calibrate workouts.
               </Text>
-              <Text style={styles.previewLine}>
-                Goal: <Text fontWeight="bold">{goal || "Not set yet"}</Text>
-              </Text>
-              <Text style={styles.previewLine}>
-                Sessions per week:{" "}
-                <Text fontWeight="bold">{sessionsPerWeek}</Text>
-              </Text>
-              <Text style={styles.previewLine}>
-                Session length:{" "}
-                <Text fontWeight="bold">{sessionLength || "20"} mins</Text>
-              </Text>
-              <Text style={styles.previewLine}>
-                Intensity: <Text fontWeight="bold">{intensityLabel}</Text>
-              </Text>
-            </View>
 
-            {/* Form */}
-            <View style={styles.section}>
-              <Text fontWeight="bold">Fitness Goal</Text>
+              <View style={styles.row}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Height (cm)</Text>
+                  <TextInput
+                    placeholder="175"
+                    keyboardType="numeric"
+                    value={height}
+                    onChangeText={setHeight}
+                  />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.label}>Weight (kg)</Text>
+                  <TextInput
+                    placeholder="70"
+                    keyboardType="numeric"
+                    value={weight}
+                    onChangeText={setWeight}
+                  />
+                </View>
+              </View>
+
+              {bmiStats && (
+                <View
+                  style={[
+                    styles.bmiContainer,
+                    { backgroundColor: isDarkmode ? "#1f2937" : "#f0f9ff" },
+                  ]}
+                >
+                  <Text style={{ fontSize: 13, opacity: 0.8 }}>
+                    Your estimated BMI is
+                  </Text>
+                  <Text
+                    size="h2"
+                    fontWeight="bold"
+                    style={{ color: bmiStats.color, marginVertical: 2 }}
+                  >
+                    {bmiStats.score}
+                  </Text>
+                  <Text fontWeight="bold" style={{ color: bmiStats.color }}>
+                    {bmiStats.label}
+                  </Text>
+                </View>
+              )}
+            </Section>
+
+            {/* 2. Goals Section */}
+            <Section style={styles.card}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Ionicons
+                  name="trophy"
+                  size={20}
+                  color={FITNESS_COLOR}
+                  style={{ marginRight: 8 }}
+                />
+                <Text size="h4" fontWeight="bold">
+                  Your Goal
+                </Text>
+              </View>
+
               <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. Lose 5kg, improve stamina"
+                placeholder="e.g. Lose 5kg, Run a 5k..."
                 value={goal}
                 onChangeText={setGoal}
               />
-            </View>
 
-            <View style={styles.section}>
-              <Text fontWeight="bold">Difficulty</Text>
-              <View style={styles.chipRow}>
+              <View style={styles.chipContainer}>
                 {[
-                  { label: "Easy", value: "easy" },
-                  { label: "Moderate", value: "moderate" },
-                  { label: "Hard", value: "hard" },
+                  "Fat Loss",
+                  "Muscle Gain",
+                  "Better Stamina",
+                  "Stay Active",
+                ].map((g) => (
+                  <TouchableOpacity
+                    key={g}
+                    style={styles.chip}
+                    onPress={() => setGoal(g)}
+                  >
+                    <Text size="sm">{g}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            </Section>
+
+            {/* 3. Intensity Section */}
+            <Section style={styles.card}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Ionicons
+                  name="speedometer"
+                  size={20}
+                  color={FITNESS_COLOR}
+                  style={{ marginRight: 8 }}
+                />
+                <Text size="h4" fontWeight="bold">
+                  Intensity
+                </Text>
+              </View>
+
+              <View style={styles.radioContainer}>
+                {[
+                  { label: "Beginner", val: "easy", desc: "Light movements" },
+                  {
+                    label: "Balanced",
+                    val: "moderate",
+                    desc: "Get a good sweat",
+                  },
+                  { label: "Intense", val: "hard", desc: "Push your limits" },
                 ].map((opt) => {
-                  const active = difficulty === opt.value;
+                  const active = difficulty === opt.val;
                   return (
                     <TouchableOpacity
-                      key={opt.value}
+                      key={opt.val}
                       style={[
-                        styles.chip,
+                        styles.radioBtn,
+                        {
+                          borderColor: active
+                            ? FITNESS_COLOR
+                            : isDarkmode
+                            ? "#374151"
+                            : "#e2e8f0",
+                        },
                         active && {
-                          backgroundColor: themeColor.primary,
+                          backgroundColor: isDarkmode
+                            ? "rgba(34,197,94,0.1)"
+                            : "#f0fdf4",
                         },
                       ]}
-                      onPress={() =>
-                        setDifficulty(opt.value as "easy" | "moderate" | "hard")
-                      }
+                      onPress={() => setDifficulty(opt.val as any)}
                     >
-                      <Text
-                        style={{
-                          color: active
-                            ? themeColor.white100
-                            : isDarkmode
-                            ? themeColor.white100
-                            : themeColor.dark,
-                        }}
-                      >
+                      <Text fontWeight={active ? "bold" : "normal"}>
                         {opt.label}
+                      </Text>
+                      <Text size="sm" style={{ opacity: 0.6, fontSize: 10 }}>
+                        {opt.desc}
                       </Text>
                     </TouchableOpacity>
                   );
                 })}
               </View>
-            </View>
+            </Section>
 
-            <View style={styles.section}>
-              <Text fontWeight="bold">Workout Days</Text>
-              <Text style={{ marginTop: 4, opacity: 0.7 }}>
-                Tap to select which days you plan to exercise.
-              </Text>
-              <View style={styles.chipRowWrap}>
+            {/* 4. Schedule Section */}
+            <Section style={styles.card}>
+              <View
+                style={{
+                  flexDirection: "row",
+                  alignItems: "center",
+                  marginBottom: 10,
+                }}
+              >
+                <Ionicons
+                  name="calendar"
+                  size={20}
+                  color={FITNESS_COLOR}
+                  style={{ marginRight: 8 }}
+                />
+                <Text size="h4" fontWeight="bold">
+                  Schedule
+                </Text>
+              </View>
+
+              <Text style={styles.label}>Workout Days</Text>
+              <View style={styles.chipContainer}>
                 {WEEK_DAYS.map((day) => {
                   const active = selectedDays.includes(day);
                   return (
                     <TouchableOpacity
                       key={day}
-                      style={[
-                        styles.chip,
-                        styles.dayChip,
-                        active && { backgroundColor: themeColor.primary },
-                      ]}
                       onPress={() => toggleDay(day)}
+                      style={[
+                        styles.dayChip,
+                        {
+                          backgroundColor: active
+                            ? FITNESS_COLOR
+                            : "transparent",
+                          borderColor: active ? FITNESS_COLOR : "#cbd5e1",
+                        },
+                      ]}
                     >
                       <Text
                         style={{
-                          color: active
-                            ? themeColor.white100
-                            : isDarkmode
-                            ? themeColor.white100
-                            : themeColor.dark,
+                          color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
                         }}
+                        fontWeight={active ? "bold" : "normal"}
                       >
                         {day}
                       </Text>
@@ -287,25 +438,25 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   );
                 })}
               </View>
-            </View>
 
-            <View style={styles.section}>
-              <Text fontWeight="bold">Session Length (minutes)</Text>
+              <Text style={[styles.label, { marginTop: 16 }]}>
+                Duration (minutes)
+              </Text>
               <TextInput
-                containerStyle={{ marginTop: 10, width: 120 }}
-                keyboardType="numeric"
                 value={sessionLength}
                 onChangeText={setSessionLength}
+                keyboardType="numeric"
+                placeholder="20"
+                width={100}
               />
-              <Text style={{ marginTop: 4, opacity: 0.7 }}>
-                This will be used when generating your workout steps.
-              </Text>
-            </View>
+            </Section>
 
+            {/* Save Button */}
             <Button
-              text={saving ? "Saving..." : "Save Preference"}
+              text={saving ? "Saving Profile..." : "Save Profile"}
               onPress={onSave}
-              style={{ marginTop: 16 }}
+              style={{ marginHorizontal: 16, marginTop: 8 }}
+              color={FITNESS_COLOR}
               disabled={saving}
             />
           </ScrollView>
@@ -316,48 +467,46 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 12,
-  },
-  center: {
-    flex: 1,
+  scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  card: { borderRadius: 16, marginBottom: 16, padding: 16 },
+  subtext: { fontSize: 12, opacity: 0.6, marginBottom: 12 },
+  row: { flexDirection: "row", gap: 12 },
+  label: { fontSize: 12, fontWeight: "600", marginBottom: 4, opacity: 0.8 },
+  bmiContainer: {
+    marginTop: 16,
+    padding: 12,
+    borderRadius: 12,
     alignItems: "center",
-    justifyContent: "center",
-  },
-  card: {
     borderWidth: 1,
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
+    borderColor: "transparent",
   },
-  previewLine: {
-    marginTop: 6,
-  },
-  section: {
-    marginBottom: 16,
-  },
-  chipRow: {
-    flexDirection: "row",
-    marginTop: 10,
-  },
-  chipRowWrap: {
+  chipContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginTop: 10,
+    gap: 8,
+    marginTop: 8,
   },
   chip: {
     paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 999,
-    borderWidth: 1,
-    borderColor: "#cbd5e1",
-    marginRight: 8,
-    marginBottom: 8,
+    paddingVertical: 6,
+    borderRadius: 20,
+    backgroundColor: "rgba(150,150,150,0.1)",
   },
   dayChip: {
-    minWidth: 52,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  radioContainer: { flexDirection: "row", gap: 8 },
+  radioBtn: {
+    flex: 1,
+    padding: 10,
+    borderRadius: 12,
+    borderWidth: 1,
     alignItems: "center",
   },
 });

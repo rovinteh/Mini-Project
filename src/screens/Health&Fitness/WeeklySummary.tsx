@@ -1,5 +1,11 @@
-import React, { useEffect, useState } from "react";
-import { View, StyleSheet, ScrollView, Dimensions } from "react-native";
+import React, { useEffect, useState, useMemo } from "react";
+import {
+  View,
+  StyleSheet,
+  ScrollView,
+  Dimensions,
+  ActivityIndicator,
+} from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 import {
@@ -9,6 +15,7 @@ import {
   useTheme,
   themeColor,
   Section,
+  Button,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { getAuth } from "firebase/auth";
@@ -17,22 +24,25 @@ import {
   collection,
   query,
   where,
-  getDocs,
   Timestamp,
+  onSnapshot,
+  orderBy,
 } from "firebase/firestore";
-import { BarChart } from "react-native-chart-kit";
+// IMPORTANT: Ensure these are installed
+import { BarChart, LineChart } from "react-native-chart-kit";
 
 type Props = NativeStackScreenProps<MainStackParamList, "WeeklySummary">;
 
 type DayStat = {
-  label: string; // e.g. "Mon"
-  dateKey: string; // 'YYYY-MM-DD'
+  label: string;
+  fullDate: string;
   workouts: number;
   workoutMinutes: number;
   meals: number;
 };
 
 const screenWidth = Dimensions.get("window").width;
+const FITNESS_COLOR = "#22C55E";
 
 export default function WeeklySummaryScreen({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
@@ -42,6 +52,24 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
   const [stats, setStats] = useState<DayStat[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // --- Helper to Generate Last 7 Days (Empty) ---
+  const getLast7Days = () => {
+    const days: DayStat[] = [];
+    const now = new Date();
+    for (let i = 6; i >= 0; i--) {
+      const d = new Date(now);
+      d.setDate(now.getDate() - i);
+      days.push({
+        label: d.toLocaleDateString("en-US", { weekday: "short" }),
+        fullDate: d.toISOString().slice(0, 10),
+        workouts: 0,
+        workoutMinutes: 0,
+        meals: 0,
+      });
+    }
+    return days;
+  };
+
   useEffect(() => {
     const user = auth.currentUser;
     if (!user) {
@@ -49,136 +77,129 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       return;
     }
 
-    const load = async () => {
-      setLoading(true);
-      try {
-        // Build last 7 days structure (today and previous 6 days)
-        const now = new Date();
-        const days: DayStat[] = [];
-        for (let i = 6; i >= 0; i--) {
-          const d = new Date(
-            now.getFullYear(),
-            now.getMonth(),
-            now.getDate() - i,
-            0,
-            0,
-            0,
-            0
+    // Initialize stats immediately so we don't show blank screen
+    setStats(getLast7Days());
+
+    const now = new Date();
+    const startWindow = new Date(now);
+    startWindow.setDate(now.getDate() - 6);
+    startWindow.setHours(0, 0, 0, 0);
+    const startTs = Timestamp.fromDate(startWindow);
+
+    // --- WORKOUT LISTENER ---
+    // Note: If this query fails (missing index), check your console!
+    const workoutQ = query(
+      collection(db, "WorkoutSession"),
+      where("userId", "==", user.uid),
+      where("createdAtClient", ">=", startTs),
+      orderBy("createdAtClient", "asc")
+    );
+
+    const mealQ = query(
+      collection(db, "MealEntry"),
+      where("userId", "==", user.uid),
+      where("mealTimeClient", ">=", startTs),
+      orderBy("mealTimeClient", "asc")
+    );
+
+    const unsubWorkouts = onSnapshot(
+      workoutQ,
+      (wSnap) => {
+        const currentStats = getLast7Days(); // Reset stats on update
+
+        wSnap.forEach((doc) => {
+          const data = doc.data();
+          if (data.status !== "completed" || !data.createdAtClient) return;
+
+          const dateStr = data.createdAtClient
+            .toDate()
+            .toISOString()
+            .slice(0, 10);
+          const dayIndex = currentStats.findIndex(
+            (d) => d.fullDate === dateStr
           );
-          const dateKey = d.toISOString().slice(0, 10); // YYYY-MM-DD
-          const label = d.toLocaleDateString("en-MY", {
-            weekday: "short",
-          });
-          days.push({
-            label,
-            dateKey,
-            workouts: 0,
-            workoutMinutes: 0,
-            meals: 0,
-          });
-        }
 
-        const weekStart = new Date(
-          now.getFullYear(),
-          now.getMonth(),
-          now.getDate() - 6,
-          0,
-          0,
-          0,
-          0
-        );
-        const weekStartTs = Timestamp.fromDate(weekStart);
-
-        // --- Workout sessions (count only completed) ---
-        const workoutQ = query(
-          collection(db, "WorkoutSession"),
-          where("userId", "==", user.uid),
-          where("createdAt", ">=", weekStartTs)
-        );
-        const workoutSnap = await getDocs(workoutQ);
-
-        workoutSnap.forEach((docSnap) => {
-          const data = docSnap.data() as any;
-          if (data.status !== "completed" || !data.createdAt?.toDate) return;
-          const d: Date = data.createdAt.toDate();
-          const key = d.toISOString().slice(0, 10);
-          const idx = days.findIndex((day) => day.dateKey === key);
-          if (idx >= 0) {
-            days[idx].workouts += 1;
+          if (dayIndex !== -1) {
+            currentStats[dayIndex].workouts += 1;
             const mins =
               typeof data.actualDurationSec === "number"
                 ? Math.round(data.actualDurationSec / 60)
                 : 0;
-            days[idx].workoutMinutes += mins;
+            currentStats[dayIndex].workoutMinutes += mins;
           }
         });
 
-        // --- Meal entries ---
-        const mealQ = query(
-          collection(db, "MealEntry"),
-          where("userId", "==", user.uid),
-          where("mealTime", ">=", weekStartTs)
+        // --- NESTED MEAL LISTENER ---
+        const unsubMeals = onSnapshot(
+          mealQ,
+          (mSnap) => {
+            // Clear previous meal counts in our working copy
+            currentStats.forEach((d) => (d.meals = 0));
+
+            mSnap.forEach((doc) => {
+              const data = doc.data();
+              if (!data.mealTimeClient) return;
+              const dateStr = data.mealTimeClient
+                .toDate()
+                .toISOString()
+                .slice(0, 10);
+              const dayIndex = currentStats.findIndex(
+                (d) => d.fullDate === dateStr
+              );
+              if (dayIndex !== -1) {
+                currentStats[dayIndex].meals += 1;
+              }
+            });
+
+            setStats([...currentStats]);
+            setLoading(false);
+          },
+          (error) => {
+            console.log("Meal Query Error:", error);
+            setLoading(false);
+          }
         );
-        const mealSnap = await getDocs(mealQ);
-
-        mealSnap.forEach((docSnap) => {
-          const data = docSnap.data() as any;
-          if (!data.mealTime?.toDate) return;
-          const d: Date = data.mealTime.toDate();
-          const key = d.toISOString().slice(0, 10);
-          const idx = days.findIndex((day) => day.dateKey === key);
-          if (idx >= 0) {
-            days[idx].meals += 1;
-          }
-        });
-
-        setStats(days);
-      } catch (err) {
-        console.log("Weekly summary error:", err);
-      } finally {
+      },
+      (error) => {
+        console.log("Workout Query Error (Check Indexes!):", error);
         setLoading(false);
       }
-    };
+    );
 
-    load();
+    return () => unsubWorkouts();
   }, []);
 
+  // --- Safe Data Prep ---
   const labels = stats.map((d) => d.label);
-  const workoutsData = stats.map((d) => d.workouts);
-  const workoutMinutesData = stats.map((d) => d.workoutMinutes);
-  const mealsData = stats.map((d) => d.meals);
+  const dataMinutes = stats.map((d) => d.workoutMinutes);
+  const dataMeals = stats.map((d) => d.meals);
 
-  const totalWorkouts = workoutsData.reduce((a, b) => a + b, 0);
-  const totalWorkoutMinutes = workoutMinutesData.reduce((a, b) => a + b, 0);
-  const totalMeals = mealsData.reduce((a, b) => a + b, 0);
+  const totalMinutes = dataMinutes.reduce((a, b) => a + b, 0);
+  const totalWorkouts = stats.reduce((a, b) => a + b.workouts, 0);
+  const totalMeals = dataMeals.reduce((a, b) => a + b, 0);
 
-  const mostActiveIdx = workoutMinutesData.reduce(
-    (maxIdx, val, idx, arr) => (val > arr[maxIdx] ? idx : maxIdx),
-    0
-  );
-  const mostActiveDay =
-    stats[mostActiveIdx]?.label && stats[mostActiveIdx].workoutMinutes > 0
-      ? stats[mostActiveIdx].label
-      : "-";
+  const bestDay = useMemo(() => {
+    if (totalMinutes === 0) return "None";
+    const max = Math.max(...dataMinutes);
+    const idx = dataMinutes.indexOf(max);
+    return stats[idx]?.label || "-";
+  }, [dataMinutes, totalMinutes]);
 
-  const chartConfigBase = {
-    backgroundGradientFrom: isDarkmode ? "#020617" : "#ffffff",
-    backgroundGradientTo: isDarkmode ? "#020617" : "#ffffff",
-    decimalPlaces: 0,
-    color: (opacity = 1) => `rgba(129, 140, 248, ${opacity})`, // indigo
+  const chartConfig = {
+    backgroundGradientFrom: isDarkmode ? "#1F2937" : "#ffffff",
+    backgroundGradientTo: isDarkmode ? "#1F2937" : "#ffffff",
+    color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
     labelColor: (opacity = 1) =>
-      `rgba(${isDarkmode ? "248, 250, 252" : "15, 23, 42"}, ${opacity})`,
-    propsForBackgroundLines: {
-      strokeWidth: 0.5,
-      stroke: isDarkmode ? "#1f2937" : "#e5e7eb",
-    },
-    barPercentage: 0.6,
+      isDarkmode ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`,
+    strokeWidth: 2,
+    barPercentage: 0.5,
+    decimalPlaces: 0,
   };
 
   return (
     <Layout>
       <TopNav
-        middleContent="Weekly Summary"
+        middleContent="Weekly Trends"
         leftContent={
           <Ionicons
             name="chevron-back"
@@ -199,151 +220,123 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
       {loading ? (
         <View style={styles.center}>
-          <Text>Loading weekly summary...</Text>
+          <ActivityIndicator size="large" color={FITNESS_COLOR} />
+          <Text style={{ marginTop: 10 }}>Syncing activity...</Text>
         </View>
       ) : (
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={{ paddingBottom: 24 }}
+          contentContainerStyle={{ paddingBottom: 32 }}
+          showsVerticalScrollIndicator={false}
         >
-          {/* Overview cards */}
-          <View style={styles.row}>
-            <Section style={[styles.card, styles.cardHalf]}>
-              <Text size="lg" fontWeight="bold">
-                Workouts
+          <Text size="h3" fontWeight="bold" style={{ marginBottom: 16 }}>
+            Last 7 Days
+          </Text>
+
+          <View style={styles.highlightRow}>
+            <View
+              style={[
+                styles.highlightCard,
+                { backgroundColor: isDarkmode ? "#1f2937" : "#dcfce7" },
+              ]}
+            >
+              <Ionicons name="time" size={20} color={FITNESS_COLOR} />
+              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+                {totalMinutes}m
               </Text>
-              <Text size="h1" fontWeight="bold" style={{ marginTop: 4 }}>
+              <Text style={{ fontSize: 10, opacity: 0.6 }}>Active Time</Text>
+            </View>
+            <View
+              style={[
+                styles.highlightCard,
+                { backgroundColor: isDarkmode ? "#1f2937" : "#dbeafe" },
+              ]}
+            >
+              <Ionicons name="barbell" size={20} color="#3b82f6" />
+              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
                 {totalWorkouts}
               </Text>
-              <Text style={styles.cardDesc}>
-                Completed sessions in the last 7 days.
-              </Text>
-            </Section>
-
-            <Section style={[styles.card, styles.cardHalf]}>
-              <Text size="lg" fontWeight="bold">
-                Workout minutes
-              </Text>
-              <Text size="h1" fontWeight="bold" style={{ marginTop: 4 }}>
-                {totalWorkoutMinutes}
-              </Text>
-              <Text style={styles.cardDesc}>Total active time this week.</Text>
-            </Section>
-          </View>
-
-          <View style={styles.row}>
-            <Section style={[styles.card, styles.cardHalf]}>
-              <Text size="lg" fontWeight="bold">
-                Meals logged
-              </Text>
-              <Text size="h1" fontWeight="bold" style={{ marginTop: 4 }}>
+              <Text style={{ fontSize: 10, opacity: 0.6 }}>Sessions</Text>
+            </View>
+            <View
+              style={[
+                styles.highlightCard,
+                { backgroundColor: isDarkmode ? "#1f2937" : "#ffedd5" },
+              ]}
+            >
+              <Ionicons name="restaurant" size={20} color="#f97316" />
+              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
                 {totalMeals}
               </Text>
-              <Text style={styles.cardDesc}>Entries recorded this week.</Text>
-            </Section>
-
-            <Section style={[styles.card, styles.cardHalf]}>
-              <Text size="lg" fontWeight="bold">
-                Most active day
-              </Text>
-              <Text size="h1" fontWeight="bold" style={{ marginTop: 4 }}>
-                {mostActiveDay}
-              </Text>
-              <Text style={styles.cardDesc}>Based on workout minutes.</Text>
-            </Section>
+              <Text style={{ fontSize: 10, opacity: 0.6 }}>Meals</Text>
+            </View>
           </View>
 
-          {/* Workouts per day chart */}
-          <Section style={styles.card}>
-            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
-              Workouts per day
-            </Text>
-            <BarChart
-              style={{ borderRadius: 12 }}
-              data={{
-                labels,
-                datasets: [{ data: workoutsData }],
-              }}
-              width={screenWidth - 32}
-              height={220}
-              fromZero
-              chartConfig={chartConfigBase}
-              showBarTops={true}
-              withInnerLines={true}
-            />
-          </Section>
+          {/* Activity Chart */}
+          <Section style={styles.chartCard}>
+            <View style={styles.cardHeader}>
+              <Text fontWeight="bold">Activity Trend (Minutes)</Text>
+              {bestDay !== "None" && (
+                <Text style={{ fontSize: 10, color: FITNESS_COLOR }}>
+                  Best: {bestDay}
+                </Text>
+              )}
+            </View>
 
-          {/* Workout minutes chart */}
-          <Section style={styles.card}>
-            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
-              Workout minutes per day
-            </Text>
-            <BarChart
-              style={{ borderRadius: 12 }}
-              data={{
-                labels,
-                datasets: [{ data: workoutMinutesData }],
-              }}
-              width={screenWidth - 32}
-              height={220}
-              fromZero
-              chartConfig={{
-                ...chartConfigBase,
-                color: (opacity = 1) => `rgba(52, 211, 153, ${opacity})`, // green-ish
-              }}
-              showBarTops={true}
-              withInnerLines={true}
-            />
-          </Section>
-
-          {/* Meals per day chart */}
-          <Section style={styles.card}>
-            <Text size="lg" fontWeight="bold" style={{ marginBottom: 8 }}>
-              Meals logged per day
-            </Text>
-            <BarChart
-              style={{ borderRadius: 12 }}
-              data={{
-                labels,
-                datasets: [{ data: mealsData }],
-              }}
-              width={screenWidth - 32}
-              height={220}
-              fromZero
-              chartConfig={{
-                ...chartConfigBase,
-                color: (opacity = 1) => `rgba(251, 146, 60, ${opacity})`, // orange-ish
-              }}
-              showBarTops={true}
-              withInnerLines={true}
-            />
-          </Section>
-
-          {/* Simple interpretation */}
-          <Section style={styles.card}>
-            <Text size="lg" fontWeight="bold" style={{ marginBottom: 6 }}>
-              Weekly insights
-            </Text>
-            {totalWorkouts === 0 && (
-              <Text style={styles.cardDesc}>
-                No completed workouts recorded this week. Try starting a short
-                session to build the habit.
-              </Text>
+            {totalMinutes === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="analytics" size={40} color="#e5e7eb" />
+                <Text style={{ marginTop: 8, opacity: 0.5 }}>
+                  No workout activity yet.
+                </Text>
+              </View>
+            ) : (
+              <LineChart
+                data={{ labels, datasets: [{ data: dataMinutes }] }}
+                width={screenWidth - 48}
+                height={200}
+                yAxisLabel=""
+                yAxisSuffix="m"
+                chartConfig={chartConfig}
+                bezier
+                style={{ borderRadius: 12, marginVertical: 8 }}
+              />
             )}
-            {totalWorkouts > 0 && (
-              <>
-                <Text style={styles.cardDesc}>
-                  You completed {totalWorkouts} workout
-                  {totalWorkouts > 1 ? "s" : ""} with a total of{" "}
-                  {totalWorkoutMinutes} minutes. Your most active day was{" "}
-                  {mostActiveDay}.
+          </Section>
+
+          {/* Meals Chart */}
+          <Section style={styles.chartCard}>
+            <View style={styles.cardHeader}>
+              <Text fontWeight="bold">Nutrition Logging</Text>
+            </View>
+            {totalMeals === 0 ? (
+              <View style={styles.emptyState}>
+                <Ionicons name="cafe" size={40} color="#e5e7eb" />
+                <Text style={{ marginTop: 8, opacity: 0.5 }}>
+                  No meals logged.
                 </Text>
-                <Text style={[styles.cardDesc, { marginTop: 4 }]}>
-                  You also logged {totalMeals} meal
-                  {totalMeals > 1 ? "s" : ""}. Keeping meals updated helps the
-                  app give a more meaningful picture of your health habits.
-                </Text>
-              </>
+                <Button
+                  text="Log a Meal"
+                  size="sm"
+                  style={{ marginTop: 10 }}
+                  onPress={() => navigation.navigate("LogMeal")}
+                />
+              </View>
+            ) : (
+              <BarChart
+                data={{ labels, datasets: [{ data: dataMeals }] }}
+                width={screenWidth - 48}
+                height={200}
+                yAxisLabel=""
+                yAxisSuffix=""
+                chartConfig={{
+                  ...chartConfig,
+                  color: (opacity = 1) => `rgba(249, 115, 22, ${opacity})`,
+                }}
+                style={{ borderRadius: 12, marginVertical: 8 }}
+                fromZero
+                showBarTops={false}
+              />
             )}
           </Section>
         </ScrollView>
@@ -353,31 +346,33 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  scroll: {
-    flex: 1,
-    paddingHorizontal: 16,
-    paddingTop: 12,
+  center: { flex: 1, alignItems: "center", justifyContent: "center" },
+  scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+  highlightRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    gap: 8,
+    marginBottom: 20,
   },
-  center: {
+  highlightCard: {
     flex: 1,
+    borderRadius: 12,
+    padding: 12,
     alignItems: "center",
     justifyContent: "center",
   },
-  row: {
+  chartCard: { borderRadius: 16, padding: 16, marginBottom: 16 },
+  cardHeader: {
     flexDirection: "row",
-    gap: 8,
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 8,
-  } as any,
-  card: {
-    borderRadius: 16,
-    marginBottom: 12,
   },
-  cardHalf: {
-    flex: 1,
-  },
-  cardDesc: {
-    marginTop: 4,
-    fontSize: 12,
-    opacity: 0.7,
+  emptyState: {
+    height: 180,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.02)",
+    borderRadius: 12,
   },
 });
