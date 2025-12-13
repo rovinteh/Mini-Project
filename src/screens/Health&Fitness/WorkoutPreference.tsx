@@ -369,8 +369,10 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   >
                     <Text
                       size="sm"
-                      fontWeight={goal === g ? "bold" : "normal"}
-                      style={{ color: goal === g ? COLOR_GOAL : undefined }}
+                      style={{
+                        color: goal === g ? COLOR_GOAL : undefined,
+                        fontWeight: goal === g ? "bold" : "normal",
+                      }}
                     >
                       {g}
                     </Text>
@@ -440,9 +442,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                       }
                     >
                       <Text
-                        fontWeight={active ? "bold" : "normal"}
                         style={{
                           color: active ? COLOR_INTENSITY : undefined,
+                          fontWeight: active ? "bold" : "normal",
                         }}
                       >
                         {opt.label}
