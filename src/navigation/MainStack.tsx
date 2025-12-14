@@ -31,6 +31,13 @@ import TeamManagement from "../screens/TaskManagementModule.tsx/TeamManagement";
 import MemoryNotifications from "../screens/MemoryBook/MemoryNotifications";
 import { startNotificationListener } from "../screens/MemoryBook/NotificationService";
 
+import MoneyManagementModule from "../screens/FinTrackPro/MoneyManagementModule";
+import SpendingInsights from "../screens/FinTrackPro/SpendingInsights";
+import TransactionAdd from "../screens/FinTrackPro/TransactionAdd";
+import TransactionList from "../screens/FinTrackPro/TransactionList";
+import ExpensesChart from "../screens/FinTrackPro/ExpensesChart";
+import BudgetHub from "../screens/FinTrackPro/BudgetHub";
+
 const MainStack = createNativeStackNavigator();
 
 const Main = () => {
@@ -90,6 +97,16 @@ const Main = () => {
         name="TaskManagementMenu"
         component={TaskManagementMenu}
       />
+
+      <MainStack.Screen
+        name="MoneyManagementModule"
+        component={MoneyManagementModule}
+      />
+      <MainStack.Screen name="SpendingInsights" component={SpendingInsights} />
+      <MainStack.Screen name="TransactionAdd" component={TransactionAdd} />
+      <MainStack.Screen name="TransactionList" component={TransactionList} />
+      <MainStack.Screen name="ExpensesChart" component={ExpensesChart} />
+      <MainStack.Screen name="BudgetHub" component={BudgetHub} />
     </MainStack.Navigator>
   );
 };
