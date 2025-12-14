@@ -481,7 +481,10 @@ export default function MemoryFeed({ navigation }: Props) {
   };
 
   useEffect(() => {
-    const q = query(collection(firestore, "posts"), orderBy("createdAt", "desc"));
+    const q = query(
+      collection(firestore, "posts"),
+      orderBy("createdAt", "desc")
+    );
 
     const unsub = onSnapshot(q, (snapshot) => {
       const data: Post[] = [];
@@ -489,7 +492,8 @@ export default function MemoryFeed({ navigation }: Props) {
         const d = docSnap.data() as any;
         const created = d.CreatedUser || {};
         const userId: string = created.CreatedUserId || d.userId || "";
-        const username: string = created.CreatedUserName || d.username || "User";
+        const username: string =
+          created.CreatedUserName || d.username || "User";
 
         data.push({
           id: docSnap.id,
@@ -523,7 +527,9 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadyLiked = post.likes?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      likes: alreadyLiked ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
+      likes: alreadyLiked
+        ? arrayRemove(currentUserId)
+        : arrayUnion(currentUserId),
     });
   };
 
@@ -533,7 +539,9 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadySaved = post.savedBy?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      savedBy: alreadySaved ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
+      savedBy: alreadySaved
+        ? arrayRemove(currentUserId)
+        : arrayUnion(currentUserId),
     });
   };
 
@@ -691,9 +699,16 @@ export default function MemoryFeed({ navigation }: Props) {
 
           {/* Existing stories */}
           {stories.map((story) => (
-            <View key={story.id} style={{ alignItems: "center", marginRight: 12 }}>
+            <View
+              key={story.id}
+              style={{ alignItems: "center", marginRight: 12 }}
+            >
               <TouchableOpacity
-                onPress={() => navigation.navigate("MemoryStoryView", { postId: story.id } as any)}
+                onPress={() =>
+                  navigation.navigate("MemoryStoryView", {
+                    postId: story.id,
+                  } as any)
+                }
                 style={{
                   width: 70,
                   height: 70,
@@ -758,7 +773,9 @@ export default function MemoryFeed({ navigation }: Props) {
               width: 260,
               borderRadius: 16,
               padding: 16,
-              backgroundColor: isDarkmode ? themeColor.dark100 : themeColor.white100,
+              backgroundColor: isDarkmode
+                ? themeColor.dark100
+                : themeColor.white100,
             }}
           >
             <Text fontWeight="bold" style={{ marginBottom: 12, fontSize: 16 }}>
@@ -779,7 +796,10 @@ export default function MemoryFeed({ navigation }: Props) {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity onPress={handleDeletePressed} style={{ paddingVertical: 10 }}>
+            <TouchableOpacity
+              onPress={handleDeletePressed}
+              style={{ paddingVertical: 10 }}
+            >
               <Text style={{ fontSize: 14, color: "red" }}>Delete</Text>
             </TouchableOpacity>
 
