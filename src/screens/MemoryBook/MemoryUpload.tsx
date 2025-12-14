@@ -91,6 +91,10 @@ type AlbumInfo = {
   name: string;
 };
 
+// ✅ Mood fields (stored in Firestore for MoodCalendar logic)
+type MoodLabel = "happy" | "neutral" | "tired" | "sad" | "angry";
+type MoodSource = "ai" | "user" | "face" | "caption" | "face+caption" | "unknown";
+
 function VideoPreview({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (p) => {
     p.loop = true;
@@ -185,6 +189,19 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : []
     : [];
 
+  // ✅ mood initial values if editing (fallback neutral)
+  const initialMoodLabel: MoodLabel = editMode
+    ? (String(postData.moodLabel || "neutral").toLowerCase() as MoodLabel)
+    : "neutral";
+  const initialMoodScore: number = editMode
+    ? typeof postData.moodScore === "number"
+      ? postData.moodScore
+      : 0
+    : 0;
+  const initialMoodSource: MoodSource = editMode
+    ? (String(postData.moodSource || "unknown") as MoodSource)
+    : "unknown";
+
   // store ALL selected media here
   const [mediaItems, setMediaItems] = useState<SelectedMedia[]>(() =>
     initialMediaUrls.length
@@ -203,6 +220,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isStory, setIsStory] = useState(initialIsStory);
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
+
+  // ✅ mood state
+  const [moodLabel, setMoodLabel] = useState<MoodLabel>(initialMoodLabel);
+  const [moodScore, setMoodScore] = useState<number>(initialMoodScore);
+  const [moodSource, setMoodSource] = useState<MoodSource>(initialMoodSource);
 
   // ✅ albums state
   const [albumIds, setAlbumIds] = useState<string[]>(
@@ -234,7 +256,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const LOCAL_AI_SERVER =
     ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
     ((process as any)?.env?.AI_SERVER_URL as string) ||
-    "http://192.168.68.129:3000";
+    "http://192.168.1.74:3000";
 
   // -------------------------------------------------------
   // Location: auto-detect using GPS + Nominatim (English)
@@ -370,47 +392,50 @@ export default function MemoryUpload({ navigation, route }: Props) {
     setPlaceOptions([]);
   };
 
-// -------------------------------------------------------
-// Helper: call AI server (caption + hashtags + friendTags)
-// -------------------------------------------------------
-const callAiForPostMeta = async (
-  captionDraft: string,
-  imageBase64List: string[]
-) => {
-  const url = `${LOCAL_AI_SERVER}/generatePostMeta`;
-  console.log("[CLIENT] calling:", url, "images:", imageBase64List.length);
+  // -------------------------------------------------------
+  // Helper: call AI server (caption + hashtags + friendTags + mood)
+  // -------------------------------------------------------
+  const callAiForPostMeta = async (
+    captionDraft: string,
+    imageBase64List: string[]
+  ) => {
+    const url = `${LOCAL_AI_SERVER}/generatePostMeta`;
+    console.log("[CLIENT] calling:", url, "images:", imageBase64List.length);
 
-  try {
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ captionDraft, imageBase64List }),
-    });
+    try {
+      const response = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ captionDraft, imageBase64List }),
+      });
 
-    const text = await response.text(); // 👈 important for debugging
-    console.log(
-      "[CLIENT] status:",
-      response.status,
-      "body:",
-      text.slice(0, 300)
-    );
+      const text = await response.text(); // 👈 important for debugging
+      console.log(
+        "[CLIENT] status:",
+        response.status,
+        "body:",
+        text.slice(0, 300)
+      );
 
-    if (!response.ok) {
-      throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
+      if (!response.ok) {
+        throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
+      }
+
+      const data = JSON.parse(text);
+      return data as {
+        caption: string;
+        hashtags: string[];
+        friendTags: string[];
+        // ✅ optional mood fields (from Node)
+        moodLabel?: MoodLabel | string;
+        moodScore?: number;
+        moodSource?: MoodSource | string;
+      };
+    } catch (e: any) {
+      console.log("[CLIENT] AI fetch failed:", e?.message || e);
+      throw e;
     }
-
-    const data = JSON.parse(text);
-    return data as {
-      caption: string;
-      hashtags: string[];
-      friendTags: string[];
-    };
-  } catch (e: any) {
-    console.log("[CLIENT] AI fetch failed:", e?.message || e);
-    throw e;
-  }
-};
-
+  };
 
   // -------------------------------------------------------
   // Face: single image recognize (kept for other usage)
@@ -521,10 +546,7 @@ const callAiForPostMeta = async (
     // ✅ Safety: only allow Remember when exactly ONE face is detected
     const FACE_THRESHOLD = 0.37;
 
-    const recognize = await callFaceRecognize(
-      firstImage.base64,
-      FACE_THRESHOLD
-    );
+    const recognize = await callFaceRecognize(firstImage.base64, FACE_THRESHOLD);
     const faces = Array.isArray(recognize?.faces) ? recognize.faces : [];
 
     if (faces.length === 0) {
@@ -560,10 +582,7 @@ const callAiForPostMeta = async (
         return prev;
       });
 
-      Alert.alert(
-        "Saved",
-        `I'll try to recognize "${name}" in future photos on this device.`
-      );
+      Alert.alert("Saved", `I'll try to recognize "${name}" in future photos.`);
     } catch (err) {
       console.log("handleRememberFace error:", err);
       Alert.alert(
@@ -588,8 +607,7 @@ const callAiForPostMeta = async (
   const pickPhotosFromLibrary = async () => {
     // On web, permission prompt is not needed/available. Skip request there.
     if (Platform.OS !== "web") {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
@@ -619,8 +637,7 @@ const callAiForPostMeta = async (
 
   const pickVideoFromLibrary = async () => {
     if (Platform.OS !== "web") {
-      const { status } =
-        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
         Alert.alert(
           "Permission needed",
@@ -694,7 +711,7 @@ const callAiForPostMeta = async (
     ]);
   };
 
-  // ✅ helper for mood keys
+  // ✅ helper for mood keys (kept for MoodCalendar field posts.mood)
   const getTodayMoodObject = () => {
     const now = new Date();
     const yyyy = now.getFullYear();
@@ -708,8 +725,7 @@ const callAiForPostMeta = async (
   };
 
   // -------------------------------------------------------
-  // ✅ AI generate (caption + hashtags + friend tags)
-  // Uses MULTI-image base64, and batch face recognize for better tags.
+  // ✅ AI generate (caption + hashtags + friend tags + mood)
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -744,7 +760,7 @@ const callAiForPostMeta = async (
       if (options?.useDraft) captionDraft = draft || "";
       else captionDraft = caption || "";
 
-      // 1) Caption + hashtags from your Node (/generatePostMeta already supports multi images)
+      // 1) Caption + hashtags + mood from Node
       const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
 
       const stripHashtags = (text: string) =>
@@ -766,6 +782,24 @@ const callAiForPostMeta = async (
       // 2) Friend tags from AI (text model) - keep it if provided
       if (Array.isArray(aiResult.friendTags) && aiResult.friendTags.length) {
         setFriendTagsText(aiResult.friendTags.join(", "));
+      }
+
+      // ✅ 2.5) Mood from AI (optional)
+      if (typeof aiResult.moodScore === "number") {
+        const safeScore = Math.max(-1, Math.min(1, aiResult.moodScore));
+        setMoodScore(safeScore);
+      }
+      if (aiResult.moodLabel) {
+        const lbl = String(aiResult.moodLabel).toLowerCase();
+        const allowed: MoodLabel[] = ["happy", "neutral", "tired", "sad", "angry"];
+        if (allowed.includes(lbl as MoodLabel)) setMoodLabel(lbl as MoodLabel);
+      }
+      if (aiResult.moodSource) {
+        const src = String(aiResult.moodSource) as MoodSource;
+        setMoodSource(src || "ai");
+      } else {
+        // if score exists but no source
+        if (typeof aiResult.moodScore === "number") setMoodSource("ai");
       }
 
       // 3) ✅ Face recognition batch across multiple images (faster + better)
@@ -856,7 +890,13 @@ const callAiForPostMeta = async (
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
           friendTags: friendTagList,
+          // ✅ keep existing mood object field
           mood: postData?.mood || getTodayMoodObject(),
+          // ✅ mood analytics fields for MoodCalendar scoring
+          moodLabel: postData?.moodLabel ?? moodLabel,
+          moodScore:
+            typeof postData?.moodScore === "number" ? postData.moodScore : moodScore,
+          moodSource: postData?.moodSource ?? moodSource,
           albums: safeAlbums,
           albumIds: safeAlbumIds,
         });
@@ -925,7 +965,15 @@ const callAiForPostMeta = async (
         savedBy: [],
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
+
+        // ✅ keep existing mood object (emoji/day key)
         mood: getTodayMoodObject(),
+
+        // ✅ NEW: mood scoring fields (used by MemoryMoodCalendar.tsx)
+        moodLabel,
+        moodScore: Math.max(-1, Math.min(1, Number(moodScore || 0))),
+        moodSource: moodSource || "unknown",
+
         albums: safeAlbums,
         albumIds: safeAlbumIds,
       });
@@ -954,9 +1002,7 @@ const callAiForPostMeta = async (
   return (
     <Layout>
       <TopNav
-        middleContent={
-          <Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>
-        }
+        middleContent={<Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>}
         leftAction={() => navigation.goBack()}
         leftContent={
           <Ionicons
@@ -1062,9 +1108,7 @@ const callAiForPostMeta = async (
               justifyContent: "space-between",
             }}
           >
-            <View
-              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
-            >
+            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
               <Ionicons
                 name="location-outline"
                 size={18}
@@ -1086,17 +1130,13 @@ const callAiForPostMeta = async (
             </View>
 
             <TouchableOpacity onPress={autoDetectLocation}>
-              <Text
-                style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}
-              >
+              <Text style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}>
                 Detect again
               </Text>
             </TouchableOpacity>
           </View>
 
-          <View
-            style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}
-          >
+          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <TextInput
                 placeholder="Search for a place (optional)"
@@ -1244,10 +1284,15 @@ const callAiForPostMeta = async (
           onChangeText={setFriendTagsText}
         />
 
+        {/* (Optional) debug display for mood */}
+        <View style={{ marginTop: 12 }}>
+          <Text style={{ fontSize: 12, color: isDarkmode ? "#aaa" : "#666" }}>
+            Mood (AI): {moodLabel} ({moodScore.toFixed(2)}) • {moodSource}
+          </Text>
+        </View>
+
         {/* Remember this face */}
-        <Text style={{ marginTop: 24, marginBottom: 8 }}>
-          Remember this face
-        </Text>
+        <Text style={{ marginTop: 24, marginBottom: 8 }}>Remember this face</Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1277,9 +1322,7 @@ const callAiForPostMeta = async (
               color={isDarkmode ? themeColor.white : "#444"}
               style={{ marginRight: 8 }}
             />
-            <Text
-              style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}
-            >
+            <Text style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}>
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
@@ -1290,8 +1333,8 @@ const callAiForPostMeta = async (
               color: isDarkmode ? "#aaa" : "#777",
             }}
           >
-            When enabled, this memory will appear as a story and disappear after
-            24 hours.
+            When enabled, this memory will appear as a story and disappear after 24
+            hours.
           </Text>
         </View>
 

@@ -1,12 +1,18 @@
-// src/screens/MemoryBook/MemoryMoodCalendar.tsx
-import React, { useEffect, useRef, useState } from "react";
-import { View, TouchableOpacity, ScrollView } from "react-native";
+import React, { useEffect, useMemo, useRef, useState } from "react";
+import {
+  View,
+  TouchableOpacity,
+  ScrollView,
+  Modal,
+  Alert,
+} from "react-native";
 import {
   Layout,
   TopNav,
   Text,
   useTheme,
   themeColor,
+  Button,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 
@@ -25,6 +31,7 @@ import {
   writeBatch,
   Timestamp,
   orderBy,
+  getDocs,
 } from "firebase/firestore";
 
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
@@ -33,6 +40,16 @@ type Props = NativeStackScreenProps<MainStackParamList, "MemoryMoodCalendar">;
 
 type MoodCategory = "positive" | "neutral" | "tired" | "sad";
 
+// ✅ manual edit emoji list (you can add more)
+const EMOJI_OPTIONS = [
+  { emoji: "😊", label: "Happy" },
+  { emoji: "😐", label: "Neutral" },
+  { emoji: "😴", label: "Tired" },
+  { emoji: "😢", label: "Sad" },
+  { emoji: "😡", label: "Angry" }, // optional, in case AI returns angry
+  { emoji: "🤩", label: "Excited" },
+  { emoji: "😌", label: "Calm" },
+];
 
 export default function MemoryMoodCalendar({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
@@ -45,7 +62,20 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
   // "YYYY-MM-DD" -> emoji
   const [moods, setMoods] = useState<Record<string, string>>({});
-  const moodsRef = useRef<Record<string, string>>({}); // for change detection
+  const moodsRef = useRef<Record<string, string>>({});
+
+  // ✅ keep track of user manual overrides so auto-compute won't overwrite
+  // "YYYY-MM-DD" -> true
+  const [manualMoodEdits, setManualMoodEdits] = useState<Record<string, boolean>>(
+    {}
+  );
+  const manualRef = useRef<Record<string, boolean>>({});
+
+  // ✅ editing modal
+  const [editModalVisible, setEditModalVisible] = useState(false);
+  const [editingDateKey, setEditingDateKey] = useState<string | null>(null);
+  const [editingCurrentEmoji, setEditingCurrentEmoji] = useState<string>("😐");
+  const [isSavingEdit, setIsSavingEdit] = useState(false);
 
   // which month is being viewed
   const [monthDate, setMonthDate] = useState<Date>(() => {
@@ -59,9 +89,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   // ----- derived month values -----
   const currentYear = monthDate.getFullYear();
   const currentMonthIndex = monthDate.getMonth(); // 0-11
-  const currentMonthKey = `${currentYear}-${String(
-    currentMonthIndex + 1
-  ).padStart(2, "0")}`;
+  const currentMonthKey = `${currentYear}-${String(currentMonthIndex + 1).padStart(
+    2,
+    "0"
+  )}`;
 
   const monthNames = [
     "January",
@@ -93,6 +124,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     ).padStart(2, "0")}`;
 
   const labelFromEmoji = (emoji: string) => {
+    const found = EMOJI_OPTIONS.find((x) => x.emoji === emoji);
+    if (found) return found.label;
     switch (emoji) {
       case "😊":
         return "Happy";
@@ -126,12 +159,17 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     load();
   }, [uid, firestore]);
 
-  // ---- load moods for current month (READ FROM posts.mood) ----
+  // -------------------------------------------------------
+  // ✅ load moods for current month (READ FROM posts.mood)
+  // ALSO load manual flags (mood.manual === true)
+  // -------------------------------------------------------
   useEffect(() => {
     if (!uid) return;
 
     setMoods({});
     moodsRef.current = {};
+    setManualMoodEdits({});
+    manualRef.current = {};
 
     const postsCol = collection(firestore, "posts");
     const qPosts = query(
@@ -143,22 +181,26 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
     const unsub = onSnapshot(qPosts, (snap) => {
       const map: Record<string, string> = {};
+      const manualMap: Record<string, boolean> = {};
 
       snap.forEach((ds) => {
         const data: any = ds.data();
         const m = data.mood;
         if (m?.date && m?.emoji && m?.monthKey === currentMonthKey) {
           map[m.date] = m.emoji;
+          if (m.manual === true) manualMap[m.date] = true;
         }
       });
 
       moodsRef.current = map;
       setMoods(map);
+
+      manualRef.current = manualMap;
+      setManualMoodEdits(manualMap);
     });
 
     return () => unsub();
   }, [uid, firestore, currentMonthKey]);
-
 
   // ---------- helper: score & category ----------
   const scoreFromLabel = (label?: string | null) => {
@@ -232,15 +274,15 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     }
   };
 
-  // ---- auto-compute moods per day, STORE INTO posts.mood ----
+  // -------------------------------------------------------
+  // ✅ auto-compute moods per day, STORE INTO posts.mood
+  // ✅ but SKIP dates manually edited (mood.manual === true)
+  // -------------------------------------------------------
   useEffect(() => {
     if (!uid) return;
 
     const postsCol = collection(firestore, "posts");
-    const qPosts = query(
-      postsCol,
-      where("CreatedUser.CreatedUserId", "==", uid)
-    );
+    const qPosts = query(postsCol, where("CreatedUser.CreatedUserId", "==", uid));
 
     const unsub = onSnapshot(qPosts, async (snap) => {
       const postsByDate: Record<string, { ref: any; data: any }[]> = {};
@@ -262,6 +304,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
         if (!dateObj || isNaN(dateObj.getTime())) return;
 
         const dateKey = dateKeyFromDate(dateObj);
+
+        // ✅ Skip auto overwrite if manually edited
+        if (manualRef.current?.[dateKey] === true) return;
+
         if (!postsByDate[dateKey]) postsByDate[dateKey] = [];
         postsByDate[dateKey].push({ ref: ds.ref, data });
       });
@@ -290,19 +336,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
               emoji,
               monthKey: monthKeyFromDate,
               updatedAt: Timestamp.now(),
+              manual: false, // ✅ computed
             },
           });
         });
-      });
-
-      // optional cleanup
-      snap.forEach((ds) => {
-        const data: any = ds.data();
-        const m = data.mood;
-        if (!m?.date) return;
-        if (!dateKeysWithPosts.has(m.date)) {
-          batch.update(ds.ref, { mood: null });
-        }
       });
 
       try {
@@ -331,6 +368,225 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     });
   };
 
+  // -------------------------------------------------------
+  // ✅ EDIT FLOW (long press -> confirm -> open modal)
+  // -------------------------------------------------------
+  const openEditForDate = (dateKey: string) => {
+    const currentEmoji = moodsRef.current?.[dateKey] || "😐";
+
+    Alert.alert(
+      "Edit mood emoji?",
+      `Change ${dateKey} from ${currentEmoji} (${labelFromEmoji(
+        currentEmoji
+      )})?\n\nThis prevents accidental taps.`,
+      [
+        { text: "Cancel", style: "cancel" },
+        {
+          text: "Edit",
+          style: "default",
+          onPress: () => {
+            setEditingDateKey(dateKey);
+            setEditingCurrentEmoji(currentEmoji);
+            setEditModalVisible(true);
+          },
+        },
+      ]
+    );
+  };
+
+  // save manual emoji to ALL posts that day
+  const saveManualEmoji = async (dateKey: string, emoji: string) => {
+    if (!uid) return;
+
+    try {
+      setIsSavingEdit(true);
+
+      // Query posts in that day by checking mood.date == dateKey
+      // Note: your auto-compute writes mood.date on each post, so this works.
+      const postsCol = collection(firestore, "posts");
+      const qDay = query(
+        postsCol,
+        where("CreatedUser.CreatedUserId", "==", uid),
+        where("isStory", "==", false),
+        where("mood.date", "==", dateKey)
+      );
+
+      const snap = await getDocs(qDay);
+      const batch = writeBatch(firestore);
+
+      const monthKeyFromDate = dateKey.slice(0, 7);
+
+      snap.forEach((ds) => {
+        batch.update(ds.ref, {
+          mood: {
+            date: dateKey,
+            emoji,
+            monthKey: monthKeyFromDate,
+            updatedAt: Timestamp.now(),
+            manual: true, // ✅ manual override
+          },
+        });
+      });
+
+      await batch.commit();
+
+      // update local maps immediately (smooth UI)
+      setMoods((prev) => ({ ...prev, [dateKey]: emoji }));
+      moodsRef.current = { ...moodsRef.current, [dateKey]: emoji };
+
+      setManualMoodEdits((prev) => {
+        const next = { ...prev, [dateKey]: true };
+        manualRef.current = next;
+        return next;
+      });
+
+      setEditModalVisible(false);
+      setEditingDateKey(null);
+
+      Alert.alert("Saved", `Mood for ${dateKey} updated to ${emoji}.`);
+    } catch (e) {
+      console.log("saveManualEmoji error:", e);
+      Alert.alert("Error", "Failed to update mood. Please try again.");
+    } finally {
+      setIsSavingEdit(false);
+    }
+  };
+
+  const renderEditModal = () => {
+    if (!editingDateKey) return null;
+
+    return (
+      <Modal
+        visible={editModalVisible}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          if (isSavingEdit) return;
+          setEditModalVisible(false);
+        }}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.45)",
+            justifyContent: "center",
+            padding: 16,
+          }}
+        >
+          <View
+            style={{
+              borderRadius: 16,
+              padding: 16,
+              backgroundColor: isDarkmode ? "#111" : "#fff",
+              borderWidth: 1,
+              borderColor: isDarkmode ? "#222" : "#eee",
+            }}
+          >
+            <Text
+              style={{
+                fontSize: 16,
+                fontWeight: "bold",
+                color: primaryTextColor,
+              }}
+            >
+              Edit mood for {editingDateKey}
+            </Text>
+
+            <Text
+              style={{
+                marginTop: 6,
+                fontSize: 12,
+                color: isDarkmode ? "#bbb" : "#666",
+              }}
+            >
+              Pick an emoji. This will override AI for that date.
+            </Text>
+
+            <View style={{ flexDirection: "row", flexWrap: "wrap", marginTop: 12 }}>
+              {EMOJI_OPTIONS.map((opt) => {
+                const active = opt.emoji === editingCurrentEmoji;
+                return (
+                  <TouchableOpacity
+                    key={opt.emoji}
+                    onPress={() => setEditingCurrentEmoji(opt.emoji)}
+                    style={{
+                      width: "25%",
+                      padding: 8,
+                      alignItems: "center",
+                    }}
+                  >
+                    <View
+                      style={{
+                        width: 52,
+                        height: 52,
+                        borderRadius: 26,
+                        alignItems: "center",
+                        justifyContent: "center",
+                        backgroundColor: active
+                          ? (isDarkmode ? "#1f3b5c" : "#d7e7ff")
+                          : (isDarkmode ? "#1f2933" : "#f3f4f6"),
+                        borderWidth: active ? 1 : 0,
+                        borderColor: active ? themeColor.info : "transparent",
+                      }}
+                    >
+                      <Text style={{ fontSize: 24 }}>{opt.emoji}</Text>
+                    </View>
+                    <Text
+                      style={{
+                        marginTop: 4,
+                        fontSize: 10,
+                        color: isDarkmode ? "#ddd" : "#444",
+                      }}
+                      numberOfLines={1}
+                    >
+                      {opt.label}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <View
+              style={{
+                flexDirection: "row",
+                justifyContent: "space-between",
+                marginTop: 12,
+              }}
+            >
+              <Button
+                text="Cancel"
+                style={{ width: "48%" }}
+                disabled={isSavingEdit}
+                onPress={() => setEditModalVisible(false)}
+              />
+              <Button
+                text={isSavingEdit ? "Saving..." : "Save"}
+                status="info"
+                style={{ width: "48%" }}
+                disabled={isSavingEdit}
+                onPress={() => {
+                  // ✅ second safety confirm (prevents accidental save)
+                  Alert.alert(
+                    "Confirm change",
+                    `Save ${editingCurrentEmoji} for ${editingDateKey}?`,
+                    [
+                      { text: "No", style: "cancel" },
+                      {
+                        text: "Yes, save",
+                        style: "default",
+                        onPress: () => saveManualEmoji(editingDateKey, editingCurrentEmoji),
+                      },
+                    ]
+                  );
+                }}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
+    );
+  };
+
   const renderMoodCalendar = () => {
     const cells: (number | null)[] = [];
     for (let i = 0; i < firstDayIndex; i++) cells.push(null);
@@ -357,11 +613,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             }}
           >
             <TouchableOpacity onPress={goToPrevMonth} style={{ padding: 4 }}>
-              <Ionicons
-                name="chevron-back"
-                size={20}
-                color={primaryTextColor}
-              />
+              <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
             </TouchableOpacity>
 
             <View style={{ alignItems: "center" }}>
@@ -374,6 +626,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
               >
                 {monthNames[currentMonthIndex]} {currentYear}
               </Text>
+
               <Text
                 style={{
                   fontSize: 11,
@@ -382,7 +635,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                   textAlign: "center",
                 }}
               >
-                Emojis are AI-detected from your daily posts 🧠
+                Long-press a day to edit (with confirmation) ✍️
               </Text>
             </View>
 
@@ -429,28 +682,59 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
               const key = dateKeyFromDay(day);
               const emoji = moods[key];
+              const isManual = manualMoodEdits[key] === true;
 
               return (
                 <View
                   key={key}
                   style={{ width: "14.285%", aspectRatio: 1, padding: 2 }}
                 >
-                  <View
+                  {/* ✅ Long press to edit */}
+                  <TouchableOpacity
+                    activeOpacity={0.85}
+                    onLongPress={() => {
+                      // only allow edit if this date has an emoji (means there are posts)
+                      if (!emoji) {
+                        Alert.alert(
+                          "No mood yet",
+                          "No posts detected for this day, so there’s nothing to edit."
+                        );
+                        return;
+                      }
+                      openEditForDate(key);
+                    }}
+                    delayLongPress={350}
                     style={{
                       flex: 1,
                       borderRadius: 999,
                       alignItems: "center",
                       justifyContent: "center",
                       backgroundColor: isDarkmode ? "#1f2933" : "#f3f4f6",
+                      borderWidth: isManual ? 1 : 0,
+                      borderColor: isManual ? themeColor.info : "transparent",
                     }}
                   >
                     <Text style={{ fontSize: 11, color: primaryTextColor }}>
                       {day}
                     </Text>
+
                     <Text style={{ fontSize: 16, marginTop: 2 }}>
                       {emoji || " "}
                     </Text>
-                  </View>
+
+                    {/* ✅ small "edited" hint */}
+                    {isManual && (
+                      <Text
+                        style={{
+                          marginTop: 1,
+                          fontSize: 9,
+                          color: isDarkmode ? "#9cc8ff" : "#2c6db6",
+                        }}
+                      >
+                        edited
+                      </Text>
+                    )}
+                  </TouchableOpacity>
                 </View>
               );
             })}
@@ -481,14 +765,22 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                 }}
               >
                 <Text style={{ fontSize: 16, marginRight: 4 }}>{emo}</Text>
-                <Text
-                  style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}
-                >
+                <Text style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}>
                   {label}
                 </Text>
               </View>
             ))}
           </View>
+
+          <Text
+            style={{
+              marginTop: 10,
+              fontSize: 11,
+              color: isDarkmode ? "#bbb" : "#666",
+            }}
+          >
+            Tip: Manual edits are highlighted with a blue border.
+          </Text>
         </View>
       </ScrollView>
     );
@@ -516,9 +808,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
           }
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
         />
-        <View
-          style={{ flex: 1, alignItems: "center", justifyContent: "center" }}
-        >
+        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
           <Text>Please sign in to use the mood calendar.</Text>
         </View>
       </Layout>
@@ -548,6 +838,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       />
 
       <View style={{ flex: 1 }}>{renderMoodCalendar()}</View>
+
+      {/* ✅ Modal */}
+      {renderEditModal()}
+
       <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>
   );
