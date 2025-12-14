@@ -65,7 +65,7 @@ const API_HOST =
     ? "http://localhost:11434"
     : "http://192.168.68.129:11434";
 
-const OLLAMA_MODEL = "gemma3:1b";
+const OLLAMA_MODEL = "deepseek-r1:7b";
 
 type Tx = {
   amount: number;
