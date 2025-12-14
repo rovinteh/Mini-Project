@@ -161,8 +161,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Ionicons name="add" size={32} color="#fff" />
         </TouchableOpacity>
 
-        <Text style={styles.fabLabel}>Add</Text>
-
         {/* AI Shortcut (no 'gap' used) */}
         <TouchableOpacity
           activeOpacity={0.9}
