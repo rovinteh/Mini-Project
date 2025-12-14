@@ -60,6 +60,18 @@ function startFirestoreNotificationListener(uid: string) {
 
       if (data?.delivered === true) continue;
 
+      // ✅ IMPORTANT: mood is local-only now (handled in MemoryMoodCalendar)
+      if (data?.type === "mood") {
+        try {
+          await updateDoc(doc(db, "notifications", uid, "items", d.id), {
+            delivered: true,
+          });
+        } catch (e) {
+          console.log("Failed to mark mood delivered (skip):", e);
+        }
+        continue;
+      }
+
       try {
         await Notifications.scheduleNotificationAsync({
           content: {

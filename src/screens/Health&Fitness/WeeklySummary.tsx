@@ -1,10 +1,11 @@
-import React, { useEffect, useState, useMemo } from "react";
+import React, { useEffect, useState, useMemo, useCallback } from "react";
 import {
   View,
   StyleSheet,
   ScrollView,
   Dimensions,
   ActivityIndicator,
+  RefreshControl,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -42,7 +43,13 @@ type DayStat = {
 };
 
 const screenWidth = Dimensions.get("window").width;
-const FITNESS_COLOR = "#22C55E";
+
+// --- Vibrant Palette ---
+const COLOR_ACTIVE = "#3B82F6"; // Blue
+const COLOR_WORKOUT = "#8B5CF6"; // Purple
+const COLOR_MEAL = "#F97316"; // Orange
+const COLOR_WATER = "#0EA5E9"; // Sky Blue
+const COLOR_TIP = "#F59E0B"; // Amber
 
 function last7Days(): DayStat[] {
   const days: DayStat[] = [];
@@ -69,20 +76,19 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
   const [stats, setStats] = useState<DayStat[]>(last7Days());
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
+  // --- Data Loading Logic ---
+  const loadData = useCallback(() => {
     const user = auth.currentUser;
     if (!user) {
       setLoading(false);
-      return;
+      return () => {};
     }
 
-    setLoading(true);
-    setStats(last7Days());
-
-    const now = new Date();
-    const startWindow = new Date(now);
-    startWindow.setDate(now.getDate() - 6);
+    const base = last7Days();
+    const startWindow = new Date();
+    startWindow.setDate(startWindow.getDate() - 6);
     startWindow.setHours(0, 0, 0, 0);
     const startTs = Timestamp.fromDate(startWindow);
 
@@ -90,24 +96,19 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
     let mealAgg: Record<string, { meals: number; waterMl: number }> = {};
 
     const recompute = () => {
-      const base = last7Days();
-      base.forEach((d) => {
-        const w = workoutAgg[d.fullDate];
-        const m = mealAgg[d.fullDate];
-        if (w) {
-          d.workouts = w.workouts;
-          d.workoutMinutes = w.minutes;
-        }
-        if (m) {
-          d.meals = m.meals;
-          d.waterMl = m.waterMl;
-        }
-      });
-      setStats(base);
+      const merged = base.map((d) => ({
+        ...d,
+        workouts: workoutAgg[d.fullDate]?.workouts || 0,
+        workoutMinutes: workoutAgg[d.fullDate]?.minutes || 0,
+        meals: mealAgg[d.fullDate]?.meals || 0,
+        waterMl: mealAgg[d.fullDate]?.waterMl || 0,
+      }));
+      setStats(merged);
       setLoading(false);
+      setRefreshing(false);
     };
 
-    // Workouts
+    // 1. Workouts Query
     const workoutQ = query(
       collection(db, "WorkoutSession"),
       where("userId", "==", user.uid),
@@ -115,38 +116,31 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       orderBy("createdAtClient", "asc")
     );
 
-    const unsubWorkouts = onSnapshot(
-      workoutQ,
-      (wSnap) => {
-        workoutAgg = {};
-        wSnap.forEach((doc) => {
-          const data: any = doc.data();
-          if (data.status !== "completed" || !data.createdAtClient?.toDate)
-            return;
+    const unsubWorkouts = onSnapshot(workoutQ, (wSnap) => {
+      workoutAgg = {};
+      wSnap.forEach((doc) => {
+        const data: any = doc.data();
+        if (data.status !== "completed" || !data.createdAtClient?.toDate)
+          return;
 
-          const dateStr = data.createdAtClient
-            .toDate()
-            .toISOString()
-            .slice(0, 10);
-          const mins =
-            typeof data.actualDurationSec === "number"
-              ? Math.round(data.actualDurationSec / 60)
-              : 0;
+        const dateStr = data.createdAtClient
+          .toDate()
+          .toISOString()
+          .slice(0, 10);
+        const mins =
+          typeof data.actualDurationSec === "number"
+            ? Math.round(data.actualDurationSec / 60)
+            : 0;
 
-          if (!workoutAgg[dateStr])
-            workoutAgg[dateStr] = { workouts: 0, minutes: 0 };
-          workoutAgg[dateStr].workouts += 1;
-          workoutAgg[dateStr].minutes += mins;
-        });
-        recompute();
-      },
-      (error) => {
-        console.log("Workout Query Error (Index?):", error);
-        setLoading(false);
-      }
-    );
+        if (!workoutAgg[dateStr])
+          workoutAgg[dateStr] = { workouts: 0, minutes: 0 };
+        workoutAgg[dateStr].workouts += 1;
+        workoutAgg[dateStr].minutes += mins;
+      });
+      recompute();
+    });
 
-    // Meals (+ hydration)
+    // 2. Meals Query
     const mealQ = query(
       collection(db, "MealEntry"),
       where("userId", "==", user.uid),
@@ -154,34 +148,24 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       orderBy("mealTimeClient", "asc")
     );
 
-    const unsubMeals = onSnapshot(
-      mealQ,
-      (mSnap) => {
-        mealAgg = {};
-        mSnap.forEach((doc) => {
-          const data: any = doc.data();
-          if (!data.mealTimeClient?.toDate) return;
+    const unsubMeals = onSnapshot(mealQ, (mSnap) => {
+      mealAgg = {};
+      mSnap.forEach((doc) => {
+        const data: any = doc.data();
+        if (!data.mealTimeClient?.toDate) return;
 
-          const dateStr = data.mealTimeClient
-            .toDate()
-            .toISOString()
-            .slice(0, 10);
-          if (!mealAgg[dateStr]) mealAgg[dateStr] = { meals: 0, waterMl: 0 };
+        const dateStr = data.mealTimeClient.toDate().toISOString().slice(0, 10);
+        if (!mealAgg[dateStr]) mealAgg[dateStr] = { meals: 0, waterMl: 0 };
 
-          if (data.isWater) {
-            mealAgg[dateStr].waterMl +=
-              typeof data.volumeMl === "number" ? data.volumeMl : 0;
-          } else {
-            mealAgg[dateStr].meals += 1;
-          }
-        });
-        recompute();
-      },
-      (error) => {
-        console.log("Meal Query Error (Index?):", error);
-        setLoading(false);
-      }
-    );
+        if (data.isWater) {
+          mealAgg[dateStr].waterMl +=
+            typeof data.volumeMl === "number" ? data.volumeMl : 0;
+        } else {
+          mealAgg[dateStr].meals += 1;
+        }
+      });
+      recompute();
+    });
 
     return () => {
       unsubWorkouts();
@@ -189,16 +173,28 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
     };
   }, []);
 
-  // Data prep
+  useEffect(() => {
+    setLoading(true);
+    const unsub = loadData();
+    return unsub;
+  }, [loadData]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    setTimeout(() => setRefreshing(false), 800);
+  };
+
+  // --- Derived Data ---
   const labels = stats.map((d) => d.label);
   const dataMinutes = stats.map((d) => d.workoutMinutes);
   const dataMeals = stats.map((d) => d.meals);
-  const dataWater = stats.map((d) => Math.round(d.waterMl / 250)); // show cups
+  const dataWaterCups = stats.map((d) => Math.round(d.waterMl / 250));
 
   const totalMinutes = dataMinutes.reduce((a, b) => a + b, 0);
   const totalWorkouts = stats.reduce((a, b) => a + b.workouts, 0);
   const totalMeals = dataMeals.reduce((a, b) => a + b, 0);
   const totalWaterMl = stats.reduce((a, b) => a + b.waterMl, 0);
+  const dailyAvgMinutes = Math.round(totalMinutes / 7);
 
   const bestDay = useMemo(() => {
     if (totalMinutes === 0) return "None";
@@ -207,16 +203,29 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
     return stats[idx]?.label || "-";
   }, [dataMinutes, totalMinutes, stats]);
 
-  const chartConfig = {
+  // --- Chart Helpers ---
+
+  // Calculate max segments dynamically to avoid repeated integers on Y-axis
+  const getMaxSegments = (dataArray: number[]) => {
+    const maxVal = Math.max(...dataArray, 1); // ensure at least 1
+    // If max value is small (e.g. 3), use 3 segments (0, 1, 2, 3)
+    // If max value is large, cap it at 4 segments for cleanliness
+    return maxVal < 5 ? maxVal : 4;
+  };
+
+  const getChartConfig = (colorHex: string) => ({
     backgroundGradientFrom: isDarkmode ? "#1F2937" : "#ffffff",
     backgroundGradientTo: isDarkmode ? "#1F2937" : "#ffffff",
-    color: (opacity = 1) => `rgba(34, 197, 94, ${opacity})`,
-    labelColor: (opacity = 1) =>
-      isDarkmode ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,${opacity})`,
-    strokeWidth: 2,
-    barPercentage: 0.55,
+    fillShadowGradientFrom: colorHex,
+    fillShadowGradientTo: colorHex,
     decimalPlaces: 0,
-  };
+    color: (opacity = 1) => colorHex,
+    labelColor: (opacity = 1) =>
+      isDarkmode ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,0.5)`,
+    style: { borderRadius: 16 },
+    propsForDots: { r: "4", strokeWidth: "2", stroke: colorHex },
+    barPercentage: 0.6,
+  });
 
   return (
     <Layout>
@@ -242,177 +251,163 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
       {loading ? (
         <View style={styles.center}>
-          <ActivityIndicator size="large" color={FITNESS_COLOR} />
-          <Text style={{ marginTop: 10 }}>Syncing activity...</Text>
+          <ActivityIndicator size="large" color={COLOR_ACTIVE} />
+          <Text style={{ marginTop: 10 }}>Analyzing Data...</Text>
         </View>
       ) : (
         <ScrollView
           style={styles.scroll}
-          contentContainerStyle={{ paddingBottom: 32 }}
+          contentContainerStyle={{ paddingBottom: 40 }}
           showsVerticalScrollIndicator={false}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+          }
         >
-          <Text size="h3" fontWeight="bold" style={{ marginBottom: 16 }}>
-            Last 7 Days
-          </Text>
+          {/* Header */}
+          <View style={{ marginBottom: 16 }}>
+            <Text size="h3" fontWeight="bold">
+              Last 7 Days
+            </Text>
+            <Text style={{ opacity: 0.5 }}>Your fitness at a glance</Text>
+          </View>
 
+          {/* Highlights Row 1 */}
           <View style={styles.highlightRow}>
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#dcfce7" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#EFF6FF" },
               ]}
             >
-              <Ionicons name="time" size={20} color={FITNESS_COLOR} />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+              <Ionicons name="time" size={24} color={COLOR_ACTIVE} />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalMinutes}m
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Active Time</Text>
+              <Text style={styles.highlightLabel}>Active Time</Text>
             </View>
 
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#dbeafe" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#F5F3FF" },
               ]}
             >
-              <Ionicons name="barbell" size={20} color="#3b82f6" />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+              <Ionicons name="barbell" size={24} color={COLOR_WORKOUT} />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalWorkouts}
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Sessions</Text>
+              <Text style={styles.highlightLabel}>Workouts</Text>
             </View>
 
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#ffedd5" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#FFF7ED" },
               ]}
             >
-              <Ionicons name="restaurant" size={20} color="#f97316" />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+              <Ionicons name="restaurant" size={24} color={COLOR_MEAL} />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalMeals}
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Meals</Text>
+              <Text style={styles.highlightLabel}>Meals</Text>
             </View>
           </View>
 
+          {/* Highlights Row 2 */}
           <View style={styles.highlightRow}>
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#e0f2fe" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#E0F2FE" },
               ]}
             >
-              <Ionicons name="water" size={20} color="#3B82F6" />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+              <Ionicons name="water" size={24} color={COLOR_WATER} />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {totalWaterMl}ml
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Water</Text>
+              <Text style={styles.highlightLabel}>Hydration</Text>
             </View>
 
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#f3f4f6" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#F3F4F6" },
               ]}
             >
-              <Ionicons name="sparkles" size={20} color="#A855F7" />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
+              <Ionicons name="trophy" size={24} color="#F59E0B" />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
                 {bestDay}
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Best Day</Text>
+              <Text style={styles.highlightLabel}>Best Day</Text>
             </View>
 
             <View
               style={[
                 styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#f0fdf4" },
+                { backgroundColor: isDarkmode ? "#1f2937" : "#F3F4F6" },
               ]}
             >
-              <Ionicons name="trending-up" size={20} color={FITNESS_COLOR} />
-              <Text fontWeight="bold" size="h4" style={{ marginVertical: 4 }}>
-                {Math.round(totalMinutes / 7)}m
+              <Ionicons name="pulse" size={24} color="#10B981" />
+              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
+                {dailyAvgMinutes}m
               </Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>Avg/Day</Text>
+              <Text style={styles.highlightLabel}>Daily Avg</Text>
             </View>
           </View>
 
-          {/* Coach Tip */}
-          <Section
-            style={[
-              styles.tipCard,
-              { backgroundColor: isDarkmode ? "#111827" : "#fff7ed" },
-            ]}
-          >
-            <View style={styles.tipHeader}>
-              <View style={{ flexDirection: "row", alignItems: "center" }}>
-                <Text size="h4" fontWeight="bold">
-                  Coach Tip
+          {/* Coach Tip Insight */}
+          <Section style={[styles.tipCard, { borderColor: COLOR_TIP }]}>
+            <View
+              style={{
+                flexDirection: "row",
+                alignItems: "flex-start",
+                gap: 12,
+              }}
+            >
+              <View
+                style={[
+                  styles.tipIconBox,
+                  {
+                    backgroundColor: isDarkmode
+                      ? "rgba(245, 158, 11, 0.2)"
+                      : "#FEF3C7",
+                  },
+                ]}
+              >
+                <Ionicons name="bulb" size={24} color={COLOR_TIP} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text fontWeight="bold" style={{ marginBottom: 4 }}>
+                  Weekly Insight
                 </Text>
-                <Text style={{ marginLeft: 6, fontSize: 16 }}>✨</Text>
-              </View>
-              <Ionicons
-                name="sparkles"
-                size={18}
-                color={isDarkmode ? "#fbbf24" : "#f59e0b"}
-              />
-            </View>
-
-            <Text style={{ opacity: 0.8, marginTop: 6, lineHeight: 18 }}>
-              {totalWorkouts === 0
-                ? "Start small: do one short session today. Momentum is the goal."
-                : totalWorkouts < 3
-                ? "Nice start. Add 1 more session to make this week feel complete."
-                : "Great consistency! Keep sessions short and sustainable to protect your streak."}
-            </Text>
-
-            <View style={styles.badgeRow}>
-              <View
-                style={[
-                  styles.badge,
-                  { backgroundColor: isDarkmode ? "#1f2937" : "#ecfccb" },
-                ]}
-              >
-                <Text style={styles.badgeText}>🔥 Streak focus</Text>
-              </View>
-              <View
-                style={[
-                  styles.badge,
-                  { backgroundColor: isDarkmode ? "#1f2937" : "#e0f2fe" },
-                ]}
-              >
-                <Text style={styles.badgeText}>💧 Hydrate</Text>
-              </View>
-              <View
-                style={[
-                  styles.badge,
-                  { backgroundColor: isDarkmode ? "#1f2937" : "#fce7f3" },
-                ]}
-              >
-                <Text style={styles.badgeText}>🥗 Log meals</Text>
+                <Text style={{ opacity: 0.8, lineHeight: 20 }}>
+                  {totalWorkouts === 0
+                    ? "Your week is a blank canvas. Even a 5-minute warm-up today counts as a win!"
+                    : totalWorkouts < 3
+                    ? "You've made a start! Try to squeeze in one more quick session to build consistency."
+                    : "You are crushing it! Remember to balance high intensity with good rest and hydration."}
+                </Text>
               </View>
             </View>
           </Section>
 
-          {/* Activity Chart */}
-          <Section style={styles.chartCard}>
-            <View style={styles.cardHeader}>
-              <Text fontWeight="bold">Activity Trend (Minutes)</Text>
-              {bestDay !== "None" && (
-                <Text style={{ fontSize: 10, color: FITNESS_COLOR }}>
-                  Best: {bestDay}
-                </Text>
-              )}
+          {/* Chart 1: Activity */}
+          <Section style={styles.chartSection}>
+            <View style={styles.chartHeader}>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Ionicons name="analytics" size={20} color={COLOR_ACTIVE} />
+                <Text fontWeight="bold">Activity Trend</Text>
+              </View>
+              <Text style={{ fontSize: 10, opacity: 0.5 }}>MINUTES</Text>
             </View>
 
             {totalMinutes === 0 ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="analytics" size={40} color="#e5e7eb" />
-                <Text style={{ marginTop: 8, opacity: 0.5 }}>
-                  No workout activity yet.
-                </Text>
+              <View style={styles.emptyChart}>
+                <Text style={{ opacity: 0.5 }}>No activity recorded yet.</Text>
                 <Button
-                  text="Start a Session"
+                  text="Start First Workout"
                   size="sm"
                   style={{ marginTop: 10 }}
                   onPress={() => navigation.navigate("WorkoutSession")}
@@ -423,29 +418,36 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 data={{ labels, datasets: [{ data: dataMinutes }] }}
                 width={screenWidth - 48}
                 height={200}
-                yAxisSuffix="m"
-                chartConfig={chartConfig}
+                yAxisLabel=""
+                yAxisSuffix=""
+                chartConfig={getChartConfig(COLOR_ACTIVE)}
                 bezier
                 style={{ borderRadius: 12, marginVertical: 8 }}
+                withInnerLines={true}
+                withOuterLines={false}
               />
             )}
           </Section>
 
-          {/* Meals Chart */}
-          <Section style={styles.chartCard}>
-            <View style={styles.cardHeader}>
-              <Text fontWeight="bold">Meals Logged</Text>
+          {/* Chart 2: Meals */}
+          <Section style={styles.chartSection}>
+            <View style={styles.chartHeader}>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Ionicons name="restaurant" size={20} color={COLOR_MEAL} />
+                <Text fontWeight="bold">Meal Frequency</Text>
+              </View>
+              <Text style={{ fontSize: 10, opacity: 0.5 }}>COUNT</Text>
             </View>
 
             {totalMeals === 0 ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="cafe" size={40} color="#e5e7eb" />
-                <Text style={{ marginTop: 8, opacity: 0.5 }}>
-                  No meals logged.
-                </Text>
+              <View style={styles.emptyChart}>
+                <Text style={{ opacity: 0.5 }}>No meals logged.</Text>
                 <Button
                   text="Log a Meal"
                   size="sm"
+                  status="warning"
                   style={{ marginTop: 10 }}
                   onPress={() => navigation.navigate("LogMeal")}
                 />
@@ -455,49 +457,47 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                 data={{ labels, datasets: [{ data: dataMeals }] }}
                 width={screenWidth - 48}
                 height={200}
-                chartConfig={{
-                  ...chartConfig,
-                  color: (opacity = 1) => `rgba(249, 115, 22, ${opacity})`,
-                }}
+                yAxisLabel=""
+                yAxisSuffix=""
+                segments={getMaxSegments(dataMeals)} // FIX: prevent repeated axis
+                chartConfig={getChartConfig(COLOR_MEAL)}
                 style={{ borderRadius: 12, marginVertical: 8 }}
                 fromZero
                 showBarTops={false}
+                withInnerLines={true}
               />
             )}
           </Section>
 
-          {/* Hydration Chart */}
-          <Section style={styles.chartCard}>
-            <View style={styles.cardHeader}>
-              <Text fontWeight="bold">Hydration (cups)</Text>
-              <Text style={{ fontSize: 10, opacity: 0.6 }}>1 cup ≈ 250ml</Text>
+          {/* Chart 3: Hydration */}
+          <Section style={styles.chartSection}>
+            <View style={styles.chartHeader}>
+              <View
+                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
+              >
+                <Ionicons name="water" size={20} color={COLOR_WATER} />
+                <Text fontWeight="bold">Water Intake</Text>
+              </View>
+              <Text style={{ fontSize: 10, opacity: 0.5 }}>CUPS (~250ml)</Text>
             </View>
 
             {totalWaterMl === 0 ? (
-              <View style={styles.emptyState}>
-                <Ionicons name="water" size={40} color="#e5e7eb" />
-                <Text style={{ marginTop: 8, opacity: 0.5 }}>
-                  No water logs yet.
-                </Text>
-                <Button
-                  text="Add Water"
-                  size="sm"
-                  style={{ marginTop: 10 }}
-                  onPress={() => navigation.goBack()}
-                />
+              <View style={styles.emptyChart}>
+                <Text style={{ opacity: 0.5 }}>No water logged.</Text>
               </View>
             ) : (
               <BarChart
-                data={{ labels, datasets: [{ data: dataWater }] }}
+                data={{ labels, datasets: [{ data: dataWaterCups }] }}
                 width={screenWidth - 48}
                 height={200}
-                chartConfig={{
-                  ...chartConfig,
-                  color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`,
-                }}
+                yAxisLabel=""
+                yAxisSuffix=""
+                segments={getMaxSegments(dataWaterCups)} // FIX: prevent repeated axis
+                chartConfig={getChartConfig(COLOR_WATER)}
                 style={{ borderRadius: 12, marginVertical: 8 }}
                 fromZero
                 showBarTops={false}
+                withInnerLines={true}
               />
             )}
           </Section>
@@ -510,31 +510,68 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
   scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
+
   highlightRow: {
     flexDirection: "row",
     justifyContent: "space-between",
-    gap: 8,
+    gap: 12,
     marginBottom: 12,
-  } as any,
+  },
   highlightCard: {
     flex: 1,
-    borderRadius: 12,
-    padding: 12,
+    borderRadius: 16,
+    paddingVertical: 16,
+    paddingHorizontal: 8,
+    alignItems: "center",
+    justifyContent: "center",
+    // Subtle shadow
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  highlightLabel: {
+    fontSize: 10,
+    opacity: 0.6,
+    textTransform: "uppercase",
+    marginTop: 2,
+    fontWeight: "600",
+  },
+
+  tipCard: {
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+    borderLeftWidth: 4,
+  },
+  tipIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
   },
-  chartCard: { borderRadius: 16, padding: 16, marginBottom: 16 },
-  cardHeader: {
+
+  chartSection: {
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  chartHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 8,
+    marginBottom: 12,
   },
-  emptyState: {
+  emptyChart: {
     height: 180,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.02)",
+    backgroundColor: "rgba(0,0,0,0.03)",
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.05)",
+    borderStyle: "dashed",
   },
 });

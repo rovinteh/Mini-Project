@@ -1,6 +1,6 @@
 // src/screens/MemoryBook/MemoryMoodCalendar.tsx
 import React, { useEffect, useRef, useState } from "react";
-import { View, TouchableOpacity, ScrollView } from "react-native";
+import { View, TouchableOpacity, ScrollView, Platform } from "react-native";
 import {
   Layout,
   TopNav,
@@ -24,16 +24,25 @@ import {
   onSnapshot,
   writeBatch,
   Timestamp,
-  addDoc,
-  serverTimestamp,
   orderBy,
 } from "firebase/firestore";
 
+import * as Notifications from "expo-notifications";
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryMoodCalendar">;
 
 type MoodCategory = "positive" | "neutral" | "tired" | "sad";
+
+// ✅ foreground notification behavior (iOS Expo Go friendly)
+Notifications.setNotificationHandler({
+  handleNotification: async () => ({
+    shouldShowBanner: true,
+    shouldShowList: true,
+    shouldPlaySound: true,
+    shouldSetBadge: false,
+  }),
+});
 
 export default function MemoryMoodCalendar({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
@@ -46,8 +55,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
   // "YYYY-MM-DD" -> emoji
   const [moods, setMoods] = useState<Record<string, string>>({});
-  const moodsRef = useRef<Record<string, string>>({}); // ✅ for change detection
-  const lastMoodNotifyKeyRef = useRef<string>(""); // ✅ anti-spam
+  const moodsRef = useRef<Record<string, string>>({}); // for change detection
+  const lastMoodNotifyKeyRef = useRef<string>(""); // anti-spam
 
   // which month is being viewed
   const [monthDate, setMonthDate] = useState<Date>(() => {
@@ -108,6 +117,56 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     }
   };
 
+  // -------------------------------
+  // ✅ Local notifications setup
+  // -------------------------------
+  const ensureLocalNotificationsReady = async () => {
+    try {
+      // Android needs channel for sound/importance
+      if (Platform.OS === "android") {
+        await Notifications.setNotificationChannelAsync("mood", {
+          name: "Mood Updates",
+          importance: Notifications.AndroidImportance.HIGH,
+          sound: "default",
+          vibrationPattern: [0, 200, 200, 200],
+          lockscreenVisibility:
+            Notifications.AndroidNotificationVisibility.PUBLIC,
+        });
+      }
+
+      const perm = await Notifications.getPermissionsAsync();
+      if (perm.status !== "granted") {
+        const req = await Notifications.requestPermissionsAsync();
+        if (req.status !== "granted") {
+          console.log("Notification permission not granted.");
+        }
+      }
+    } catch (e) {
+      console.log("ensureLocalNotificationsReady error:", e);
+    }
+  };
+
+  // ✅ Expo Go + iPhone: presentNotificationAsync is more reliable for immediate show
+  const sendMoodLocalNotification = async (emoji: string) => {
+    try {
+      await Notifications.scheduleNotificationAsync({
+        content: {
+          title: "Mood updated",
+          body: `Your current mood is ${labelFromEmoji(emoji)} ${emoji}`,
+          sound: "default",
+        },
+        trigger: null, // ✅ fire immediately
+      });
+    } catch (e) {
+      console.log("Failed to present local notification:", e);
+    }
+  };
+
+  // ask permission when screen opens
+  useEffect(() => {
+    ensureLocalNotificationsReady();
+  }, []);
+
   // ---- load user display name ----
   useEffect(() => {
     if (!uid) return;
@@ -160,7 +219,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     return () => unsub();
   }, [uid, firestore, currentMonthKey]);
 
-// ✅ Notify user if TODAY mood emoji changes
+  // ✅ Notify user if TODAY mood emoji changes (LOCAL ONLY)
   useEffect(() => {
     if (!uid) return;
 
@@ -194,8 +253,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       });
 
       if (!bestEmoji) return;
-      const emoji: string = bestEmoji;
 
+      const emoji = bestEmoji;
       const prevEmoji = moodsRef.current[todayKey];
 
       if (emoji !== prevEmoji) {
@@ -204,18 +263,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
         if (lastMoodNotifyKeyRef.current !== notifyKey) {
           lastMoodNotifyKeyRef.current = notifyKey;
 
-          try {
-            await addDoc(collection(firestore, "notifications", uid, "items"), {
-              type: "mood",
-              text: `Your current mood is ${labelFromEmoji(emoji)} ${emoji}`,
-              fromUid: uid,
-              read: false,
-              delivered: false,
-              createdAt: serverTimestamp(),
-            });
-          } catch (e) {
-            console.log("Failed to create mood notification:", e);
-          }
+          // ✅ Option A: local-only notification
+          await sendMoodLocalNotification(emoji);
         }
 
         setMoods((prev) => {
@@ -253,11 +302,8 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   const moodCategoryFromPost = (data: any): MoodCategory => {
     let score: number;
 
-    if (typeof data.moodScore === "number") {
-      score = data.moodScore;
-    } else {
-      score = scoreFromLabel(data.moodLabel);
-    }
+    if (typeof data.moodScore === "number") score = data.moodScore;
+    else score = scoreFromLabel(data.moodLabel);
 
     if (score >= 0.3) return "positive";
     if (score <= -0.7) return "sad";
@@ -291,8 +337,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
     if (topCats.length > 1) return "😐";
 
-    const only = topCats[0];
-    switch (only) {
+    switch (topCats[0]) {
       case "positive":
         return "😊";
       case "sad":
@@ -388,76 +433,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     return () => unsub();
   }, [uid, firestore]);
 
-  useEffect(() => {
-    if (!uid) return;
-
-    const todayKey = dateKeyFromDate(new Date());
-    const postsCol = collection(firestore, "posts");
-
-    const qToday = query(
-      postsCol,
-      where("CreatedUser.CreatedUserId", "==", uid),
-      where("mood.date", "==", todayKey)
-    );
-
-    const unsub = onSnapshot(qToday, async (snap) => {
-      const counts: Record<string, number> = {};
-
-      snap.forEach((ds) => {
-        const data: any = ds.data();
-        const emo = data?.mood?.emoji;
-        if (!emo) return;
-        counts[emo] = (counts[emo] || 0) + 1;
-      });
-
-      let bestEmoji: string | null = null;
-      let bestCount = 0;
-
-      Object.entries(counts).forEach(([emo, c]) => {
-        if (c > bestCount) {
-          bestCount = c;
-          bestEmoji = emo;
-        }
-      });
-
-      // ✅ guard (bestEmoji is string after this)
-      if (!bestEmoji) return;
-      const emoji: string = bestEmoji;
-
-      const prevEmoji = moodsRef.current[todayKey];
-
-      if (emoji !== prevEmoji) {
-        const notifyKey = `${todayKey}:${emoji}`;
-
-        if (lastMoodNotifyKeyRef.current !== notifyKey) {
-          lastMoodNotifyKeyRef.current = notifyKey;
-
-          try {
-            await addDoc(collection(firestore, "notifications", uid, "items"), {
-              type: "mood",
-              text: `Your current mood is ${labelFromEmoji(emoji)} ${emoji}`,
-              fromUid: uid,
-              read: false,
-              delivered: false,
-              createdAt: serverTimestamp(),
-            });
-          } catch (e) {
-            console.log("Failed to create mood notification:", e);
-          }
-        }
-
-        setMoods((prev) => {
-          const next = { ...prev, [todayKey]: emoji };
-          moodsRef.current = next;
-          return next;
-        });
-      }
-    });
-
-    // ✅ cleanup function ONLY
-    return () => unsub();
-  }, [uid, firestore]);
-
   const goToPrevMonth = () => {
     setMonthDate((prev) => {
       const d = new Date(prev);
@@ -543,11 +518,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             {weekdayLabels.map((w) => (
               <View
                 key={w}
-                style={{
-                  flex: 1,
-                  alignItems: "center",
-                  paddingVertical: 2,
-                }}
+                style={{ flex: 1, alignItems: "center", paddingVertical: 2 }}
               >
                 <Text
                   style={{
@@ -569,11 +540,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                 return (
                   <View
                     key={`empty-${idx}`}
-                    style={{
-                      width: "14.285%",
-                      aspectRatio: 1,
-                      padding: 2,
-                    }}
+                    style={{ width: "14.285%", aspectRatio: 1, padding: 2 }}
                   />
                 );
               }
@@ -584,11 +551,7 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
               return (
                 <View
                   key={key}
-                  style={{
-                    width: "14.285%",
-                    aspectRatio: 1,
-                    padding: 2,
-                  }}
+                  style={{ width: "14.285%", aspectRatio: 1, padding: 2 }}
                 >
                   <View
                     style={{

@@ -2,7 +2,7 @@
 import React from "react";
 import { View, ScrollView, TouchableOpacity } from "react-native";
 import { MainStackParamList } from "../types/navigation";
-import { getAuth, signOut } from "firebase/auth";
+import { getAuth } from "firebase/auth";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   Layout,
@@ -51,7 +51,7 @@ export default function Home({ navigation }: Props) {
     {
       key: "HealthFitness",
       title: "Health & Fitness",
-      subtitle: "Monitor mood, steps, and healthy routines.",
+      subtitle: "Track daily workouts and meals.",
       icon: "fitness-outline",
       bgLight: "#FFF6E5",
       bgDark: "#3D2A0F",
@@ -238,9 +238,9 @@ export default function Home({ navigation }: Props) {
                 route: "MoneyManagement",
               },
               {
-                label: "Fitness",
-                icon: "fitness-outline",
-                route: "FitnessMenu",
+                label: "Add Meal",
+                icon: "restaurant-outline",
+                route: "LogMeal",
               },
             ].map((item) => (
               <TouchableOpacity

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   StyleSheet,
@@ -7,6 +7,7 @@ import {
   KeyboardAvoidingView,
   Platform,
   Alert,
+  RefreshControl,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -45,7 +46,7 @@ const FITNESS_COLOR = "#22C55E"; // Keep for save button / main accents
 const recommendMinutes = (difficulty: "easy" | "moderate" | "hard") => {
   if (difficulty === "easy") return 20;
   if (difficulty === "moderate") return 30;
-  return 45; // increased hard to 45
+  return 45;
 };
 
 export default function WorkoutPreferenceScreen({ navigation }: Props) {
@@ -69,10 +70,11 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
   const [weight, setWeight] = useState("");
 
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [saving, setSaving] = useState(false);
 
-  // --- Load Data ---
-  useEffect(() => {
+  // --- Load Data Function ---
+  const loadData = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) {
       setLoading(false);
@@ -80,28 +82,36 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     }
 
     const ref = doc(db, "WorkoutPreference", user.uid);
-
-    (async () => {
-      try {
-        const snap = await getDoc(ref);
-        if (snap.exists()) {
-          const data = snap.data() as any;
-          setGoal(data.goal || "");
-          setDifficulty(data.difficulty || "easy");
-          setSelectedDays(data.workoutDays || ["Mon", "Wed", "Fri"]);
-          setSessionLength(
-            data.sessionLengthMinutes ? String(data.sessionLengthMinutes) : "20"
-          );
-          setHeight(data.height ? String(data.height) : "");
-          setWeight(data.weight ? String(data.weight) : "");
-        }
-      } catch (err) {
-        console.log("Error loading preference:", err);
-      } finally {
-        setLoading(false);
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const data = snap.data() as any;
+        setGoal(data.goal || "");
+        setDifficulty(data.difficulty || "easy");
+        setSelectedDays(data.workoutDays || ["Mon", "Wed", "Fri"]);
+        setSessionLength(
+          data.sessionLengthMinutes ? String(data.sessionLengthMinutes) : "20"
+        );
+        setHeight(data.height ? String(data.height) : "");
+        setWeight(data.weight ? String(data.weight) : "");
       }
-    })();
-  }, []);
+    } catch (err) {
+      console.log("Error loading preference:", err);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  }, [auth.currentUser, db]);
+
+  // Initial Load
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  const onRefresh = () => {
+    setRefreshing(true);
+    loadData();
+  };
 
   const toggleDay = (day: string) => {
     setSelectedDays((prev) =>
@@ -246,6 +256,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
           <ScrollView
             style={styles.scroll}
             contentContainerStyle={{ paddingBottom: 32 }}
+            refreshControl={
+              <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
+            }
           >
             {/* 1) About You (Blue) */}
             <Section style={styles.card}>
@@ -256,7 +269,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_ABOUT}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   About You
                 </Text>
               </View>
@@ -319,7 +332,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_GOAL}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Your Goal
                 </Text>
               </View>
@@ -356,8 +369,10 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   >
                     <Text
                       size="sm"
-                      fontWeight={goal === g ? "bold" : "normal"}
-                      style={{ color: goal === g ? COLOR_GOAL : undefined }}
+                      style={{
+                        color: goal === g ? COLOR_GOAL : undefined,
+                        fontWeight: goal === g ? "bold" : "normal",
+                      }}
                     >
                       {g}
                     </Text>
@@ -375,7 +390,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_INTENSITY}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Intensity
                 </Text>
               </View>
@@ -427,9 +442,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                       }
                     >
                       <Text
-                        fontWeight={active ? "bold" : "normal"}
                         style={{
                           color: active ? COLOR_INTENSITY : undefined,
+                          fontWeight: active ? "bold" : "normal",
                         }}
                       >
                         {opt.label}
@@ -460,7 +475,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   color={COLOR_SCHEDULE}
                   style={{ marginRight: 8 }}
                 />
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Schedule
                 </Text>
               </View>
@@ -518,9 +533,10 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                     >
                       <Text
                         style={{
+                          fontSize: 10, // Smaller Font
                           color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
+                          fontWeight: active ? "bold" : "normal", // ✅ move into style
                         }}
-                        fontWeight={active ? "bold" : "normal"}
                       >
                         {day}
                       </Text>
@@ -529,15 +545,16 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 })}
               </View>
 
-              <Text style={[styles.label, { marginTop: 16 }]}>
+              <Text style={{ ...styles.label, marginTop: 16 }}>
                 Duration (minutes)
               </Text>
+
               <TextInput
                 value={sessionLength}
                 onChangeText={(v) => setSessionLength(v.replace(/[^\d]/g, ""))}
                 keyboardType="numeric"
                 placeholder="20"
-                width={120}
+                style={{ width: 120 }}
               />
 
               <Text style={{ fontSize: 11, opacity: 0.6, marginTop: 10 }}>
@@ -593,9 +610,9 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(150,150,150,0.1)",
   },
   dayChip: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 36, // Smaller circle
+    height: 36,
+    borderRadius: 18,
     alignItems: "center",
     justifyContent: "center",
     borderWidth: 1,

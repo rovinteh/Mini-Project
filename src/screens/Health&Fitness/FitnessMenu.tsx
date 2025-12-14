@@ -5,10 +5,11 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  RefreshControl, // <--- 1. Imported here
+  RefreshControl,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
+import { useFocusEffect } from "@react-navigation/native";
 import {
   Layout,
   TopNav,
@@ -33,9 +34,10 @@ import {
   onSnapshot,
   orderBy,
 } from "firebase/firestore";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 
 type Props = NativeStackScreenProps<MainStackParamList, "FitnessMenu">;
-
+// ... (Type definitions remain the same as previous) ...
 type PrefData = {
   goal: string;
   difficulty: "easy" | "moderate" | "hard";
@@ -45,14 +47,14 @@ type PrefData = {
   weight?: number | null;
 };
 
-// --- Color Palette ---
-const FITNESS_COLOR = "#22C55E"; // Green accent
-const WORKOUT_COLOR = "#3B82F6"; // Blue
-const MEAL_COLOR = "#F97316"; // Orange
-const WATER_COLOR = "#0EA5E9"; // Sky Blue
-const GOAL_COLOR = "#8B5CF6"; // Purple
-const DIFF_COLOR = "#F59E0B"; // Amber
-const SCHED_COLOR = "#10B981"; // Emerald
+// Colors
+const FITNESS_COLOR = "#22C55E";
+const WORKOUT_COLOR = "#3B82F6";
+const MEAL_COLOR = "#F97316";
+const WATER_COLOR = "#0EA5E9";
+const GOAL_COLOR = "#8B5CF6";
+const DIFF_COLOR = "#F59E0B";
+const SCHED_COLOR = "#10B981";
 
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
@@ -67,105 +69,62 @@ export default function FitnessMenu({ navigation }: Props) {
   const db = getFirestore();
 
   const [pref, setPref] = useState<PrefData | null>(null);
-
-  // Dashboard stats
   const [workoutsThisWeek, setWorkoutsThisWeek] = useState(0);
   const [workoutMinutesThisWeek, setWorkoutMinutesThisWeek] = useState(0);
   const [mealsToday, setMealsToday] = useState(0);
-
   const [waterMlToday, setWaterMlToday] = useState(0);
   const [pendingWaterMl, setPendingWaterMl] = useState(0);
-
   const [streakDays, setStreakDays] = useState(0);
-
   const [loading, setLoading] = useState(true);
-
-  // --- 2. Refresh State ---
   const [refreshing, setRefreshing] = useState(false);
   const [addingWater, setAddingWater] = useState(false);
+
+  // NEW: State to track if there is a session to resume
+  const [hasSavedSession, setHasSavedSession] = useState(false);
 
   const userName =
     auth.currentUser?.displayName ||
     auth.currentUser?.email?.split("@")[0] ||
     "User";
-
   const todayStr = new Date().toLocaleDateString("en-MY", {
     weekday: "long",
     day: "numeric",
     month: "short",
   });
 
-  // --- Display Helpers ---
-  const difficultyText =
-    pref?.difficulty === "easy"
-      ? "Beginner Friendly"
-      : pref?.difficulty === "moderate"
-      ? "Balanced"
-      : pref?.difficulty === "hard"
-      ? "High Intensity"
-      : "Not set";
+  // Check for saved session every time screen comes into focus
+  useFocusEffect(
+    useCallback(() => {
+      const checkSession = async () => {
+        const user = auth.currentUser;
+        if (!user) return;
+        try {
+          const saved = await AsyncStorage.getItem(`session_${user.uid}`);
+          setHasSavedSession(!!saved);
+        } catch (e) {
+          console.log(e);
+        }
+      };
+      checkSession();
+    }, [auth.currentUser])
+  );
 
-  const daysLabel = pref?.workoutDays?.length
-    ? pref.workoutDays.join(", ")
-    : "No days selected";
-
-  const weeklyGoal = pref?.workoutDays?.length ?? 0;
-
-  const weeklyProgressLabel = useMemo(() => {
-    if (!weeklyGoal) return "Set a plan to track progress";
-    const pct = Math.min(
-      100,
-      Math.round((workoutsThisWeek / weeklyGoal) * 100)
-    );
-    return `${workoutsThisWeek} / ${weeklyGoal} sessions (${pct}%)`;
-  }, [workoutsThisWeek, weeklyGoal]);
-
-  // --- BMI Calculation ---
-  const bmiData = useMemo(() => {
-    const h = pref?.height ?? null;
-    const w = pref?.weight ?? null;
-    if (!h || !w) return null;
-
-    const hM = h / 100;
-    const val = w / (hM * hM);
-    const score = val.toFixed(1);
-
-    let label = "Normal";
-    let color = FITNESS_COLOR;
-
-    if (val < 18.5) {
-      label = "Underweight";
-      color = "#F59E0B";
-    } else if (val >= 25 && val < 30) {
-      label = "Overweight";
-      color = "#F59E0B";
-    } else if (val >= 30) {
-      label = "Obese";
-      color = "#EF4444";
-    }
-
-    return { score, label, color };
-  }, [pref?.height, pref?.weight]);
-
-  // --- Load Data Function ---
   const loadOnce = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) return;
     const prefRef = doc(db, "WorkoutPreference", user.uid);
     const prefSnap = await getDoc(prefRef);
     setPref(prefSnap.exists() ? (prefSnap.data() as PrefData) : null);
+
+    // Also check session during load
+    const saved = await AsyncStorage.getItem(`session_${user.uid}`);
+    setHasSavedSession(!!saved);
   }, [auth.currentUser, db]);
 
-  // --- 3. Refresh Handler ---
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     try {
-      // Reload preference data
       await loadOnce();
-      // Note: Live stats (workouts/meals) update automatically via onSnapshot,
-      // but this pause gives the user visual feedback that "refreshing" happened.
-    } catch (e) {
-      console.log(e);
     } finally {
       setRefreshing(false);
     }
@@ -177,17 +136,15 @@ export default function FitnessMenu({ navigation }: Props) {
       setLoading(false);
       return;
     }
-
     setLoading(true);
     loadOnce().catch(() => {});
 
-    // Live Workouts Listener
+    // Live Workouts
     const now = new Date();
     const sevenDaysAgo = startOfDay(
       new Date(now.getFullYear(), now.getMonth(), now.getDate() - 6)
     );
     const startWeekTs = Timestamp.fromDate(sevenDaysAgo);
-
     const workoutQ = query(
       collection(db, "WorkoutSession"),
       where("userId", "==", user.uid),
@@ -195,78 +152,58 @@ export default function FitnessMenu({ navigation }: Props) {
       orderBy("createdAtClient", "asc")
     );
 
-    const unsubWorkouts = onSnapshot(
-      workoutQ,
-      (snap) => {
-        let completed = 0;
-        let minutes = 0;
-        const completedDates = new Set<string>();
-
-        snap.forEach((d) => {
-          const data: any = d.data();
-          const created = data.createdAtClient?.toDate?.();
-          if (!created) return;
-
-          if (data.status === "completed") {
-            completed += 1;
-            const mins =
-              typeof data.actualDurationSec === "number"
-                ? Math.round(data.actualDurationSec / 60)
-                : 0;
-            minutes += mins;
-            completedDates.add(dateKey(created));
-          }
-        });
-
-        setWorkoutsThisWeek(completed);
-        setWorkoutMinutesThisWeek(minutes);
-
-        let s = 0;
-        for (let i = 0; i < 30; i++) {
-          const checkDate = new Date(now);
-          checkDate.setDate(now.getDate() - i);
-          if (completedDates.has(dateKey(checkDate))) s++;
-          else if (i !== 0) break;
+    const unsubWorkouts = onSnapshot(workoutQ, (snap) => {
+      let completed = 0;
+      let minutes = 0;
+      const completedDates = new Set<string>();
+      snap.forEach((d) => {
+        const data: any = d.data();
+        const created = data.createdAtClient?.toDate?.();
+        if (!created) return;
+        if (data.status === "completed") {
+          completed += 1;
+          minutes +=
+            typeof data.actualDurationSec === "number"
+              ? Math.round(data.actualDurationSec / 60)
+              : 0;
+          completedDates.add(dateKey(created));
         }
-        setStreakDays(s);
-        setLoading(false);
-      },
-      (err) => {
-        console.log("FitnessMenu workouts listener error:", err);
-        setLoading(false);
+      });
+      setWorkoutsThisWeek(completed);
+      setWorkoutMinutesThisWeek(minutes);
+      let s = 0;
+      for (let i = 0; i < 30; i++) {
+        const checkDate = new Date(now);
+        checkDate.setDate(now.getDate() - i);
+        if (completedDates.has(dateKey(checkDate))) s++;
+        else if (i !== 0) break;
       }
-    );
+      setStreakDays(s);
+      setLoading(false);
+    });
 
-    // Live Meals Listener
+    // Live Meals
     const todayStart = startOfDay(now);
     const todayTs = Timestamp.fromDate(todayStart);
-
     const mealQ = query(
       collection(db, "MealEntry"),
       where("userId", "==", user.uid),
       where("mealTimeClient", ">=", todayTs),
       orderBy("mealTimeClient", "desc")
     );
-
-    const unsubMeals = onSnapshot(
-      mealQ,
-      (snap) => {
-        let mealCount = 0;
-        let waterMl = 0;
-        snap.forEach((d) => {
-          const data: any = d.data();
-          if (data?.isWater) {
-            waterMl += typeof data.volumeMl === "number" ? data.volumeMl : 0;
-          } else {
-            mealCount += 1;
-          }
-        });
-        setMealsToday(mealCount);
-        setWaterMlToday(waterMl);
-        setPendingWaterMl(0);
-      },
-      (err) => console.log("FitnessMenu meals listener error:", err)
-    );
+    const unsubMeals = onSnapshot(mealQ, (snap) => {
+      let mealCount = 0;
+      let waterMl = 0;
+      snap.forEach((d) => {
+        const data: any = d.data();
+        if (data?.isWater)
+          waterMl += typeof data.volumeMl === "number" ? data.volumeMl : 0;
+        else mealCount += 1;
+      });
+      setMealsToday(mealCount);
+      setWaterMlToday(waterMl);
+      setPendingWaterMl(0);
+    });
 
     return () => {
       unsubWorkouts();
@@ -274,11 +211,12 @@ export default function FitnessMenu({ navigation }: Props) {
     };
   }, [auth.currentUser, db, loadOnce]);
 
+  // (Helper functions like addWater, bmiData, weeklyProgressLabel etc. remain same as before)
   const addWater = async () => {
+    /* ... existing code ... */
     if (addingWater) return;
     setAddingWater(true);
     setPendingWaterMl((p) => p + 250);
-
     try {
       const user = auth.currentUser;
       if (!user) return;
@@ -303,13 +241,56 @@ export default function FitnessMenu({ navigation }: Props) {
       setAddingWater(false);
     }
   };
-
   const waterGoalMl = 2000;
   const waterMlTodayLive = waterMlToday + pendingWaterMl;
   const waterPct = Math.min(
     100,
     Math.round((waterMlTodayLive / waterGoalMl) * 100)
   );
+
+  // ... (reusing previous render logic for BMI and stats) ...
+  const bmiData = useMemo(() => {
+    const h = pref?.height ?? null;
+    const w = pref?.weight ?? null;
+    if (!h || !w) return null;
+    const hM = h / 100;
+    const val = w / (hM * hM);
+    const score = val.toFixed(1);
+    let label = "Normal";
+    let color = FITNESS_COLOR;
+    if (val < 18.5) {
+      label = "Underweight";
+      color = "#F59E0B";
+    } else if (val >= 25 && val < 30) {
+      label = "Overweight";
+      color = "#F59E0B";
+    } else if (val >= 30) {
+      label = "Obese";
+      color = "#EF4444";
+    }
+    return { score, label, color };
+  }, [pref?.height, pref?.weight]);
+
+  const difficultyText =
+    pref?.difficulty === "easy"
+      ? "Beginner Friendly"
+      : pref?.difficulty === "moderate"
+      ? "Balanced"
+      : pref?.difficulty === "hard"
+      ? "High Intensity"
+      : "Not set";
+  const daysLabel = pref?.workoutDays?.length
+    ? pref.workoutDays.join(", ")
+    : "No days selected";
+  const weeklyGoal = pref?.workoutDays?.length ?? 0;
+  const weeklyProgressLabel = useMemo(() => {
+    if (!weeklyGoal) return "Set a plan to track progress";
+    const pct = Math.min(
+      100,
+      Math.round((workoutsThisWeek / weeklyGoal) * 100)
+    );
+    return `${workoutsThisWeek} / ${weeklyGoal} sessions (${pct}%)`;
+  }, [workoutsThisWeek, weeklyGoal]);
 
   return (
     <Layout>
@@ -332,7 +313,6 @@ export default function FitnessMenu({ navigation }: Props) {
         }
         rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
-
       {loading ? (
         <View style={styles.center}>
           <ActivityIndicator size="large" color={FITNESS_COLOR} />
@@ -343,12 +323,11 @@ export default function FitnessMenu({ navigation }: Props) {
           style={styles.scroll}
           contentContainerStyle={{ paddingBottom: 32 }}
           showsVerticalScrollIndicator={false}
-          // --- 4. Attached here ---
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          {/* 1) Hero Section - Standard Card Style */}
+          {/* Hero Section */}
           <Section
             style={[
               styles.card,
@@ -362,7 +341,6 @@ export default function FitnessMenu({ navigation }: Props) {
                 </Text>
                 <Text style={{ opacity: 0.5, marginTop: 2 }}>{todayStr}</Text>
               </View>
-
               <View
                 style={[
                   styles.streakBadge,
@@ -375,7 +353,6 @@ export default function FitnessMenu({ navigation }: Props) {
                 </Text>
               </View>
             </View>
-
             <View style={styles.heroFooter}>
               <Text style={{ opacity: 0.8, fontSize: 13, marginBottom: 6 }}>
                 {weeklyProgressLabel}
@@ -399,7 +376,6 @@ export default function FitnessMenu({ navigation }: Props) {
                   ]}
                 />
               </View>
-
               <View style={{ marginTop: 12, flexDirection: "row", gap: 10 }}>
                 <View
                   style={[
@@ -427,7 +403,7 @@ export default function FitnessMenu({ navigation }: Props) {
             </View>
           </Section>
 
-          {/* 2) Stats Grid */}
+          {/* Stats Grid */}
           <View style={styles.row}>
             <Section
               style={[
@@ -442,7 +418,6 @@ export default function FitnessMenu({ navigation }: Props) {
               </Text>
               <Text style={styles.statLabel}>Workouts (7d)</Text>
             </Section>
-
             <Section
               style={[
                 styles.card,
@@ -458,7 +433,7 @@ export default function FitnessMenu({ navigation }: Props) {
             </Section>
           </View>
 
-          {/* 3) Hydration */}
+          {/* Hydration */}
           <Section
             style={[
               styles.card,
@@ -467,7 +442,7 @@ export default function FitnessMenu({ navigation }: Props) {
           >
             <View style={styles.waterRow}>
               <View style={{ flex: 1 }}>
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Quick Water
                 </Text>
                 <Text style={{ opacity: 0.6, fontSize: 12, marginTop: 4 }}>
@@ -482,9 +457,8 @@ export default function FitnessMenu({ navigation }: Props) {
                   />
                 </View>
               </View>
-
               <Button
-                text={addingWater ? "..." : "+250ml"}
+                text={addingWater ? "..." : "250ml"}
                 color={WATER_COLOR}
                 size="sm"
                 onPress={addWater}
@@ -494,7 +468,7 @@ export default function FitnessMenu({ navigation }: Props) {
             </View>
           </Section>
 
-          {/* 4) BMI */}
+          {/* BMI */}
           {bmiData && (
             <Section
               style={[
@@ -503,7 +477,7 @@ export default function FitnessMenu({ navigation }: Props) {
               ]}
             >
               <View style={styles.bmiHeader}>
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Body Metrics
                 </Text>
                 <Text
@@ -532,17 +506,16 @@ export default function FitnessMenu({ navigation }: Props) {
             </Section>
           )}
 
-          {/* 5) Plan */}
+          {/* Plan Section */}
           <Section
             style={[
               styles.card,
               { borderColor: isDarkmode ? "#262626" : "#e2e8f0" },
             ]}
           >
-            <Text size="h4" fontWeight="bold" style={{ marginBottom: 12 }}>
+            <Text size="h3" fontWeight="bold" style={{ marginBottom: 12 }}>
               Current Plan
             </Text>
-
             {pref ? (
               <View>
                 <View style={styles.planRow}>
@@ -573,12 +546,19 @@ export default function FitnessMenu({ navigation }: Props) {
                   <Text>{daysLabel}</Text>
                 </View>
 
+                {/* DYNAMIC BUTTON: START or CONTINUE */}
                 <Button
-                  text="Start Session"
+                  text={hasSavedSession ? "Continue Session" : "Start Session"}
                   style={{ marginTop: 16 }}
-                  color={WORKOUT_COLOR}
+                  color={hasSavedSession ? DIFF_COLOR : WORKOUT_COLOR}
                   onPress={() => navigation.navigate("WorkoutSession")}
+                  rightContent={
+                    hasSavedSession ? (
+                      <Ionicons name="play-skip-forward" color="#fff" />
+                    ) : undefined
+                  }
                 />
+
                 <Button
                   text="Edit Preference"
                   outline
@@ -607,7 +587,7 @@ export default function FitnessMenu({ navigation }: Props) {
             )}
           </Section>
 
-          {/* 6) Actions */}
+          {/* Actions */}
           <View style={styles.actionGrid}>
             <Button
               text="Log Meal"
@@ -654,7 +634,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 6,
     borderRadius: 999,
-  } as any,
+  },
   progressBarBg: {
     height: 6,
     borderRadius: 4,
@@ -662,7 +642,7 @@ const styles = StyleSheet.create({
     overflow: "hidden",
   },
   progressBarFill: { height: "100%", borderRadius: 4 },
-  row: { flexDirection: "row", gap: 12, marginBottom: 16 } as any,
+  row: { flexDirection: "row", gap: 12, marginBottom: 16 },
   statCard: { flex: 1, marginBottom: 0, alignItems: "flex-start" },
   statLabel: { fontSize: 12, opacity: 0.6, marginTop: 4 },
   waterRow: {
@@ -670,7 +650,7 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     alignItems: "center",
     gap: 12,
-  } as any,
+  },
   bmiHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
@@ -686,5 +666,5 @@ const styles = StyleSheet.create({
     textTransform: "uppercase",
   },
   planRow: { flexDirection: "row", alignItems: "center", marginBottom: 8 },
-  actionGrid: { flexDirection: "row", marginBottom: 32 } as any,
+  actionGrid: { flexDirection: "row", marginBottom: 32 },
 });
