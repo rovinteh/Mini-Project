@@ -229,7 +229,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isSearchingPlace, setIsSearchingPlace] = useState(false);
 
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
-  const LOCAL_AI_SERVER = "http://192.168.0.18:3000";
+  //const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
+  const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
 
   // -------------------------------------------------------
   // Location: auto-detect using GPS + Nominatim (English)
@@ -384,8 +385,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
     });
 
     if (!response.ok) {
-      throw new Error(`AI server error: ${response.status}`);
+      throw new Error("AI server failed");
     }
+
+    // aiResult = { caption, hashtags, friendTags }
 
     const data = await response.json();
     console.log("[CLIENT] /generatePostMeta result:", data);

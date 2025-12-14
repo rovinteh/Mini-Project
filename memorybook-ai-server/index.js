@@ -16,6 +16,9 @@ const {
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "20mb" }));
+app.get("/health", (req, res) => {
+  res.json({ ok: true, message: "ai server alive" });
+});
 
 // ---- Ollama config (adjust if needed) ----
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
@@ -32,7 +35,6 @@ function countWords(str) {
     .filter(Boolean).length;
 }
 
-// 🔹 Most robust caption trimming: don't add sentence, don't break half sentence
 function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
@@ -55,27 +57,34 @@ function normalizeCaptionLength(caption, captionDraft) {
   }
 
   if (lastPuncIndex > 0) truncated = truncated.slice(0, lastPuncIndex + 1);
-
   return truncated.trim();
 }
 
-// 🔹 third person → first person
 function enforceFirstPerson(caption) {
   let result = String(caption || "");
-
   result = result.replace(/\b[Ss]he\b/g, "I");
   result = result.replace(/\bHer\b/g, "My");
   result = result.replace(/\bher\b/g, "my");
-
   result = result.replace(/\b[Hh]e\b/g, "I");
   result = result.replace(/\b[Hh]im\b/g, "me");
-
   return result;
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog", "dogs", "puppy", "puppies", "cat", "cats", "kitten", "kittens",
-  "bear", "bears", "bunny", "bunnies", "rabbit", "rabbits",
+  "dog",
+  "dogs",
+  "puppy",
+  "puppies",
+  "cat",
+  "cats",
+  "kitten",
+  "kittens",
+  "bear",
+  "bears",
+  "bunny",
+  "bunnies",
+  "rabbit",
+  "rabbits",
 ];
 
 function fixPlushAnimalHallucination(caption, captionDraft) {
@@ -90,9 +99,15 @@ function fixPlushAnimalHallucination(caption, captionDraft) {
   return result;
 }
 
-// 🔹 Hashtag minimal processing: trim, dedup, lowercase, filter sensitive, max 5
 const SENSITIVE_TAGS_REQUIRE_DRAFT = [
-  "birthday", "cake", "cakes", "dessert", "desserts", "party", "celebration", "boh",
+  "birthday",
+  "cake",
+  "cakes",
+  "dessert",
+  "desserts",
+  "party",
+  "celebration",
+  "boh",
 ];
 
 function adjustHashtags(hashtags, captionDraft) {
@@ -120,8 +135,19 @@ function adjustHashtags(hashtags, captionDraft) {
 }
 
 const BANNED_BACKGROUND_WORDS = [
-  "matches", "matchbox", "box of matches", "pencil", "pencils", "pen", "pens",
-  "marker", "markers", "notebook", "notebooks", "remote control", "remote",
+  "matches",
+  "matchbox",
+  "box of matches",
+  "pencil",
+  "pencils",
+  "pen",
+  "pens",
+  "marker",
+  "markers",
+  "notebook",
+  "notebooks",
+  "remote control",
+  "remote",
 ];
 
 function removeBannedWords(text) {
@@ -134,10 +160,20 @@ function removeBannedWords(text) {
 }
 
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes", "take notes", "doing homework", "do homework", "studying",
-  "study session", "working on my notes", "working on notes", "working on homework",
-  "working on assignments", "doing my assignment", "doing assignments",
-  "preparing for exams", "studying for exams",
+  "taking notes",
+  "take notes",
+  "doing homework",
+  "do homework",
+  "studying",
+  "study session",
+  "working on my notes",
+  "working on notes",
+  "working on homework",
+  "working on assignments",
+  "doing my assignment",
+  "doing assignments",
+  "preparing for exams",
+  "studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
@@ -166,7 +202,6 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
   return result.replace(/\s+/g, " ").trim();
 }
 
-// ✅ Safe fallback hashtags from USER draft only (no hallucination)
 function fallbackTagsFromDraft(captionDraft, max = 3) {
   const draft = String(captionDraft || "").trim();
   if (!draft) return [];
@@ -193,7 +228,6 @@ async function callOllamaChatText(prompt) {
     format: "json",
     stream: false,
   });
-
   return resp.data?.message?.content || "";
 }
 
@@ -216,8 +250,8 @@ FOCUS (VERY IMPORTANT):
 - Focus on the main subject (people, landscapes, buildings, plush toys, large objects).
 - If there is any LARGE, CLEAR text on a sign, building, product, or sculpture:
   • Only mention the text if it is perfectly readable and unambiguous.
-  • If you see the word "BOH" anywhere, COMPLETELY IGNORE it and do NOT mention it.
-  • If you are not 100% sure of every letter, DO NOT mention any text at all.
+  • If you see the word "BOH" anywhere, COMPLETELY IGNORE it and do NOT mention it
+ 100% sure of every letter, DO NOT mention any text at all.
 - Completely ignore tiny or unclear background items, especially on tables or far away.
 - If you are not 100% sure what an object is, DO NOT name it.
 - If the main subject looks like a plush toy, and you are not 100% sure which animal it is,
@@ -261,14 +295,20 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
       if (desc) parts.push(`Photo ${i + 1}: ${desc}`);
     } catch (err) {
-      console.log(`Vision describe error on photo ${i + 1}:`, err.message || err);
+      console.log(
+        `Vision describe error on photo ${i + 1}:`,
+        err.message || err
+      );
     }
   }
 
   if (!parts.length) return "";
 
   let combined = parts.join("\n");
-  combined = combined.replace(/\bBOH\b/gi, "").replace(/\s+/g, " ").trim();
+  combined = combined
+    .replace(/\bBOH\b/gi, "")
+    .replace(/\s+/g, " ")
+    .trim();
 
   console.log("[VISION] Combined per-photo description:\n", combined);
   return combined;
@@ -276,11 +316,12 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
 
 // -------------------------
 // ✅ Helper: recognize faces for MULTIPLE images (batch)
-// (Node will loop recognizeFace() to avoid changing your face-service.js)
 // -------------------------
 async function recognizeFaceBatch(imageBase64List, threshold) {
-  const safeList = Array.isArray(imageBase64List) ? imageBase64List.filter(Boolean) : [];
-  const MAX_IMAGES = 6; // keep it safe & fast (base64 is heavy)
+  const safeList = Array.isArray(imageBase64List)
+    ? imageBase64List.filter(Boolean)
+    : [];
+  const MAX_IMAGES = 6;
   const images = safeList.slice(0, MAX_IMAGES);
 
   const results = [];
@@ -304,6 +345,115 @@ async function recognizeFaceBatch(imageBase64List, threshold) {
 
   return { ok: true, count: images.length, results };
 }
+
+// -------------------------
+// ✅ NEW: /ai/random-memory
+// Body: { groups: [{ id, postCount, sampleCaption, hashtags, friendTags }] }
+// Returns: { selectedGroupId, confidence, reason }
+// -------------------------
+app.post("/ai/random-memory", async (req, res) => {
+  try {
+    const { groups = [] } = req.body || {};
+    if (!Array.isArray(groups) || groups.length === 0) {
+      return res
+        .status(400)
+        .json({ error: "groups must be a non-empty array" });
+    }
+
+    // keep it small for model + stable behavior
+    const trimmed = groups.slice(0, 80).map((g) => ({
+      id: String(g.id || ""),
+      postCount: Number(g.postCount || 0),
+      sampleCaption: String(g.sampleCaption || "").slice(0, 120),
+      hashtags: Array.isArray(g.hashtags) ? g.hashtags.slice(0, 8) : [],
+      friendTags: Array.isArray(g.friendTags) ? g.friendTags.slice(0, 5) : [],
+    }));
+
+    const today = new Date().toISOString().slice(0, 10);
+
+    const prompt = `
+You are helping a memory album app select ONE "Random memory" group for today.
+
+Input:
+- groups[] each is one day group (id = yyyy-mm-dd)
+- postCount indicates richness (prefer 2-15 posts)
+- sampleCaption/hashtags/friendTags are hints
+
+Goal:
+Pick ONE group id that will make the best "Random today" memory:
+- Prefer groups with postCount >= 2 (more related media)
+- Prefer meaningful themes (friends, trip, birthday, graduation, food, outdoor) BUT do NOT invent
+- Avoid very boring / empty captions if possible
+- If many are good, be random but still reasonable.
+
+Return ONLY valid JSON:
+{
+  "selectedGroupId": "yyyy-mm-dd",
+  "confidence": 0.0-1.0,
+  "reason": "short reason"
+}
+
+Today = ${today}
+
+groups = ${JSON.stringify(trimmed)}
+`.trim();
+
+    let raw = "";
+    try {
+      raw = await callOllamaChatText(prompt);
+    } catch (e) {
+      raw = "";
+    }
+
+    // parse JSON safely
+    let parsed = null;
+    try {
+      let cleaned = String(raw || "").trim();
+      if (cleaned.startsWith("```")) {
+        cleaned = cleaned.replace(/^```[a-zA-Z0-9]*\s*/, "");
+        cleaned = cleaned.replace(/```$/, "").trim();
+      }
+      const first = cleaned.indexOf("{");
+      const last = cleaned.lastIndexOf("}");
+      if (first !== -1 && last !== -1) cleaned = cleaned.slice(first, last + 1);
+      parsed = JSON.parse(cleaned);
+    } catch (e) {
+      parsed = null;
+    }
+
+    // fallback if AI fails
+    if (!parsed || !parsed.selectedGroupId) {
+      const good = trimmed.filter((g) => g.postCount >= 2);
+      const pickFrom = good.length ? good : trimmed;
+      const idx = Math.floor(Math.random() * pickFrom.length);
+      return res.json({
+        selectedGroupId: pickFrom[idx].id,
+        confidence: 0.35,
+        reason: "Fallback selection (AI parse failed).",
+      });
+    }
+
+    const selected = String(parsed.selectedGroupId);
+    const exists = trimmed.some((g) => g.id === selected);
+    if (!exists) {
+      const idx = Math.floor(Math.random() * trimmed.length);
+      return res.json({
+        selectedGroupId: trimmed[idx].id,
+        confidence: 0.35,
+        reason: "Fallback selection (AI returned unknown id).",
+      });
+    }
+
+    res.json({
+      selectedGroupId: selected,
+      confidence: Math.max(0, Math.min(1, Number(parsed.confidence ?? 0.6))),
+      reason: String(parsed.reason || "Selected by AI."),
+    });
+  } catch (err) {
+    console.error("❌ /ai/random-memory error:", err);
+    res.status(500).json({ error: "Random memory AI failed" });
+  }
+});
 
 // -------------------------
 // /generatePostMeta
@@ -335,9 +485,15 @@ app.post("/generatePostMeta", async (req, res) => {
     if (images.length > 0) {
       try {
         visionDescription = await callOllamaVisionDescribeMulti(images);
-        console.log("[VISION] Description from llava (multi):", visionDescription);
+        console.log(
+          "[VISION] Description from llava (multi):",
+          visionDescription
+        );
       } catch (err) {
-        console.log("⚠️ Vision describe error, continue with text-only:", err.message || err);
+        console.log(
+          "⚠️ Vision describe error, continue with text-only:",
+          err.message || err
+        );
       }
     }
 
@@ -371,8 +527,15 @@ Neutral description of the photo(s) from a vision model (may be empty):
     try {
       rawContent = await callOllamaChatText(combinedPrompt);
     } catch (err) {
-      console.error("⚠️ Ollama DeepSeek error in /generatePostMeta, using fallback:", err.message || err);
-      rawContent = JSON.stringify({ caption: captionDraft || "", hashtags: [], friendTags: [] });
+      console.error(
+        "⚠️ Ollama DeepSeek error in /generatePostMeta, using fallback:",
+        err.message || err
+      );
+      rawContent = JSON.stringify({
+        caption: captionDraft || "",
+        hashtags: [],
+        friendTags: [],
+      });
     }
 
     console.log("[VISION] Raw content from DeepSeek:", rawContent);
@@ -395,7 +558,10 @@ Neutral description of the photo(s) from a vision model (may be empty):
 
       parsed = JSON.parse(cleanedStr);
     } catch (err) {
-      console.log("⚠️ Failed to parse JSON from DeepSeek, using fallback:", err);
+      console.log(
+        "⚠️ Failed to parse JSON from DeepSeek, using fallback:",
+        err
+      );
     }
 
     // Normalize model output
@@ -414,20 +580,18 @@ Neutral description of the photo(s) from a vision model (may be empty):
     caption = normalizeCaptionLength(caption, captionDraft);
     hashtags = adjustHashtags(hashtags, captionDraft);
 
-    // ✅ If AI gives zero hashtags, fallback to USER draft keywords only
     if (hashtags.length === 0) {
       const fallback = fallbackTagsFromDraft(captionDraft, 3);
       if (fallback.length > 0) hashtags = fallback;
     }
 
     // -------- Face recognition for friendTags (STRICT multi-face, MULTI-IMAGE) --------
-    const FACE_THRESHOLD = 0.37; // strict
+    const FACE_THRESHOLD = 0.37;
     const MIN_GAP = 0.06;
     const MAX_TAGS = 5;
 
     let friendTagsMerged = [];
 
-    // helper: pick names from ONE faceResp
     const pickNamesFromFaceResp = (faceResp) => {
       const faces = Array.isArray(faceResp?.faces) ? faceResp.faces : [];
       const pickedNames = [];
@@ -439,7 +603,10 @@ Neutral description of the photo(s) from a vision model (may be empty):
         let candidates = matches
           .map((m) => ({
             name: String(m.name || "").trim(),
-            distance: typeof m.distance === "number" ? m.distance : Number(m.distance) || 999,
+            distance:
+              typeof m.distance === "number"
+                ? m.distance
+                : Number(m.distance) || 999,
           }))
           .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
           .sort((a, b) => a.distance - b.distance);
@@ -449,7 +616,6 @@ Neutral description of the photo(s) from a vision model (may be empty):
         const top = candidates[0];
         const next = candidates[1];
 
-        // GAP RULE: only accept if clearly better than next
         if (next && Math.abs(next.distance - top.distance) < MIN_GAP) {
           continue;
         }
@@ -463,11 +629,9 @@ Neutral description of the photo(s) from a vision model (may be empty):
 
     if (images.length > 0) {
       try {
-        // ✅ Use up to first 3 images to improve accuracy, keep it fast
         const FACE_IMAGES_LIMIT = 3;
         const scanImages = images.slice(0, FACE_IMAGES_LIMIT);
 
-        // Batch loop (Node loops recognizeFace internally)
         const batch = await recognizeFaceBatch(scanImages, FACE_THRESHOLD);
 
         console.log(
@@ -495,7 +659,10 @@ Neutral description of the photo(s) from a vision model (may be empty):
       friendTags: friendTagsMerged,
     };
 
-    console.log("[VISION] Cleaned content:\n", JSON.stringify(cleaned, null, 2));
+    console.log(
+      "[VISION] Cleaned content:\n",
+      JSON.stringify(cleaned, null, 2)
+    );
     res.json(cleaned);
   } catch (err) {
     console.error("❌ Error in /generatePostMeta:", err);
@@ -523,7 +690,9 @@ app.post("/faces/detect", async (req, res) => {
 app.post("/faces/register", async (req, res) => {
   const { personId, name, imageBase64 } = req.body || {};
   if (!name || !imageBase64) {
-    return res.status(400).json({ error: "name and imageBase64 are required." });
+    return res
+      .status(400)
+      .json({ error: "name and imageBase64 are required." });
   }
 
   try {
@@ -553,7 +722,10 @@ app.post("/faces/recognize", async (req, res) => {
 
   try {
     const pyResp = await recognizeFace(imageBase64, threshold);
-    console.log("✅ /faces/recognize -> Python:", util.inspect(pyResp, { depth: null, colors: true }));
+    console.log(
+      "✅ /faces/recognize -> Python:",
+      util.inspect(pyResp, { depth: null, colors: true })
+    );
 
     res.json({
       ok: pyResp.ok !== false,
@@ -566,14 +738,14 @@ app.post("/faces/recognize", async (req, res) => {
 });
 
 // -------------------------
-// ✅ /faces/recognize_batch  (MULTIPLE IMAGES)
-// Body: { imageBase64List: [..], threshold?: number }
-// Returns: { ok, count, results: [{ index, ok, faces, error? }] }
+// ✅ /faces/recognize_batch
 // -------------------------
 app.post("/faces/recognize_batch", async (req, res) => {
   const { imageBase64List, threshold } = req.body || {};
   if (!Array.isArray(imageBase64List) || imageBase64List.length === 0) {
-    return res.status(400).json({ error: "imageBase64List must be a non-empty array." });
+    return res
+      .status(400)
+      .json({ error: "imageBase64List must be a non-empty array." });
   }
 
   try {
@@ -589,6 +761,8 @@ app.post("/faces/recognize_batch", async (req, res) => {
 // Start server
 // -------------------------
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log(`Local AI server running at http://localhost:${PORT}`);
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Local AI server running at http://0.0.0.0:${PORT}`);
 });
+

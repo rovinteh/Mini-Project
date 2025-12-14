@@ -1,6 +1,6 @@
 // src/screens/MemoryBook/MemoryChatsList.tsx
 import React, { useEffect, useState } from "react";
-import { View, TouchableOpacity, FlatList } from "react-native";
+import { View, TouchableOpacity, FlatList, Image } from "react-native";
 import {
   Layout,
   TopNav,
@@ -37,7 +37,7 @@ interface UserDoc {
   id: string;
   displayName?: string;
   email?: string;
-  photoURL?: string;
+  photoURL?: string; // ✅ from users/{uid}.photoURL
 }
 
 export default function MemoryChatsList({ navigation }: Props) {
@@ -49,7 +49,7 @@ export default function MemoryChatsList({ navigation }: Props) {
   const [chats, setChats] = useState<ChatMeta[]>([]);
   const [usersMap, setUsersMap] = useState<Record<string, UserDoc>>({});
 
-  // ---- load all users for name / email display ----
+  // ---- load all users for name / photo display ----
   useEffect(() => {
     const unsub = onSnapshot(collection(firestore, "users"), (snap) => {
       const map: Record<string, UserDoc> = {};
@@ -85,15 +85,41 @@ export default function MemoryChatsList({ navigation }: Props) {
   const primary = isDarkmode ? themeColor.white100 : themeColor.dark;
   const secondary = isDarkmode ? "#aaa" : "#555";
 
+  const renderAvatar = (photoURL?: string) => {
+    const ok = !!photoURL && photoURL !== "-" && photoURL.startsWith("http");
+    if (!ok) {
+      return (
+        <Ionicons
+          name="person-circle-outline"
+          size={42}
+          color={themeColor.info}
+        />
+      );
+    }
+
+    return (
+      <Image
+        source={{ uri: photoURL }}
+        style={{
+          width: 42,
+          height: 42,
+          borderRadius: 21,
+          borderWidth: 1,
+          borderColor: isDarkmode ? "#333" : "#e5e7eb",
+          backgroundColor: isDarkmode ? "#111" : "#f3f4f6",
+        }}
+      />
+    );
+  };
+
   const renderItem = ({ item }: { item: ChatMeta }) => {
     if (!currentUser) return null;
 
-    // find the other user id (not me)
     const otherId =
       item.participants.find((p) => p !== currentUser.uid) || currentUser.uid;
+
     const otherUser = usersMap[otherId];
-    const name =
-      otherUser?.displayName || otherUser?.email || "Unknown user";
+    const name = otherUser?.displayName || otherUser?.email || "Unknown user";
 
     const lastMsg =
       item.lastMessage && item.lastMessage.length > 80
@@ -117,11 +143,8 @@ export default function MemoryChatsList({ navigation }: Props) {
           borderBottomColor: isDarkmode ? "#333" : "#e5e7eb",
         }}
       >
-        <Ionicons
-          name="person-circle-outline"
-          size={42}
-          color={themeColor.info}
-        />
+        {renderAvatar(otherUser?.photoURL)}
+
         <View style={{ marginLeft: 10, flex: 1 }}>
           <Text
             style={{
@@ -129,15 +152,18 @@ export default function MemoryChatsList({ navigation }: Props) {
               fontWeight: "bold",
               color: primary,
             }}
+            numberOfLines={1}
           >
             {name}
           </Text>
+
           <Text
             style={{
               marginTop: 2,
               fontSize: 12,
               color: secondary,
             }}
+            numberOfLines={1}
           >
             {lastMsg}
           </Text>
