@@ -145,7 +145,7 @@ export default function MemoryAlbum({ navigation }: Props) {
   // ✅ CHANGE THIS to your laptop LAN IP when testing on phone
   // If you run app on the same laptop emulator, 127.0.0.1 is ok.
   // If you run on real phone Expo Go, use your laptop IP: http://192.168.1.74:3000
-  const AI_BASE_URL = "http://192.168.1.74:3000";
+  const AI_BASE_URL = "http://192.168.68.129:3000";
 
   // 1) LOAD POSTS
   useEffect(() => {

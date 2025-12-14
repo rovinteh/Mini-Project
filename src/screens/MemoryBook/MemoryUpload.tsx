@@ -229,8 +229,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isSearchingPlace, setIsSearchingPlace] = useState(false);
 
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
-  //const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
-  const LOCAL_AI_SERVER = "http://192.168.1.74:3000";
+  // You can also set EXPO_PUBLIC_AI_SERVER or AI_SERVER_URL in env to override.
+  const LOCAL_AI_SERVER =
+    ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
+    ((process as any)?.env?.AI_SERVER_URL as string) ||
+    "http://192.168.68.129:3000";
 
   // -------------------------------------------------------
   // Location: auto-detect using GPS + Nominatim (English)
