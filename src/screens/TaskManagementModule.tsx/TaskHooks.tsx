@@ -1306,7 +1306,7 @@ ${messages.map((m) => `- ${m}`).join("\n")}
         `;
 
     // Use localhost for Web, and LAN IP for Mobile
-    const OLLAMA_HOST = Platform.OS === "web" ? "localhost" : "http://192.168.1.74:3000";
+    const OLLAMA_HOST = Platform.OS === "web" ? "localhost" : "http://192.168.0.16";
     const OLLAMA_API_URL = `http://${OLLAMA_HOST}:11434/api/generate`;
 
     const response = await fetch(OLLAMA_API_URL, {

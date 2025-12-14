@@ -326,6 +326,7 @@ export default function ({
                     width={Dimensions.get("window").width - 72}
                     height={200}
                     yAxisInterval={1}
+                    verticalLabelRotation={45}
                     fromZero={true}
                     segments={chartData.max < 5 ? (chartData.max || 1) : 4}
                     chartConfig={{
