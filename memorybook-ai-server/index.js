@@ -7,23 +7,27 @@ const axios = require("axios");
 const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
-const {
-  detectFacesInList,
-  registerFace,
-  recognizeFace,
-} = require("./face-service");
+const { detectFacesInList, registerFace, recognizeFace } = require("./face-service");
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json({ limit: "20mb" }));
+
 app.get("/health", (req, res) => {
   res.json({ ok: true, message: "ai server alive" });
 });
 
-// ---- Ollama config (adjust if needed) ----
+// ---- Ollama config ----
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const OLLAMA_TEXT_MODEL = "deepseek-r1:7b"; // text-only caption helper
-const OLLAMA_VISION_MODEL = "llava-phi3:latest"; // real image-based caption
+
+// ✅ Better default text model for instruction-following (change anytime)
+const OLLAMA_TEXT_MODEL =
+  process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct"; // recommended
+// If you want to keep DeepSeek:
+// const OLLAMA_TEXT_MODEL = process.env.OLLAMA_TEXT_MODEL || "deepseek-r1:7b";
+
+const OLLAMA_VISION_MODEL =
+  process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
 // Small helpers
@@ -60,14 +64,29 @@ function normalizeCaptionLength(caption, captionDraft) {
   return truncated.trim();
 }
 
+// ✅ Only pronoun enforcement (NO "young man/person" replacement)
 function enforceFirstPerson(caption) {
   let result = String(caption || "");
+
   result = result.replace(/\b[Ss]he\b/g, "I");
-  result = result.replace(/\bHer\b/g, "My");
-  result = result.replace(/\bher\b/g, "my");
   result = result.replace(/\b[Hh]e\b/g, "I");
   result = result.replace(/\b[Hh]im\b/g, "me");
-  return result;
+  result = result.replace(/\b[Hh]er\b/g, "my");
+  result = result.replace(/\bher\b/g, "my");
+
+  return result.replace(/\s+/g, " ").trim();
+}
+
+// Extra guard: if no I/my/me at all, force a safe first-person rewrite
+function forceUserPerspective(caption) {
+  let result = String(caption || "").trim();
+  if (!result) return result;
+
+  const hasFirstPerson = /\b(i|me|my|mine|we|our|us)\b/i.test(result);
+  if (hasFirstPerson) return enforceFirstPerson(result);
+
+  // fallback short caption
+  return "I’m saving this moment today.";
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
@@ -219,20 +238,28 @@ function fallbackTagsFromDraft(captionDraft, max = 3) {
 }
 
 // -------------------------
-// Helper: call Ollama (text → DeepSeek)
+// Ollama helpers
 // -------------------------
-async function callOllamaChatText(prompt) {
+async function callOllamaChatText(prompt, modelOverride) {
+  const model = modelOverride || OLLAMA_TEXT_MODEL;
+
   const resp = await axios.post(`${OLLAMA_URL}/api/chat`, {
-    model: OLLAMA_TEXT_MODEL,
+    model,
     messages: [{ role: "user", content: prompt }],
     format: "json",
     stream: false,
+    options: {
+      temperature: 0.2,
+      top_p: 0.9,
+      num_predict: 220,
+    },
   });
+
   return resp.data?.message?.content || "";
 }
 
 // -------------------------
-// Helper: Vision – single image describe
+// Vision – single image describe
 // -------------------------
 async function describeSingleImage(imageBase64, index, total) {
   if (!imageBase64) return "";
@@ -248,25 +275,16 @@ Describe ONLY what you clearly see in this one photo.
 
 FOCUS (VERY IMPORTANT):
 - Focus on the main subject (people, landscapes, buildings, plush toys, large objects).
-- If there is any LARGE, CLEAR text on a sign, building, product, or sculpture:
-  • Only mention the text if it is perfectly readable and unambiguous.
-  • If you see the word "BOH" anywhere, COMPLETELY IGNORE it and do NOT mention it
- 100% sure of every letter, DO NOT mention any text at all.
-- Completely ignore tiny or unclear background items, especially on tables or far away.
+- Ignore tiny/unclear background items.
 - If you are not 100% sure what an object is, DO NOT name it.
-- If the main subject looks like a plush toy, and you are not 100% sure which animal it is,
-  call it simply "a plush toy" or "a plush character", do NOT guess dog / cat / bear / bunny.
+- If you see the word "BOH" anywhere, IGNORE it and do NOT mention it.
 
-STRICT NO-GUESSING RULES:
-- Do NOT talk about sounds.
-- Do NOT guess how many people are there if you cannot clearly count them.
-- Do NOT invent activities unless clearly visible.
-- Do NOT describe feelings or atmosphere.
-- NEVER guess text content of far away signs.
+STRICT NO-GUESSING:
+- Do NOT invent events, memories, seasons, emotions, stories.
+- Do NOT guess text on far signs.
 
 STYLE:
-- Use simple English, 1–2 short sentences.
-- Do NOT mention "photo", "image", "camera" or "AI".
+- Simple English, 1–2 short sentences.
 `.trim(),
         images: [imageBase64],
       },
@@ -279,7 +297,7 @@ STYLE:
 }
 
 // -------------------------
-// Helper: Vision – multi images describe
+// Vision – multi images describe
 // -------------------------
 async function callOllamaVisionDescribeMulti(imageBase64List) {
   const safeList = Array.isArray(imageBase64List)
@@ -295,27 +313,21 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
       if (desc) parts.push(`Photo ${i + 1}: ${desc}`);
     } catch (err) {
-      console.log(
-        `Vision describe error on photo ${i + 1}:`,
-        err.message || err
-      );
+      console.log(`Vision describe error on photo ${i + 1}:`, err.message || err);
     }
   }
 
   if (!parts.length) return "";
 
   let combined = parts.join("\n");
-  combined = combined
-    .replace(/\bBOH\b/gi, "")
-    .replace(/\s+/g, " ")
-    .trim();
+  combined = combined.replace(/\bBOH\b/gi, "").replace(/\s+/g, " ").trim();
 
   console.log("[VISION] Combined per-photo description:\n", combined);
   return combined;
 }
 
 // -------------------------
-// ✅ Helper: recognize faces for MULTIPLE images (batch)
+// ✅ Face recognize batch
 // -------------------------
 async function recognizeFaceBatch(imageBase64List, threshold) {
   const safeList = Array.isArray(imageBase64List)
@@ -347,20 +359,70 @@ async function recognizeFaceBatch(imageBase64List, threshold) {
 }
 
 // -------------------------
-// ✅ NEW: /ai/random-memory
-// Body: { groups: [{ id, postCount, sampleCaption, hashtags, friendTags }] }
-// Returns: { selectedGroupId, confidence, reason }
+// ✅ Grounding enforcement (keywords + retry)
+// -------------------------
+function buildMustKeywordsFromVision(visionDescription) {
+  const v = String(visionDescription || "").toLowerCase();
+
+  // add more if you want
+  const pool = [
+    "laptop",
+    "keyboard",
+    "desk",
+    "table",
+    "computer",
+    "monitor",
+    "phone",
+    "mirror",
+    "window",
+    "glasses",
+    "chair",
+    "food",
+    "drink",
+    "coffee",
+    "cat",
+    "dog",
+    "car",
+  ];
+
+  const must = pool.filter((k) => v.includes(k));
+  return Array.from(new Set(must)).slice(0, 4);
+}
+
+function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKeywords) {
+  const c = String(caption || "").toLowerCase();
+  const v = String(visionDescription || "").toLowerCase();
+  const d = String(captionDraft || "").toLowerCase();
+
+  // must be first person
+  const hasFirstPerson = /\b(i|me|my|mine|we|our|us)\b/i.test(caption);
+  if (!hasFirstPerson) return true;
+
+  // must mention at least one must keyword (only if we have them)
+  if (mustKeywords && mustKeywords.length) {
+    const ok = mustKeywords.some((k) => c.includes(k));
+    if (!ok) return true;
+  }
+
+  // avoid common fantasy words if not in vision/draft
+  const fantasy = ["childhood", "summer", "winter", "nostalgia", "cherished", "memories of home"];
+  for (const w of fantasy) {
+    if (c.includes(w) && !v.includes(w) && !d.includes(w)) return true;
+  }
+
+  return false;
+}
+
+// -------------------------
+// /ai/random-memory (unchanged)
 // -------------------------
 app.post("/ai/random-memory", async (req, res) => {
   try {
     const { groups = [] } = req.body || {};
     if (!Array.isArray(groups) || groups.length === 0) {
-      return res
-        .status(400)
-        .json({ error: "groups must be a non-empty array" });
+      return res.status(400).json({ error: "groups must be a non-empty array" });
     }
 
-    // keep it small for model + stable behavior
     const trimmed = groups.slice(0, 80).map((g) => ({
       id: String(g.id || ""),
       postCount: Number(g.postCount || 0),
@@ -372,20 +434,6 @@ app.post("/ai/random-memory", async (req, res) => {
     const today = new Date().toISOString().slice(0, 10);
 
     const prompt = `
-You are helping a memory album app select ONE "Random memory" group for today.
-
-Input:
-- groups[] each is one day group (id = yyyy-mm-dd)
-- postCount indicates richness (prefer 2-15 posts)
-- sampleCaption/hashtags/friendTags are hints
-
-Goal:
-Pick ONE group id that will make the best "Random today" memory:
-- Prefer groups with postCount >= 2 (more related media)
-- Prefer meaningful themes (friends, trip, birthday, graduation, food, outdoor) BUT do NOT invent
-- Avoid very boring / empty captions if possible
-- If many are good, be random but still reasonable.
-
 Return ONLY valid JSON:
 {
   "selectedGroupId": "yyyy-mm-dd",
@@ -393,19 +441,20 @@ Return ONLY valid JSON:
   "reason": "short reason"
 }
 
-Today = ${today}
+Pick ONE group id for a "Random memory" feature.
+Prefer postCount 2-15. Do NOT invent details.
 
+Today = ${today}
 groups = ${JSON.stringify(trimmed)}
 `.trim();
 
     let raw = "";
     try {
       raw = await callOllamaChatText(prompt);
-    } catch (e) {
+    } catch {
       raw = "";
     }
 
-    // parse JSON safely
     let parsed = null;
     try {
       let cleaned = String(raw || "").trim();
@@ -417,11 +466,10 @@ groups = ${JSON.stringify(trimmed)}
       const last = cleaned.lastIndexOf("}");
       if (first !== -1 && last !== -1) cleaned = cleaned.slice(first, last + 1);
       parsed = JSON.parse(cleaned);
-    } catch (e) {
+    } catch {
       parsed = null;
     }
 
-    // fallback if AI fails
     if (!parsed || !parsed.selectedGroupId) {
       const good = trimmed.filter((g) => g.postCount >= 2);
       const pickFrom = good.length ? good : trimmed;
@@ -460,11 +508,7 @@ groups = ${JSON.stringify(trimmed)}
 // -------------------------
 app.post("/generatePostMeta", async (req, res) => {
   try {
-    const {
-      captionDraft = "",
-      imageBase64List = [],
-      imageBase64 = null,
-    } = req.body || {};
+    const { captionDraft = "", imageBase64List = [], imageBase64 = null } = req.body || {};
 
     const images =
       Array.isArray(imageBase64List) && imageBase64List.length > 0
@@ -485,19 +529,19 @@ app.post("/generatePostMeta", async (req, res) => {
     if (images.length > 0) {
       try {
         visionDescription = await callOllamaVisionDescribeMulti(images);
-        console.log(
-          "[VISION] Description from llava (multi):",
-          visionDescription
-        );
+        console.log("[VISION] Description from llava (multi):", visionDescription);
       } catch (err) {
-        console.log(
-          "⚠️ Vision describe error, continue with text-only:",
-          err.message || err
-        );
+        console.log("⚠️ Vision describe error, continue with text-only:", err.message || err);
       }
     }
 
-    // 2) DeepSeek
+    const mustKeywords = buildMustKeywordsFromVision(visionDescription);
+    const mustLine =
+      mustKeywords.length > 0
+        ? `- The caption MUST mention at least ONE of these words: ${mustKeywords.join(", ")}.`
+        : `- If vision is unclear, keep caption generic and simple.`;
+
+    // 2) TEXT MODEL prompt (STRICT GROUNDED)
     const systemInstruction = `
 You are an assistant for a personal memory / social media app.
 
@@ -508,10 +552,21 @@ Return ONLY valid JSON:
   "friendTags": ["name1","name2"]
 }
 
-Rules:
-- Caption: warm, first-person, diary-like, 8–20 words, 0–2 emojis, no hashtags inside caption.
-- Hashtags: 1–5 tags, lowercase, no spaces, no guessing.
-- Friend tags: DO NOT invent names; return [] unless user typed names in draft.
+STRICT GROUNDING RULES (MUST FOLLOW):
+- You MUST base the caption ONLY on the vision description and the user's draft.
+- Do NOT invent childhood, seasons, trips, celebrations, emotions, or stories unless clearly supported.
+${mustLine}
+
+STYLE RULES:
+- Caption MUST be first-person ("I", "my", "me").
+- Do NOT describe the user as "a man", "a woman", "a person", or "someone".
+- 8–20 words, 0–2 emojis, no hashtags inside caption.
+
+Hashtags:
+- 1–5 tags, lowercase, no spaces, derived from visible objects only.
+
+Friend tags:
+- Do NOT invent names; return [] unless user typed names in draft.
 `.trim();
 
     const combinedPrompt = `${systemInstruction}
@@ -519,28 +574,19 @@ Rules:
 User draft caption (may be empty):
 "${captionDraft || "(empty)"}"
 
-Neutral description of the photo(s) from a vision model (may be empty):
+Vision description (may be empty):
 "${visionDescription || "(no description)"}"
 `;
 
-    let rawContent;
+    let rawContent = "";
     try {
       rawContent = await callOllamaChatText(combinedPrompt);
     } catch (err) {
-      console.error(
-        "⚠️ Ollama DeepSeek error in /generatePostMeta, using fallback:",
-        err.message || err
-      );
-      rawContent = JSON.stringify({
-        caption: captionDraft || "",
-        hashtags: [],
-        friendTags: [],
-      });
+      console.error("⚠️ Ollama text error in /generatePostMeta:", err.message || err);
+      rawContent = JSON.stringify({ caption: captionDraft || "", hashtags: [], friendTags: [] });
     }
 
-    console.log("[VISION] Raw content from DeepSeek:", rawContent);
-
-    // Parse DeepSeek JSON
+    // Parse JSON safely
     let parsed = { caption: captionDraft, hashtags: [], friendTags: [] };
     try {
       let cleanedStr = String(rawContent || "").trim();
@@ -558,10 +604,40 @@ Neutral description of the photo(s) from a vision model (may be empty):
 
       parsed = JSON.parse(cleanedStr);
     } catch (err) {
-      console.log(
-        "⚠️ Failed to parse JSON from DeepSeek, using fallback:",
-        err
-      );
+      console.log("⚠️ Failed to parse JSON from text model, fallback:", err);
+      parsed = { caption: captionDraft, hashtags: [], friendTags: [] };
+    }
+
+    // ✅ Retry once if ungrounded / not first-person / missing keywords
+    let captionTry = String(parsed.caption || captionDraft || "").trim();
+    if (captionLooksUngrounded(captionTry, visionDescription, captionDraft, mustKeywords)) {
+      const retryPrompt =
+        combinedPrompt +
+        `
+
+Your previous JSON was NOT grounded enough.
+Rewrite again. Follow the grounding rules strictly.
+Return ONLY JSON.
+`.trim();
+
+      try {
+        const retryRaw = await callOllamaChatText(retryPrompt);
+        let cleanedRetry = String(retryRaw || "").trim();
+
+        if (cleanedRetry.startsWith("```")) {
+          cleanedRetry = cleanedRetry.replace(/^```[a-zA-Z0-9]*\s*/, "");
+          cleanedRetry = cleanedRetry.replace(/```$/, "").trim();
+        }
+
+        const fb = cleanedRetry.indexOf("{");
+        const lb = cleanedRetry.lastIndexOf("}");
+        if (fb !== -1 && lb !== -1) cleanedRetry = cleanedRetry.slice(fb, lb + 1);
+
+        const retryParsed = JSON.parse(cleanedRetry);
+        parsed = retryParsed || parsed;
+      } catch (e) {
+        // keep original parsed
+      }
     }
 
     // Normalize model output
@@ -570,22 +646,22 @@ Neutral description of the photo(s) from a vision model (may be empty):
       ? parsed.hashtags.map((h) => String(h).trim()).filter(Boolean)
       : [];
 
-    // Cleanup caption
+    // Cleanup caption + enforce perspective
     caption = removeBannedWords(caption);
     caption = removeBannedActivities(caption, captionDraft);
     caption = removeBrandTextIfNotInDraft(caption, captionDraft);
-    caption = enforceFirstPerson(caption);
+    caption = forceUserPerspective(caption);
     caption = fixPlushAnimalHallucination(caption, captionDraft);
-
     caption = normalizeCaptionLength(caption, captionDraft);
-    hashtags = adjustHashtags(hashtags, captionDraft);
 
+    // Cleanup hashtags
+    hashtags = adjustHashtags(hashtags, captionDraft);
     if (hashtags.length === 0) {
       const fallback = fallbackTagsFromDraft(captionDraft, 3);
       if (fallback.length > 0) hashtags = fallback;
     }
 
-    // -------- Face recognition for friendTags (STRICT multi-face, MULTI-IMAGE) --------
+    // -------- Face recognition for friendTags (your existing logic) --------
     const FACE_THRESHOLD = 0.37;
     const MIN_GAP = 0.06;
     const MAX_TAGS = 5;
@@ -603,10 +679,7 @@ Neutral description of the photo(s) from a vision model (may be empty):
         let candidates = matches
           .map((m) => ({
             name: String(m.name || "").trim(),
-            distance:
-              typeof m.distance === "number"
-                ? m.distance
-                : Number(m.distance) || 999,
+            distance: typeof m.distance === "number" ? m.distance : Number(m.distance) || 999,
           }))
           .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
           .sort((a, b) => a.distance - b.distance);
@@ -634,10 +707,7 @@ Neutral description of the photo(s) from a vision model (may be empty):
 
         const batch = await recognizeFaceBatch(scanImages, FACE_THRESHOLD);
 
-        console.log(
-          "[VISION] FaceBatch FULL:\n",
-          util.inspect(batch, { depth: null, colors: true })
-        );
+        console.log("[VISION] FaceBatch FULL:\n", util.inspect(batch, { depth: null, colors: true }));
 
         const allPicked = [];
         for (const item of batch.results || []) {
@@ -653,16 +723,8 @@ Neutral description of the photo(s) from a vision model (may be empty):
       }
     }
 
-    const cleaned = {
-      caption,
-      hashtags,
-      friendTags: friendTagsMerged,
-    };
-
-    console.log(
-      "[VISION] Cleaned content:\n",
-      JSON.stringify(cleaned, null, 2)
-    );
+    const cleaned = { caption, hashtags, friendTags: friendTagsMerged };
+    console.log("[VISION] Cleaned content:\n", JSON.stringify(cleaned, null, 2));
     res.json(cleaned);
   } catch (err) {
     console.error("❌ Error in /generatePostMeta:", err);
@@ -690,9 +752,7 @@ app.post("/faces/detect", async (req, res) => {
 app.post("/faces/register", async (req, res) => {
   const { personId, name, imageBase64 } = req.body || {};
   if (!name || !imageBase64) {
-    return res
-      .status(400)
-      .json({ error: "name and imageBase64 are required." });
+    return res.status(400).json({ error: "name and imageBase64 are required." });
   }
 
   try {
@@ -722,10 +782,7 @@ app.post("/faces/recognize", async (req, res) => {
 
   try {
     const pyResp = await recognizeFace(imageBase64, threshold);
-    console.log(
-      "✅ /faces/recognize -> Python:",
-      util.inspect(pyResp, { depth: null, colors: true })
-    );
+    console.log("✅ /faces/recognize -> Python:", util.inspect(pyResp, { depth: null, colors: true }));
 
     res.json({
       ok: pyResp.ok !== false,
@@ -743,9 +800,7 @@ app.post("/faces/recognize", async (req, res) => {
 app.post("/faces/recognize_batch", async (req, res) => {
   const { imageBase64List, threshold } = req.body || {};
   if (!Array.isArray(imageBase64List) || imageBase64List.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "imageBase64List must be a non-empty array." });
+    return res.status(400).json({ error: "imageBase64List must be a non-empty array." });
   }
 
   try {

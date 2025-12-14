@@ -20,12 +20,19 @@ type TabKey = "home" | "list" | "budget" | "insights" | "chart";
 
 export default function MoneyManagementModule({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
+  const [activeTab] = React.useState<TabKey>("home"); // widen type for comparisons
   const styles = useMemo(() => makeStyles(!!isDarkmode), [isDarkmode]);
 
   const iconColor = (active: boolean) => {
     if (active) return "#38BDF8";
     return isDarkmode ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.6)";
   };
+
+  const labelStyle = (tab: TabKey) =>
+    StyleSheet.flatten([
+      styles.navLabel,
+      { color: iconColor(activeTab === tab) },
+    ]);
 
   const go = (tab: TabKey) => {
     if (tab === "home") return;
@@ -34,8 +41,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
     if (tab === "insights") return navigation.navigate("SpendingInsights");
     if (tab === "chart") return navigation.navigate("ExpensesChart");
   };
-
-  const activeTab: TabKey = "home";
 
   return (
     <Layout>
@@ -80,12 +85,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "home")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "home") },
-              ]}
-            >
+            <Text style={labelStyle("home")}>
               Home
             </Text>
           </TouchableOpacity>
@@ -100,12 +100,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "list")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "list") },
-              ]}
-            >
+            <Text style={labelStyle("list")}>
               List
             </Text>
           </TouchableOpacity>
@@ -122,12 +117,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "budget")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "budget") },
-              ]}
-            >
+            <Text style={labelStyle("budget")}>
               Budget
             </Text>
           </TouchableOpacity>
@@ -142,12 +132,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "chart")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "chart") },
-              ]}
-            >
+            <Text style={labelStyle("chart")}>
               Chart
             </Text>
           </TouchableOpacity>

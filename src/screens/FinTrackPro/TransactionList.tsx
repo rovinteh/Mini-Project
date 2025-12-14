@@ -397,7 +397,6 @@ export default function TransactionList({ navigation }: Props) {
           <View
             style={{
               flexDirection: "row",
-              gap: 10,
               marginBottom: 10,
             }}
           >
@@ -405,6 +404,7 @@ export default function TransactionList({ navigation }: Props) {
             <View
               style={{
                 flex: 1,
+                marginRight: 10,
                 backgroundColor: filterBg,
                 borderRadius: 14,
                 borderWidth: 1,
@@ -441,6 +441,7 @@ export default function TransactionList({ navigation }: Props) {
             <View
               style={{
                 flex: 1,
+                marginRight: 10,
                 backgroundColor: filterBg,
                 borderRadius: 14,
                 borderWidth: 1,

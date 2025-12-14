@@ -8,6 +8,7 @@ import {
   TouchableOpacity,
   ActivityIndicator,
 } from "react-native";
+import { Platform } from "react-native";
 import {
   Layout,
   TopNav,
@@ -585,13 +586,17 @@ const callAiForPostMeta = async (
   // Media picking
   // -------------------------------------------------------
   const pickPhotosFromLibrary = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(
-        "Permission needed",
-        "We need access to your photos to upload memories."
-      );
-      return;
+    // On web, permission prompt is not needed/available. Skip request there.
+    if (Platform.OS !== "web") {
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission needed",
+          "We need access to your photos to upload memories."
+        );
+        return;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -613,13 +618,16 @@ const callAiForPostMeta = async (
   };
 
   const pickVideoFromLibrary = async () => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(
-        "Permission needed",
-        "We need access to your videos to upload memories."
-      );
-      return;
+    if (Platform.OS !== "web") {
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(
+          "Permission needed",
+          "We need access to your videos to upload memories."
+        );
+        return;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({

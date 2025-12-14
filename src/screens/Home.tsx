@@ -230,7 +230,7 @@ export default function Home({ navigation }: Props) {
               {
                 label: "New Task",
                 icon: "create-outline",
-                route: "TaskManagementMenu",
+                route: "TaskAdd",
               },
               {
                 label: "Add Expense",

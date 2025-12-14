@@ -27,7 +27,6 @@ export type MainStackParamList = {
     peerId: string;
     peerName: string;
   };
-MemoryNotifications: undefined;
   PostAdd: {
     title: string;
     description: string;

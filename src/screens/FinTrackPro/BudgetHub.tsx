@@ -372,7 +372,7 @@ export default function BudgetHub({ navigation }: Props) {
             <Text>Loading...</Text>
           ) : (
             <>
-              <Text size="h4" fontWeight="bold" style={{ marginBottom: 10 }}>
+              <Text size="h3" fontWeight="bold" style={{ marginBottom: 10 }}>
                 {`This Month (${monthKey})`}
               </Text>
 
@@ -385,7 +385,7 @@ export default function BudgetHub({ navigation }: Props) {
                   marginBottom: 12,
                 }}
               >
-                <Text size="h4" fontWeight="bold" style={{ color: "green" }}>
+                <Text size="h3" fontWeight="bold" style={{ color: "green" }}>
                   Total Income
                 </Text>
                 <Text size="h2" fontWeight="bold">
@@ -402,7 +402,7 @@ export default function BudgetHub({ navigation }: Props) {
                   marginBottom: 12,
                 }}
               >
-                <Text size="h4" fontWeight="bold" style={{ color: "red" }}>
+                <Text size="h3" fontWeight="bold" style={{ color: "red" }}>
                   Total Expense
                 </Text>
                 <Text size="h2" fontWeight="bold">
@@ -419,7 +419,7 @@ export default function BudgetHub({ navigation }: Props) {
                   marginBottom: 12,
                 }}
               >
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Balance
                 </Text>
                 <Text
@@ -453,7 +453,7 @@ export default function BudgetHub({ navigation }: Props) {
                     justifyContent: "space-between",
                   }}
                 >
-                  <Text size="h4" fontWeight="bold">
+                  <Text size="h3" fontWeight="bold">
                     Budget Progress
                   </Text>
 
@@ -550,7 +550,7 @@ export default function BudgetHub({ navigation }: Props) {
                       justifyContent: "space-between",
                     }}
                   >
-                    <Text size="h4" fontWeight="bold">
+                    <Text size="h3" fontWeight="bold">
                       Low-Balance Support
                     </Text>
 
@@ -593,11 +593,11 @@ export default function BudgetHub({ navigation }: Props) {
                         {partTimeKeywords.slice(0, 5).map((k) => (
                           <View key={k} style={{ marginBottom: 10 }}>
                             <Text style={{ marginBottom: 6 }}>💡 {k}</Text>
-                            <View style={{ flexDirection: "row", gap: 10 }}>
+                            <View style={{ flexDirection: "row" }}>
                               <Button
                                 text="Maps"
                                 size="sm"
-                                style={{ flex: 1 }}
+                                style={{ flex: 1, marginRight: 10 }}
                                 onPress={() => openMapsSearch(k)}
                               />
                               <Button
@@ -606,7 +606,7 @@ export default function BudgetHub({ navigation }: Props) {
                                 style={{
                                   flex: 1,
                                   backgroundColor: isDarkmode
-                                    ? themeColor.dark300
+                                    ? themeColor.dark200
                                     : "#e5e7eb",
                                 }}
                                 textStyle={{
@@ -646,7 +646,7 @@ export default function BudgetHub({ navigation }: Props) {
                     : "rgba(0,0,0,0.06)",
                 }}
               >
-                <Text size="h4" fontWeight="bold">
+                <Text size="h3" fontWeight="bold">
                   Motivation
                 </Text>
                 <Text style={{ marginTop: 8 }}>
@@ -704,12 +704,13 @@ export default function BudgetHub({ navigation }: Props) {
                 onChangeText={setBudgetInput}
               />
 
-              <View style={{ flexDirection: "row", gap: 10, marginTop: 14 }}>
+              <View style={{ flexDirection: "row", marginTop: 14 }}>
                 <Button
                   text="Cancel"
                   onPress={() => setShowBudgetModal(false)}
                   style={{
                     flex: 1,
+                    marginRight: 10,
                     backgroundColor: isDarkmode
                       ? themeColor.dark200
                       : "#e5e7eb",

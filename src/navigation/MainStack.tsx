@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React from "react";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import MainTabs from "./MainTabs";
 
@@ -28,8 +28,6 @@ import TaskList from "../screens/TaskManagementModule.tsx/TaskList";
 import TaskCalendar from "../screens/TaskManagementModule.tsx/TaskCalendar";
 import AIAnalytics from "../screens/TaskManagementModule.tsx/AIAnalytics";
 import TeamManagement from "../screens/TaskManagementModule.tsx/TeamManagement";
-import MemoryNotifications from "../screens/MemoryBook/MemoryNotifications";
-import { startNotificationListener } from "../screens/MemoryBook/NotificationService";
 
 import MoneyManagementModule from "../screens/FinTrackPro/MoneyManagementModule"; //Money Management
 import SpendingInsights from "../screens/FinTrackPro/SpendingInsights";
@@ -40,14 +38,7 @@ import BudgetHub from "../screens/FinTrackPro/BudgetHub";
 
 const MainStack = createNativeStackNavigator();
 
-const Main = () => {
-  useEffect(() => {
-    const unsub = startNotificationListener();
-    return () => {
-      if (unsub) unsub();
-    };
-  }, []);
-
+function Main() {
   return (
     <MainStack.Navigator
       screenOptions={{
@@ -74,10 +65,7 @@ const Main = () => {
         name="MemoryFloatingMenu"
         component={MemoryFloatingMenu}
       />
-      <MainStack.Screen
-        name="MemoryNotifications"
-        component={MemoryNotifications}
-      />
+
 
       <MainStack.Screen name="FitnessMenu" component={FitnessMenu} />
       <MainStack.Screen name="LogMeal" component={LogMeal} />
@@ -97,7 +85,7 @@ const Main = () => {
         name="TaskManagementMenu"
         component={TaskManagementMenu}
       />
-      
+
       <MainStack.Screen //Money Management
         name="MoneyManagementModule"
         component={MoneyManagementModule}

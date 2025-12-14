@@ -31,7 +31,6 @@ import {
   arrayUnion,
   arrayRemove,
   deleteDoc,
-  where, // ✅ IMPORTANT for unread notifications
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 import { getStorage, ref, deleteObject } from "firebase/storage";
@@ -443,25 +442,6 @@ export default function MemoryFeed({ navigation }: Props) {
   const [optionsVisible, setOptionsVisible] = useState(false);
   const [selectedPost, setSelectedPost] = useState<Post | null>(null);
 
-  // ✅ RED DOT state (bell)
-  const [hasUnreadNotif, setHasUnreadNotif] = useState(false);
-
-  // ✅ listen unread notifications once (not inside PostItem)
-  useEffect(() => {
-    if (!currentUserId) return;
-
-    const qUnread = query(
-      collection(firestore, "notifications", currentUserId, "items"),
-      where("read", "==", false)
-    );
-
-    const unsub = onSnapshot(qUnread, (snap) => {
-      setHasUnreadNotif(!snap.empty);
-    });
-
-    return () => unsub();
-  }, [currentUserId]);
-
   // unified card style
   const cardBg = isDarkmode ? themeColor.dark100 : "#dfe3eb";
   const borderColor = isDarkmode ? "#333" : "#d0d0d0";
@@ -631,34 +611,6 @@ export default function MemoryFeed({ navigation }: Props) {
         leftAction={() => navigation.popToTop()}
         rightContent={
           <View style={{ flexDirection: "row", alignItems: "center" }}>
-            {/* 🔔 Notification Bell + 🔴 Red Dot */}
-            <TouchableOpacity
-              onPress={() => navigation.navigate("MemoryNotifications")}
-              style={{ marginRight: 14 }}
-            >
-              <View style={{ position: "relative" }}>
-                <Ionicons
-                  name="notifications-outline"
-                  size={20}
-                  color={isDarkmode ? themeColor.white100 : themeColor.dark}
-                />
-                {hasUnreadNotif && (
-                  <View
-                    style={{
-                      position: "absolute",
-                      top: -2,
-                      right: -2,
-                      width: 8,
-                      height: 8,
-                      borderRadius: 4,
-                      backgroundColor: "red",
-                    }}
-                  />
-                )}
-              </View>
-            </TouchableOpacity>
-
-            {/* 🌙 Theme Toggle */}
             <Ionicons
               name={isDarkmode ? "sunny" : "moon"}
               size={20}
