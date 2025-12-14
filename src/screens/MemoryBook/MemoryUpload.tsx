@@ -369,38 +369,47 @@ export default function MemoryUpload({ navigation, route }: Props) {
     setPlaceOptions([]);
   };
 
-  // -------------------------------------------------------
-  // Helper: call AI server (caption + hashtags + friendTags)
-  // -------------------------------------------------------
-  const callAiForPostMeta = async (
-    captionDraft: string,
-    imageBase64List: string[]
-  ) => {
-    const response = await fetch(`${LOCAL_AI_SERVER}/generatePostMeta`, {
+// -------------------------------------------------------
+// Helper: call AI server (caption + hashtags + friendTags)
+// -------------------------------------------------------
+const callAiForPostMeta = async (
+  captionDraft: string,
+  imageBase64List: string[]
+) => {
+  const url = `${LOCAL_AI_SERVER}/generatePostMeta`;
+  console.log("[CLIENT] calling:", url, "images:", imageBase64List.length);
+
+  try {
+    const response = await fetch(url, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-      },
-      body: JSON.stringify({
-        captionDraft,
-        imageBase64List,
-      }),
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ captionDraft, imageBase64List }),
     });
 
+    const text = await response.text(); // 👈 important for debugging
+    console.log(
+      "[CLIENT] status:",
+      response.status,
+      "body:",
+      text.slice(0, 300)
+    );
+
     if (!response.ok) {
-      throw new Error("AI server failed");
+      throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
     }
 
-    // aiResult = { caption, hashtags, friendTags }
-
-    const data = await response.json();
-    console.log("[CLIENT] /generatePostMeta result:", data);
+    const data = JSON.parse(text);
     return data as {
       caption: string;
       hashtags: string[];
       friendTags: string[];
     };
-  };
+  } catch (e: any) {
+    console.log("[CLIENT] AI fetch failed:", e?.message || e);
+    throw e;
+  }
+};
+
 
   // -------------------------------------------------------
   // Face: single image recognize (kept for other usage)
@@ -789,7 +798,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
       console.log("AI generate error:", e);
       Alert.alert(
         "AI Error",
-        "Failed to generate caption. Please check AI / face server."
+        `Failed to generate caption. Please check AI / face server.\nDetails: ${
+          e instanceof Error ? e.message : JSON.stringify(e)
+        }`
       );
     } finally {
       setIsGeneratingAI(false);
