@@ -6,6 +6,7 @@ import {
   ScrollView,
   Modal,
   Alert,
+  Linking,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -33,6 +34,9 @@ import {
   getDoc,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
+
+// ✅ NEW: location
+import * as Location from "expo-location";
 
 type Props = NativeStackScreenProps<MainStackParamList, "BudgetHub">;
 
@@ -64,6 +68,14 @@ export default function BudgetHub({ navigation }: Props) {
   // setup budget modal
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState<string>("");
+
+  // ✅ NEW: location states
+  const [locLoading, setLocLoading] = useState(false);
+  const [locError, setLocError] = useState<string>("");
+  const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
+    null
+  );
+  const [placeText, setPlaceText] = useState<string>("");
 
   const auth = getAuth();
   const db = getFirestore();
@@ -193,6 +205,15 @@ export default function BudgetHub({ navigation }: Props) {
   const budgetRemaining = hasBudget ? budgetLimit! - budgetUsed : null;
   const budgetRatio = hasBudget ? clamp01(budgetUsed / budgetLimit!) : 0;
 
+  // ✅ NEW: low balance detection (adjust threshold here)
+  const isLowBalance = useMemo(() => {
+    if (!hasBudget) return false;
+    const remaining = budgetRemaining ?? 0;
+    const ratioLeft = budgetLimit! > 0 ? remaining / budgetLimit! : 0;
+    // low if remaining <= 15% OR overspent
+    return remaining <= 0 || ratioLeft <= 0.15;
+  }, [hasBudget, budgetRemaining, budgetLimit]);
+
   const milestone = useMemo(() => {
     if (txCount >= 50) return "🏆 Milestone: 50 transactions logged!";
     if (txCount >= 20) return "🏆 Milestone: 20 transactions logged!";
@@ -238,6 +259,81 @@ export default function BudgetHub({ navigation }: Props) {
       Alert.alert("Error", e?.message ?? "Failed to save budget.");
     }
   };
+
+  // ✅ NEW: fetch user location for suggestions
+  const fetchLocation = async () => {
+    try {
+      setLocError("");
+      setLocLoading(true);
+
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== "granted") {
+        setLocError("Location permission denied.");
+        return;
+      }
+
+      const pos = await Location.getCurrentPositionAsync({});
+      const lat = pos.coords.latitude;
+      const lng = pos.coords.longitude;
+
+      setCoords({ lat, lng });
+
+      const places = await Location.reverseGeocodeAsync({
+        latitude: lat,
+        longitude: lng,
+      });
+      const p = places?.[0];
+
+      const city =
+        p?.city || p?.subregion || p?.district || p?.region || p?.country || "";
+      const region = p?.region || p?.country || "";
+      const label = city
+        ? `${city}${region && region !== city ? ", " + region : ""}`
+        : "Your area";
+
+      setPlaceText(label);
+    } catch (e: any) {
+      setLocError(e?.message ?? "Failed to get location.");
+    } finally {
+      setLocLoading(false);
+    }
+  };
+
+  // ✅ NEW: suggested part-time keywords (simple + practical)
+  const partTimeKeywords = useMemo(() => {
+    // You can customize based on Malaysia context
+    return [
+      "part time barista",
+      "part time promoter",
+      "part time cashier",
+      "grabfood rider",
+      "tuition teacher",
+      "event crew",
+      "warehouse packer",
+      "retail assistant",
+    ];
+  }, []);
+
+  const openMapsSearch = async (keyword: string) => {
+    const q = encodeURIComponent(`${keyword} near ${placeText || "me"}`);
+    // Google Maps search
+    const url = `https://www.google.com/maps/search/?api=1&query=${q}`;
+    await Linking.openURL(url);
+  };
+
+  const openGoogleSearch = async (keyword: string) => {
+    const q = encodeURIComponent(`${keyword} ${placeText || ""}`);
+    const url = `https://www.google.com/search?q=${q}`;
+    await Linking.openURL(url);
+  };
+
+  // Auto fetch location when low balance (only once per low period)
+  useEffect(() => {
+    if (isLowBalance && !coords && !locLoading) {
+      fetchLocation();
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLowBalance]);
 
   return (
     <KeyboardAvoidingView
@@ -431,6 +527,109 @@ export default function BudgetHub({ navigation }: Props) {
                   </>
                 )}
               </View>
+
+              {/* ✅ NEW: Low-Balance Support (Nearby Part-time Suggestions) */}
+              {hasBudget ? (
+                <View
+                  style={{
+                    padding: 16,
+                    borderRadius: 12,
+                    backgroundColor: isDarkmode
+                      ? themeColor.dark200
+                      : themeColor.white,
+                    marginBottom: 12,
+                    borderWidth: 1,
+                    borderColor: isDarkmode
+                      ? "rgba(255,255,255,0.08)"
+                      : "rgba(0,0,0,0.06)",
+                  }}
+                >
+                  <View
+                    style={{
+                      flexDirection: "row",
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <Text size="h4" fontWeight="bold">
+                      Low-Balance Support
+                    </Text>
+
+                    <Button
+                      text={locLoading ? "..." : "Refresh"}
+                      size="sm"
+                      style={{ width: 95 }}
+                      onPress={fetchLocation}
+                      disabled={locLoading}
+                    />
+                  </View>
+
+                  {!isLowBalance ? (
+                    <Text style={{ marginTop: 8, opacity: 0.85 }}>
+                      ✅ Budget is healthy. Suggestions will appear when balance
+                      becomes low.
+                    </Text>
+                  ) : (
+                    <>
+                      <Text style={{ marginTop: 8, opacity: 0.9 }}>
+                        ⚠️ Your remaining budget is low. Here are nearby
+                        part-time ideas.
+                      </Text>
+
+                      <Text style={{ marginTop: 8, opacity: 0.85 }}>
+                        📍 Area:{" "}
+                        <Text fontWeight="bold">
+                          {placeText ||
+                            (locLoading ? "Detecting..." : "Unknown")}
+                        </Text>
+                      </Text>
+
+                      {locError ? (
+                        <Text style={{ marginTop: 8, color: "red" }}>
+                          {locError}
+                        </Text>
+                      ) : null}
+
+                      <View style={{ marginTop: 10 }}>
+                        {partTimeKeywords.slice(0, 5).map((k) => (
+                          <View key={k} style={{ marginBottom: 10 }}>
+                            <Text style={{ marginBottom: 6 }}>💡 {k}</Text>
+                            <View style={{ flexDirection: "row", gap: 10 }}>
+                              <Button
+                                text="Maps"
+                                size="sm"
+                                style={{ flex: 1 }}
+                                onPress={() => openMapsSearch(k)}
+                              />
+                              <Button
+                                text="Search"
+                                size="sm"
+                                style={{
+                                  flex: 1,
+                                  backgroundColor: isDarkmode
+                                    ? themeColor.dark300
+                                    : "#e5e7eb",
+                                }}
+                                textStyle={{
+                                  color: isDarkmode
+                                    ? themeColor.white100
+                                    : themeColor.dark,
+                                }}
+                                onPress={() => openGoogleSearch(k)}
+                              />
+                            </View>
+                          </View>
+                        ))}
+                      </View>
+
+                      <Text
+                        style={{ marginTop: 6, opacity: 0.8, fontSize: 12 }}
+                      >
+                        Tip: Use “Maps” to find jobs near you faster.
+                      </Text>
+                    </>
+                  )}
+                </View>
+              ) : null}
 
               {/* Motivation */}
               <View
