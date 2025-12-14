@@ -64,7 +64,7 @@ const API_HOST =
   (Platform.OS === "web"
     ? (process as any)?.env?.EXPO_PUBLIC_AI_SERVER
     : (process as any)?.env?.EXPO_PUBLIC_AI_SERVER) ||
-  "http://192.168.0.16:11434";
+  "http://192.168.0.7:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
 
