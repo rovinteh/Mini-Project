@@ -66,22 +66,41 @@ export default function ({
   const subTextColor = isDarkmode ? "#94a3b8" : "#64748b";
 
   // --- IGNORE HARMLESS WEB WARNINGS ---
+  // --- IGNORE HARMLESS WEB WARNINGS ---
   useEffect(() => {
     const originalError = console.error;
+    const originalWarn = console.warn;
+
+    const shouldIgnore = (args: any[]) => {
+      const msg = args.join(" ");
+      return (
+        msg.includes("Invalid DOM property") ||
+        msg.includes("transform-origin") ||
+        msg.includes("Unknown event handler property") ||
+        msg.includes("onStartShouldSetResponder") ||
+        msg.includes("onResponderGrant") ||
+        msg.includes("onResponderMove") ||
+        msg.includes("onResponderRelease") ||
+        msg.includes("onResponderTerminate") ||
+        msg.includes("onResponderTerminationRequest") ||
+        msg.includes("The action 'NAVIGATE'") ||
+        msg.includes("Unexpected text node")
+      );
+    };
+
     console.error = (...args) => {
-      if (typeof args[0] === 'string' && (
-        args[0].includes("Invalid DOM property") ||
-        args[0].includes("Unknown event handler property") ||
-        args[0].includes("The action 'NAVIGATE'") ||
-        args[0].includes("Unexpected text node")
-      )) {
-        return;
-      }
+      if (shouldIgnore(args)) return;
       originalError(...args);
+    };
+
+    console.warn = (...args) => {
+      if (shouldIgnore(args)) return;
+      originalWarn(...args);
     };
 
     return () => {
       console.error = originalError;
+      console.warn = originalWarn;
     };
   }, []);
 
