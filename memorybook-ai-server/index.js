@@ -1,6 +1,6 @@
 // index.js - Local AI + Face proxy server for MemoryBook
 // Caption goal: "human social caption" + grounded + NO 1st/2nd/3rd person pronouns
-// NEW: Mood/Emotion detection from face (vision) + caption text
+// UPDATED: return emoji per post (AI), no score needed
 
 const express = require("express");
 const cors = require("cors");
@@ -101,6 +101,17 @@ function safeJsonParse(raw, fallback = null) {
   } catch {
     return fallback;
   }
+}
+
+// ✅ Emoji mapping (used by client + mood calendar)
+function emojiFromMoodLabel(label) {
+  const l = String(label || "neutral").toLowerCase();
+  if (l === "happy") return "😊";
+  if (l === "neutral") return "😐";
+  if (l === "tired") return "😴";
+  if (l === "sad") return "😢";
+  if (l === "angry") return "😡";
+  return "😐";
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
@@ -318,11 +329,12 @@ function stripGenericIntros(text) {
   return s.trim();
 }
 
-function buildNeutralCaptionFromVision(visionDescription) {
-  const v = String(visionDescription || "").toLowerCase();
+function buildNeutralCaptionFromVision(visionCombined) {
+  const v = String(visionCombined || "").toLowerCase();
 
   if (v.includes("outdoor")) return "Fresh air, good vibes.";
-  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe moment, locked in.";
+  if (v.includes("cafe") || v.includes("restaurant"))
+    return "Cafe moment, locked in.";
   if (v.includes("table")) return "Table talk vibes.";
   if (v.includes("laptop")) return "Laptop open, focus mode.";
   if (v.includes("glasses")) return "Glasses on, mood on.";
@@ -363,7 +375,8 @@ async function callOllamaChatText(prompt, modelOverride, temperatureOverride) {
     format: "json",
     stream: false,
     options: {
-      temperature: typeof temperatureOverride === "number" ? temperatureOverride : 0.25,
+      temperature:
+        typeof temperatureOverride === "number" ? temperatureOverride : 0.25,
       top_p: 0.9,
       num_predict: 220,
     },
@@ -405,55 +418,55 @@ Style: 1–2 short sentences, simple English.
 }
 
 // -------------------------
-// Vision – multi images describe
+// Vision – multi images describe (FIXED for carousel)
+// Returns { combined, perPhoto }
 // -------------------------
 async function callOllamaVisionDescribeMulti(imageBase64List) {
   const safeList = Array.isArray(imageBase64List)
     ? imageBase64List.filter(Boolean)
     : [];
-  if (!safeList.length) return "";
+  if (!safeList.length) return { combined: "", perPhoto: [] };
 
   const total = safeList.length;
-  const parts = [];
+  const perPhoto = [];
 
   for (let i = 0; i < total; i++) {
     try {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
-      if (desc) parts.push(`Photo ${i + 1}: ${desc}`);
+      perPhoto.push(String(desc || "").trim());
     } catch (err) {
-      console.log(`Vision describe error on photo ${i + 1}:`, err?.message || err);
+      console.log(
+        `Vision describe error on photo ${i + 1}:`,
+        err?.message || err
+      );
+      perPhoto.push("");
     }
   }
 
-  if (!parts.length) return "";
+  const lines = perPhoto.map((d, i) =>
+    d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`
+  );
 
-  let combined = parts.join("\n");
-  combined = combined.replace(/\bBOH\b/gi, "").replace(/\s+/g, " ").trim();
+  // ✅ keep newlines so the text model understands "photo 1 vs photo 2"
+  let combined = lines.join("\n");
+  combined = combined.replace(/\bBOH\b/gi, "").trim();
 
-  console.log("[VISION] Combined per-photo description:\n", combined);
-  return combined;
+  console.log("[VISION] Per-photo descriptions:\n", combined);
+  return { combined, perPhoto };
 }
 
 // -------------------------
-// NEW: Vision mood detection (faces + vibe)
-// Returns { moodLabel, moodScore, confidence }
-// moodScore: -1..1 (happy positive, sad/angry negative)
+// Mood labels (emoji is derived from this)
 // -------------------------
 const MOOD_LABELS = ["happy", "neutral", "tired", "sad", "angry"];
 
-function scoreFromMoodLabel(label) {
-  const l = String(label || "neutral").toLowerCase();
-  if (l === "happy") return 0.7;
-  if (l === "neutral") return 0.0;
-  if (l === "tired") return -0.25;
-  if (l === "sad") return -0.65;
-  if (l === "angry") return -0.75;
-  return 0.0;
-}
-
+// -------------------------
+// NEW: Vision mood detection (faces + vibe)
+// Returns { moodLabel, confidence }
+// -------------------------
 async function detectMoodFromVisionFirstImage(imageBase64) {
   if (!imageBase64) {
-    return { moodLabel: "neutral", moodScore: 0, confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0 };
   }
 
   const prompt = `
@@ -481,7 +494,9 @@ Task:
     const raw = String(resp.data?.message?.content || "");
     const parsed = safeJsonParse(raw, null);
 
-    const moodLabel = MOOD_LABELS.includes(String(parsed?.moodLabel).toLowerCase())
+    const moodLabel = MOOD_LABELS.includes(
+      String(parsed?.moodLabel).toLowerCase()
+    )
       ? String(parsed.moodLabel).toLowerCase()
       : "neutral";
 
@@ -489,22 +504,22 @@ Task:
 
     return {
       moodLabel,
-      moodScore: scoreFromMoodLabel(moodLabel),
       confidence,
     };
   } catch (e) {
-    return { moodLabel: "neutral", moodScore: 0, confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0 };
   }
 }
 
 // -------------------------
 // NEW: Caption mood detection (text-only)
+// Returns { moodLabel, confidence }
 // -------------------------
 async function detectMoodFromCaptionText(captionText) {
   const caption = String(captionText || "").trim();
 
   if (!caption) {
-    return { moodLabel: "neutral", moodScore: 0, confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0 };
   }
 
   const prompt = `
@@ -525,43 +540,47 @@ Caption:
     const raw = await callOllamaChatText(prompt, OLLAMA_TEXT_MODEL, 0.1);
     const parsed = safeJsonParse(raw, null);
 
-    const moodLabel = MOOD_LABELS.includes(String(parsed?.moodLabel).toLowerCase())
+    const moodLabel = MOOD_LABELS.includes(
+      String(parsed?.moodLabel).toLowerCase()
+    )
       ? String(parsed.moodLabel).toLowerCase()
       : "neutral";
     const confidence = clamp(parsed?.confidence ?? 0, 0, 1);
 
     return {
       moodLabel,
-      moodScore: scoreFromMoodLabel(moodLabel),
       confidence,
     };
   } catch {
-    return { moodLabel: "neutral", moodScore: 0, confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0 };
   }
 }
 
 // -------------------------
-// NEW: Combine mood (face + caption)
+// NEW: Combine mood (face + caption) WITHOUT score
+// Returns { moodLabel, moodSource, confidence }
 // -------------------------
 function combineMood(faceMood, captionMood) {
-  const f = faceMood || { moodLabel: "neutral", moodScore: 0, confidence: 0 };
-  const c = captionMood || { moodLabel: "neutral", moodScore: 0, confidence: 0 };
+  const f = faceMood || { moodLabel: "neutral", confidence: 0 };
+  const c = captionMood || { moodLabel: "neutral", confidence: 0 };
 
-  // if both confident and same label -> boost
-  if (f.confidence >= 0.45 && c.confidence >= 0.45 && f.moodLabel === c.moodLabel) {
+  // If both confident and same label -> boost
+  if (
+    f.confidence >= 0.45 &&
+    c.confidence >= 0.45 &&
+    f.moodLabel === c.moodLabel
+  ) {
     return {
       moodLabel: f.moodLabel,
-      moodScore: clamp((f.moodScore + c.moodScore) / 2, -1, 1),
       moodSource: "face+caption",
       confidence: clamp((f.confidence + c.confidence) / 2 + 0.1, 0, 1),
     };
   }
 
-  // pick higher-confidence one if decent
+  // Pick higher-confidence one if decent
   if (f.confidence >= c.confidence && f.confidence >= 0.35) {
     return {
       moodLabel: f.moodLabel,
-      moodScore: f.moodScore,
       moodSource: "face",
       confidence: f.confidence,
     };
@@ -570,16 +589,14 @@ function combineMood(faceMood, captionMood) {
   if (c.confidence > f.confidence && c.confidence >= 0.35) {
     return {
       moodLabel: c.moodLabel,
-      moodScore: c.moodScore,
       moodSource: "caption",
       confidence: c.confidence,
     };
   }
 
-  // otherwise neutral
+  // Otherwise neutral
   return {
     moodLabel: "neutral",
-    moodScore: 0,
     moodSource: "unknown",
     confidence: Math.max(f.confidence, c.confidence),
   };
@@ -620,33 +637,33 @@ async function recognizeFaceBatch(imageBase64List, threshold) {
 // -------------------------
 // Grounding helpers
 // -------------------------
-function buildMustKeywordsFromVision(visionDescription) {
-  const v = String(visionDescription || "").toLowerCase();
+function buildMustKeywordsFromFirstPhoto(perPhoto) {
+  const first = String(perPhoto?.[0] || "").toLowerCase();
 
   const pool = [
-    "phone",
-    "iphone",
-    "table",
-    "chair",
     "glasses",
     "watch",
-    "t-shirt",
-    "shirt",
     "outdoor",
-    "window",
-    "laptop",
-    "keyboard",
-    "desk",
     "cafe",
     "restaurant",
     "street",
+    "table",
+    "phone",
   ];
 
-  const must = pool.filter((k) => v.includes(k));
-  return Array.from(new Set(must)).slice(0, 2);
+  // ✅ only enforce if FIRST photo clearly shows it
+  const must = pool.filter((k) => first.includes(k));
+
+  // ✅ keep very light: 0–1 keyword (avoid forcing weird object captions)
+  return Array.from(new Set(must)).slice(0, 1);
 }
 
-function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKeywords) {
+function captionLooksUngrounded(
+  caption,
+  visionDescription,
+  captionDraft,
+  mustKeywords
+) {
   const c = String(caption || "").toLowerCase();
   const v = String(visionDescription || "").toLowerCase();
   const d = String(captionDraft || "").toLowerCase();
@@ -780,21 +797,29 @@ app.post("/generatePostMeta", async (req, res) => {
       captionDraft
     );
 
-    // 1) Vision (objects/scene)
+    // 1) Vision (objects/scene) - FIXED for carousel
     let visionDescription = "";
+    let visionPerPhoto = [];
+
     if (images.length > 0) {
       try {
-        visionDescription = await callOllamaVisionDescribeMulti(images);
-        console.log("[VISION] Description:", visionDescription);
+        const v = await callOllamaVisionDescribeMulti(images);
+        visionDescription = v.combined;
+        visionPerPhoto = v.perPhoto || [];
+        console.log("[VISION] Description:\n", visionDescription);
       } catch (err) {
         console.log("⚠️ Vision error (continue):", err?.message || err);
       }
     }
 
-    const mustKeywords = buildMustKeywordsFromVision(visionDescription);
+    // ✅ mustKeywords only from photo 1 (prevents 2nd photo "phone" forcing caption)
+    const mustKeywords = buildMustKeywordsFromFirstPhoto(visionPerPhoto);
+
     const mustLine =
       mustKeywords.length > 0
-        ? `- Caption MUST include at least ONE of: ${mustKeywords.join(", ")}.`
+        ? `- Caption should naturally include: ${mustKeywords.join(
+            ", "
+          )} (only if it fits).`
         : `- If vision is unclear, keep caption generic and simple.`;
 
     const intent = detectUserIntent(captionDraft);
@@ -812,6 +837,9 @@ Return ONLY valid JSON:
 
 GROUNDING RULES (MUST FOLLOW):
 - Use ONLY the vision description + user draft. Do NOT invent stories.
+- This is a carousel post (multiple photos). Caption should describe the overall moment/vibe,
+  NOT list objects from each photo.
+- Do NOT merge details incorrectly (e.g., "phone in hand" if only one photo shows it).
 - Do NOT mention rivers, lucky charms, magical events, childhood, seasons unless supported by vision/draft.
 ${mustLine}
 
@@ -864,7 +892,14 @@ Vision description (may be empty):
 
     // Retry once if ungrounded / too weird
     let captionTry = String(parsed.caption || captionDraft || "").trim();
-    if (captionLooksUngrounded(captionTry, visionDescription, captionDraft, mustKeywords)) {
+    if (
+      captionLooksUngrounded(
+        captionTry,
+        visionDescription,
+        captionDraft,
+        mustKeywords
+      )
+    ) {
       const retryPrompt =
         combinedPrompt +
         `
@@ -899,7 +934,15 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
     caption = normalizeCaptionLength(caption, captionDraft);
 
     // If still ungrounded, hard fallback from vision (neutral, no pronouns)
-    if (!caption || captionLooksUngrounded(caption, visionDescription, captionDraft, mustKeywords)) {
+    if (
+      !caption ||
+      captionLooksUngrounded(
+        caption,
+        visionDescription,
+        captionDraft,
+        mustKeywords
+      )
+    ) {
       caption = buildNeutralCaptionFromVision(visionDescription);
     }
 
@@ -980,16 +1023,15 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
     }
 
     // -------------------------
-    // NEW: Mood detection (face + caption)
+    // Mood detection (face + caption) -> return emoji
     // -------------------------
     let moodLabel = "neutral";
-    let moodScore = 0;
     let moodSource = "unknown";
+    let emoji = "😐";
 
     try {
       const firstImage = images.length ? images[0] : null;
 
-      // run both in parallel (faster)
       const [faceMood, captionMood] = await Promise.all([
         detectMoodFromVisionFirstImage(firstImage),
         detectMoodFromCaptionText(caption),
@@ -998,12 +1040,23 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
       const combined = combineMood(faceMood, captionMood);
 
       moodLabel = combined.moodLabel;
-      moodScore = clamp(combined.moodScore, -1, 1);
       moodSource = combined.moodSource;
+      emoji = emojiFromMoodLabel(moodLabel);
 
-      console.log("[MOOD] face:", faceMood, "caption:", captionMood, "=>", combined);
+      console.log(
+        "[MOOD] face:",
+        faceMood,
+        "caption:",
+        captionMood,
+        "=>",
+        combined,
+        "emoji:",
+        emoji
+      );
     } catch (e) {
-      // keep defaults
+      emoji = "😐";
+      moodLabel = "neutral";
+      moodSource = "unknown";
     }
 
     const cleaned = {
@@ -1011,9 +1064,11 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
       hashtags,
       friendTags: friendTagsMerged,
 
-      // ✅ NEW FIELDS for your app
+      // ✅ what your client should save per post
+      emoji,
+
+      // (optional debug fields)
       moodLabel,
-      moodScore,
       moodSource,
     };
 

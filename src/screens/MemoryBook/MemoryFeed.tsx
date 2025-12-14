@@ -62,6 +62,9 @@ interface Post {
     latitude: number;
     longitude: number;
   } | null;
+
+  // ✅ Mood emoji (AI / user edited)
+  emoji?: string | null;
 }
 
 // Format Firestore timestamp to readable date+time
@@ -108,6 +111,13 @@ const PostItem: React.FC<PostItemProps> = ({
     setActiveIndex(0);
   }, [post.id]);
 
+  // ✅ emoji helper (safe)
+  const safeEmoji = (e?: string | null) => {
+    const s = String(e || "").trim();
+    return s ? s.slice(0, 2) : "";
+  };
+  const emoji = safeEmoji(post.emoji);
+
   // ✅ useVideoPlayer for videos
   const player =
     post.mediaType === "video"
@@ -115,6 +125,29 @@ const PostItem: React.FC<PostItemProps> = ({
           playerInstance.loop = false;
         })
       : null;
+
+  const containerWidth = Dimensions.get("window").width - 48;
+  const mediaHeight = containerWidth; // square-ish
+
+  const EmojiBadge = () => {
+    if (!emoji) return null;
+    return (
+      <View
+        style={{
+          position: "absolute",
+          top: 10,
+          left: 10,
+          paddingHorizontal: 8,
+          paddingVertical: 4,
+          borderRadius: 999,
+          backgroundColor: "rgba(0,0,0,0.55)",
+          zIndex: 20,
+        }}
+      >
+        <Text style={{ fontSize: 16, color: "#fff" }}>{emoji}</Text>
+      </View>
+    );
+  };
 
   return (
     <View style={cardStyle}>
@@ -182,9 +215,6 @@ const PostItem: React.FC<PostItemProps> = ({
         // check if we can show multi-image carousel
         const allImages = types.every((t) => t === "image");
         const hasMultipleImages = allImages && urls.length > 1;
-        // card has padding 8, list has horizontal padding 16: subtract 32 + 16
-        const containerWidth = Dimensions.get("window").width - 48;
-        const mediaHeight = containerWidth; // square-ish
 
         // if we have multiple images → horizontal swipe
         if (hasMultipleImages) {
@@ -198,6 +228,9 @@ const PostItem: React.FC<PostItemProps> = ({
                 backgroundColor: "black",
               }}
             >
+              {/* ✅ emoji overlay */}
+              <EmojiBadge />
+
               <ScrollView
                 horizontal
                 pagingEnabled
@@ -235,6 +268,7 @@ const PostItem: React.FC<PostItemProps> = ({
                   backgroundColor: "rgba(0,0,0,0.45)",
                   padding: 8,
                   borderRadius: 16,
+                  zIndex: 15,
                 }}
               >
                 <Ionicons name="expand" size={18} color="#fff" />
@@ -285,6 +319,9 @@ const PostItem: React.FC<PostItemProps> = ({
                 backgroundColor: "black",
               }}
             >
+              {/* ✅ emoji overlay */}
+              <EmojiBadge />
+
               <Image
                 source={{ uri: singleUrl }}
                 style={{ width: "100%", height: "100%" }}
@@ -321,6 +358,9 @@ const PostItem: React.FC<PostItemProps> = ({
               justifyContent: "center",
             }}
           >
+            {/* ✅ emoji overlay */}
+            <EmojiBadge />
+
             {player && (
               <VideoView
                 player={player}
@@ -461,10 +501,7 @@ export default function MemoryFeed({ navigation }: Props) {
   };
 
   useEffect(() => {
-    const q = query(
-      collection(firestore, "posts"),
-      orderBy("createdAt", "desc")
-    );
+    const q = query(collection(firestore, "posts"), orderBy("createdAt", "desc"));
 
     const unsub = onSnapshot(q, (snapshot) => {
       const data: Post[] = [];
@@ -472,8 +509,15 @@ export default function MemoryFeed({ navigation }: Props) {
         const d = docSnap.data() as any;
         const created = d.CreatedUser || {};
         const userId: string = created.CreatedUserId || d.userId || "";
-        const username: string =
-          created.CreatedUserName || d.username || "User";
+        const username: string = created.CreatedUserName || d.username || "User";
+
+        // ✅ emoji: prefer top-level emoji, fallback to mood.emoji
+        const emoji =
+          typeof d.emoji === "string"
+            ? d.emoji
+            : typeof d.mood?.emoji === "string"
+            ? d.mood.emoji
+            : "";
 
         data.push({
           id: docSnap.id,
@@ -482,6 +526,7 @@ export default function MemoryFeed({ navigation }: Props) {
           mediaUrl: d.mediaUrl,
           mediaType: d.mediaType || "image",
           caption: d.caption || "",
+          emoji, // ✅ add emoji
           isStory: d.isStory || false,
           createdAt: d.createdAt,
           storyExpiresAt: d.storyExpiresAt || null,
@@ -499,7 +544,7 @@ export default function MemoryFeed({ navigation }: Props) {
     });
 
     return () => unsub();
-  }, []);
+  }, [firestore]);
 
   const handleToggleLike = async (post: Post) => {
     if (!currentUserId) return;
@@ -507,9 +552,7 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadyLiked = post.likes?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      likes: alreadyLiked
-        ? arrayRemove(currentUserId)
-        : arrayUnion(currentUserId),
+      likes: alreadyLiked ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
     });
   };
 
@@ -519,9 +562,7 @@ export default function MemoryFeed({ navigation }: Props) {
     const alreadySaved = post.savedBy?.includes(currentUserId);
 
     await updateDoc(refDoc, {
-      savedBy: alreadySaved
-        ? arrayRemove(currentUserId)
-        : arrayUnion(currentUserId),
+      savedBy: alreadySaved ? arrayRemove(currentUserId) : arrayUnion(currentUserId),
     });
   };
 
@@ -592,9 +633,7 @@ export default function MemoryFeed({ navigation }: Props) {
   };
 
   const handleOpenFullView = (post: Post, _startIndex?: number) => {
-    navigation.navigate("MemoryPostView", {
-      postId: post.id,
-    } as any);
+    navigation.navigate("MemoryPostView", { postId: post.id } as any);
   };
 
   return (
@@ -651,15 +690,10 @@ export default function MemoryFeed({ navigation }: Props) {
 
           {/* Existing stories */}
           {stories.map((story) => (
-            <View
-              key={story.id}
-              style={{ alignItems: "center", marginRight: 12 }}
-            >
+            <View key={story.id} style={{ alignItems: "center", marginRight: 12 }}>
               <TouchableOpacity
                 onPress={() =>
-                  navigation.navigate("MemoryStoryView", {
-                    postId: story.id,
-                  } as any)
+                  navigation.navigate("MemoryStoryView", { postId: story.id } as any)
                 }
                 style={{
                   width: 70,
@@ -725,9 +759,7 @@ export default function MemoryFeed({ navigation }: Props) {
               width: 260,
               borderRadius: 16,
               padding: 16,
-              backgroundColor: isDarkmode
-                ? themeColor.dark100
-                : themeColor.white100,
+              backgroundColor: isDarkmode ? themeColor.dark100 : themeColor.white100,
             }}
           >
             <Text fontWeight="bold" style={{ marginBottom: 12, fontSize: 16 }}>
@@ -748,10 +780,7 @@ export default function MemoryFeed({ navigation }: Props) {
               </Text>
             </TouchableOpacity>
 
-            <TouchableOpacity
-              onPress={handleDeletePressed}
-              style={{ paddingVertical: 10 }}
-            >
+            <TouchableOpacity onPress={handleDeletePressed} style={{ paddingVertical: 10 }}>
               <Text style={{ fontSize: 14, color: "red" }}>Delete</Text>
             </TouchableOpacity>
 

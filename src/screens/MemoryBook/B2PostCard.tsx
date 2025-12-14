@@ -23,28 +23,40 @@ export type PostType = {
   mediaUrl: string;
   mediaType?: "image" | "video";
   caption?: string;
-  likes?: string[]; // list of user IDs who liked
-  comments?: any[]; // or you can change to number if you prefer
-  savedBy?: string[]; // list of user IDs who saved/bookmarked
-  createdAt?: any; // Firestore timestamp
+  likes?: string[];
+  comments?: any[];
+  savedBy?: string[];
+  createdAt?: any;
   isStory?: boolean;
 
-  // 🔹 New: optional location stored in Firestore
+  // 🔹 Location (optional)
   locationLabel?: string | null;
   locationCoords?: {
     latitude: number;
     longitude: number;
   } | null;
+
+  // ✅ NEW: MoodCalendar uses this
+  emoji?: string | null;
 };
 
 type Props = {
   post: PostType;
-  onPress?: () => void; // open full post (optional)
+  onPress?: () => void;
   showMenu?: boolean;
   onPressMenu?: () => void;
 };
 
 type NavProp = NativeStackNavigationProp<MainStackParamList>;
+
+// small helper: make emoji safe
+function safeEmoji(e: any) {
+  const s = String(e || "").trim();
+  // allow empty (means: hide badge)
+  if (!s) return "";
+  // keep it short so it doesn't break UI
+  return s.slice(0, 2);
+}
 
 export default function B2PostCard({
   post,
@@ -72,8 +84,8 @@ export default function B2PostCard({
 
   // expo-video player (used only when isVideo === true)
   const player = useVideoPlayer(post.mediaUrl, (p) => {
-    p.loop = false; // no auto-loop
-    p.pause(); // start paused
+    p.loop = false;
+    p.pause();
   });
 
   const isLiked = uid ? (post.likes || []).includes(uid) : false;
@@ -83,15 +95,12 @@ export default function B2PostCard({
   const commentsCount = post.comments?.length || 0;
 
   const openPost = () => {
-    if (onPress) {
-      onPress();
-    } else {
-      navigation.navigate("MemoryPostView", { postId: post.id });
-    }
+    if (onPress) onPress();
+    else navigation.navigate("MemoryPostView", { postId: post.id });
   };
 
   const handleToggleLike = async () => {
-    if (!uid) return; // not logged in
+    if (!uid) return;
     try {
       const ref = doc(firestore, "posts", post.id);
       await updateDoc(ref, {
@@ -118,8 +127,10 @@ export default function B2PostCard({
     navigation.navigate("MemoryPostView", { postId: post.id });
   };
 
-  // subtle colour for location text
   const locationColor = isDarkmode ? "#b5c4ff" : "#555";
+
+  // ✅ emoji badge (top-level emoji)
+  const emoji = safeEmoji(post.emoji);
 
   return (
     <View style={{ width: "33.33%", padding: 4 }}>
@@ -151,6 +162,7 @@ export default function B2PostCard({
               backgroundColor: "#000",
               alignItems: "center",
               justifyContent: "center",
+              position: "relative",
             }}
           >
             {isVideo ? (
@@ -167,6 +179,23 @@ export default function B2PostCard({
                 style={{ width: "100%", height: "100%" }}
                 resizeMode="cover"
               />
+            )}
+
+            {/* ✅ Emoji badge */}
+            {!!emoji && (
+              <View
+                style={{
+                  position: "absolute",
+                  top: 8,
+                  left: 8,
+                  paddingHorizontal: 8,
+                  paddingVertical: 4,
+                  borderRadius: 999,
+                  backgroundColor: "rgba(0,0,0,0.55)",
+                }}
+              >
+                <Text style={{ fontSize: 14, color: "#fff" }}>{emoji}</Text>
+              </View>
             )}
           </View>
 
@@ -211,7 +240,7 @@ export default function B2PostCard({
           </Text>
         </TouchableOpacity>
 
-        {/* ACTIONS: like, comment, save (all on left) */}
+        {/* ACTIONS: like, comment, save */}
         <View
           style={{
             flexDirection: "row",
@@ -219,7 +248,7 @@ export default function B2PostCard({
             marginTop: 4,
           }}
         >
-          {/* Like button */}
+          {/* Like */}
           <TouchableOpacity
             disabled={!uid}
             onPress={handleToggleLike}
@@ -235,7 +264,7 @@ export default function B2PostCard({
             </Text>
           </TouchableOpacity>
 
-          {/* Comment button */}
+          {/* Comment */}
           <TouchableOpacity
             onPress={handleOpenComments}
             style={{
@@ -254,7 +283,7 @@ export default function B2PostCard({
             </Text>
           </TouchableOpacity>
 
-          {/* Save / Bookmark (beside comment) */}
+          {/* Save */}
           <TouchableOpacity
             disabled={!uid}
             onPress={handleToggleSave}

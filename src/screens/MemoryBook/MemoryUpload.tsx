@@ -8,6 +8,8 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Platform,
+  StyleSheet,
+  Modal,
 } from "react-native";
 import {
   Layout,
@@ -24,6 +26,7 @@ import * as Location from "expo-location";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
+import { TextInput as RNTextInput } from "react-native";
 import { getAuth } from "firebase/auth";
 import {
   getFirestore,
@@ -41,14 +44,11 @@ import { useVideoPlayer, VideoView } from "expo-video";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
 
-// ✅ Put your AI badge here (change path if needed)
-const AI_BADGE = require("../../assets/ai-badge.png");
-
 // For multiple selection
 type SelectedMedia = {
   uri: string;
   type: "image" | "video";
-  base64?: string | null; // for vision AI (images only)
+  base64?: string | null;
 };
 
 // For place search (IG-style location search)
@@ -94,9 +94,15 @@ type AlbumInfo = {
   name: string;
 };
 
-// ✅ Mood fields
+// ✅ Mood fields (still optional)
 type MoodLabel = "happy" | "neutral" | "tired" | "sad" | "angry";
-type MoodSource = "ai" | "user" | "face" | "caption" | "face+caption" | "unknown";
+type MoodSource =
+  | "ai"
+  | "user"
+  | "face"
+  | "caption"
+  | "face+caption"
+  | "unknown";
 
 function emojiFromMoodLabel(lbl: any): string {
   const x = String(lbl || "").toLowerCase();
@@ -137,8 +143,40 @@ function VideoPreview({ uri }: { uri: string }) {
         }}
       >
         <Ionicons name="videocam" size={14} color="#fff" />
-        <Text style={{ marginLeft: 6, fontSize: 11, color: "#fff" }}>Video</Text>
+        <Text style={{ marginLeft: 6, fontSize: 11, color: "#fff" }}>
+          Video
+        </Text>
       </View>
+    </View>
+  );
+}
+
+// ✅ Small reusable "AI pill" (no image file needed)
+function AIPill({ compact }: { compact?: boolean }) {
+  return (
+    <View
+      style={[
+        styles.aiPill,
+        compact ? { paddingHorizontal: 8, paddingVertical: 4 } : null,
+      ]}
+    >
+      <Ionicons
+        name="sparkles-outline"
+        size={compact ? 14 : 16}
+        color="#fff"
+        style={{ marginRight: 6 }}
+      />
+      <Text style={styles.aiText}>AI</Text>
+    </View>
+  );
+}
+
+// ✅ Label row with AI pill at right
+function LabelWithAIPill({ label }: { label: string }) {
+  return (
+    <View style={styles.labelRow}>
+      <Text style={{ flex: 1 }}>{label}</Text>
+      <AIPill compact />
     </View>
   );
 }
@@ -151,7 +189,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const firestore = getFirestore();
   const storage = getStorage();
 
-  // ---- read params (for edit mode / optional album selection) ----
+  // ---- read params ----
   const params: any = route?.params || {};
   const editMode = params.editMode || false;
   const editingPostId: string | undefined = params.postId;
@@ -188,7 +226,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : ""
     : "";
 
-  // ✅ initial albums if editing (fallback to [])
+  // ✅ initial albums if editing
   const initialAlbumIds: string[] = editMode
     ? Array.isArray(postData.albumIds)
       ? postData.albumIds
@@ -200,26 +238,36 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : []
     : [];
 
-  // ✅ mood initial values if editing (fallback neutral)
+  // ✅ mood initial values (optional)
   const initialMoodLabel: MoodLabel = editMode
     ? (String(postData.moodLabel || "neutral").toLowerCase() as MoodLabel)
     : "neutral";
-  const initialMoodScore: number = editMode
-    ? typeof postData.moodScore === "number"
-      ? postData.moodScore
-      : 0
-    : 0;
   const initialMoodSource: MoodSource = editMode
     ? (String(postData.moodSource || "unknown") as MoodSource)
     : "unknown";
 
-  // ✅ emoji (AI suggests first, user can edit)
+  // ✅ IMPORTANT: emoji is now stored at TOP-LEVEL: postData.emoji
   const initialPostEmoji = editMode
-    ? String(postData?.mood?.emoji || emojiFromMoodLabel(initialMoodLabel))
+    ? String(postData?.emoji || emojiFromMoodLabel(initialMoodLabel) || "😐")
     : emojiFromMoodLabel(initialMoodLabel);
 
   const [postEmoji, setPostEmoji] = useState<string>(initialPostEmoji);
-  const [emojiEdited, setEmojiEdited] = useState<boolean>(editMode); // in editMode, assume user may want manual control
+  const [emojiEdited, setEmojiEdited] = useState<boolean>(editMode);
+
+  // emoji picker modal
+const [emojiPickerVisible, setEmojiPickerVisible] = useState(false);
+
+const emojiOptions = useMemo(
+  () => [
+    { emoji: "😊", label: "Happy" },
+    { emoji: "😐", label: "Neutral" },
+    { emoji: "😴", label: "Tired" },
+    { emoji: "😢", label: "Sad" },
+    { emoji: "😡", label: "Angry" },
+  ],
+  []
+);
+
 
   // store ALL selected media here
   const [mediaItems, setMediaItems] = useState<SelectedMedia[]>(() =>
@@ -227,7 +275,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       ? initialMediaUrls.map((uri: string, idx: number) => ({
           uri,
           type: initialMediaTypes[idx] || "image",
-          base64: null, // no base64 when editing existing media
+          base64: null,
         }))
       : []
   );
@@ -240,9 +288,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
-  // ✅ mood state
+  // ✅ mood state (optional)
   const [moodLabel, setMoodLabel] = useState<MoodLabel>(initialMoodLabel);
-  const [moodScore, setMoodScore] = useState<number>(initialMoodScore);
   const [moodSource, setMoodSource] = useState<MoodSource>(initialMoodSource);
 
   // ✅ albums state
@@ -257,7 +304,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [faceName, setFaceName] = useState("");
   const [isSavingFace, setIsSavingFace] = useState(false);
 
-  // 🔹 Location state (auto-detect + search)
+  // 🔹 Location state
   const [locationLabel, setLocationLabel] = useState<string | null>(null);
   const [locationCoords, setLocationCoords] = useState<{
     latitude: number;
@@ -277,7 +324,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     "http://192.168.1.74:3000";
 
   // -------------------------------------------------------
-  // Location: auto-detect using GPS + Nominatim (English)
+  // Location: auto-detect
   // -------------------------------------------------------
   const autoDetectLocation = async () => {
     try {
@@ -293,7 +340,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
       setLocationCoords({ latitude, longitude });
 
-      // 1) Nominatim reverse geocode (English)
       try {
         const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1&accept-language=en`;
         const resp = await fetch(url, {
@@ -323,9 +369,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
         console.log("Nominatim reverse error:", e);
       }
 
-      // 2) Fallback Expo reverseGeocode
       try {
-        const places = await Location.reverseGeocodeAsync({ latitude, longitude });
+        const places = await Location.reverseGeocodeAsync({
+          latitude,
+          longitude,
+        });
         if (places && places.length > 0) {
           const p = places[0];
           const parts = [
@@ -355,7 +403,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   }, []);
 
   // -------------------------------------------------------
-  // Search address (IG-style) with Nominatim (English)
+  // Search address
   // -------------------------------------------------------
   const searchAddress = async () => {
     const q = locationQuery.trim();
@@ -372,7 +420,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       const resp = await fetch(url, {
         headers: { "User-Agent": "memorybook-app" },
       });
-
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
       const data = await resp.json();
@@ -402,7 +449,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
   // -------------------------------------------------------
   // Helper: call AI server
   // -------------------------------------------------------
-  const callAiForPostMeta = async (captionDraft: string, imageBase64List: string[]) => {
+  const callAiForPostMeta = async (
+    captionDraft: string,
+    imageBase64List: string[]
+  ) => {
     const url = `${LOCAL_AI_SERVER}/generatePostMeta`;
     console.log("[CLIENT] calling:", url, "images:", imageBase64List.length);
 
@@ -413,7 +463,12 @@ export default function MemoryUpload({ navigation, route }: Props) {
     });
 
     const text = await response.text();
-    console.log("[CLIENT] status:", response.status, "body:", text.slice(0, 300));
+    console.log(
+      "[CLIENT] status:",
+      response.status,
+      "body:",
+      text.slice(0, 300)
+    );
 
     if (!response.ok) {
       throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
@@ -425,13 +480,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
       hashtags: string[];
       friendTags: string[];
       moodLabel?: MoodLabel | string;
-      moodScore?: number;
       moodSource?: MoodSource | string;
+      // (your server also returns moodScore but we don't need it anymore)
+      moodScore?: number;
     };
   };
 
   // -------------------------------------------------------
-  // Face: single image recognize
+  // Face calls
   // -------------------------------------------------------
   const callFaceRecognize = async (
     imageBase64: string,
@@ -450,7 +506,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       }
 
       const data = (await resp.json()) as FaceRecognizeResponse;
-      console.log("[CLIENT] /faces/recognize result:", data);
       return data;
     } catch (err) {
       console.log("Face recognize error:", err);
@@ -458,9 +513,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // -------------------------------------------------------
-  // Face: batch recognize
-  // -------------------------------------------------------
   const callFaceRecognizeBatch = async (
     imageBase64List: string[],
     threshold?: number
@@ -478,7 +530,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       }
 
       const data = (await resp.json()) as FaceBatchResponse;
-      console.log("[CLIENT] /faces/recognize_batch result:", data);
       return data;
     } catch (err) {
       console.log("Face batch error:", err);
@@ -486,7 +537,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // register a face under a given name
   const callFaceRegister = async (name: string, imageBase64: string) => {
     const personId = name.trim().toLowerCase().replace(/\s+/g, "_");
 
@@ -502,9 +552,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       throw new Error(`Face register HTTP ${resp.status}`);
     }
 
-    const data = await resp.json();
-    console.log("Face register result:", data);
-    return data;
+    return await resp.json();
   };
 
   // -------------------------------------------------------
@@ -525,21 +573,33 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
     const firstImage = mediaItems.find((m) => m.type === "image" && m.base64);
     if (!firstImage || !firstImage.base64) {
-      Alert.alert("No image data", "Please select a photo again so we can read the face.");
+      Alert.alert(
+        "No image data",
+        "Please select a photo again so we can read the face."
+      );
       return;
     }
 
     const FACE_THRESHOLD = 0.37;
-    const recognize = await callFaceRecognize(firstImage.base64, FACE_THRESHOLD);
+    const recognize = await callFaceRecognize(
+      firstImage.base64,
+      FACE_THRESHOLD
+    );
     const faces = Array.isArray(recognize?.faces) ? recognize.faces : [];
 
     if (faces.length === 0) {
-      Alert.alert("No face found", "Please choose a clearer photo with one person.");
+      Alert.alert(
+        "No face found",
+        "Please choose a clearer photo with one person."
+      );
       return;
     }
 
     if (faces.length > 1) {
-      Alert.alert("Multiple people detected", "Please choose a photo with ONLY one person to remember.");
+      Alert.alert(
+        "Multiple people detected",
+        "Please choose a photo with ONLY one person to remember."
+      );
       return;
     }
 
@@ -563,14 +623,17 @@ export default function MemoryUpload({ navigation, route }: Props) {
       Alert.alert("Saved", `I'll try to recognize "${name}" in future photos.`);
     } catch (err) {
       console.log("handleRememberFace error:", err);
-      Alert.alert("Face learning failed", "Could not save this face. Please check the face service / server.");
+      Alert.alert(
+        "Face learning failed",
+        "Could not save this face. Please check the face service / server."
+      );
     } finally {
       setIsSavingFace(false);
     }
   };
 
   // -------------------------------------------------------
-  // Remove selected media (X button)
+  // Remove media
   // -------------------------------------------------------
   const removeMediaAt = (indexToRemove: number) => {
     setMediaItems((prev) => prev.filter((_, idx) => idx !== indexToRemove));
@@ -581,9 +644,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
   // -------------------------------------------------------
   const pickPhotosFromLibrary = async () => {
     if (Platform.OS !== "web") {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission needed", "We need access to your photos to upload memories.");
+        Alert.alert(
+          "Permission needed",
+          "We need access to your photos to upload memories."
+        );
         return;
       }
     }
@@ -608,9 +675,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const pickVideoFromLibrary = async () => {
     if (Platform.OS !== "web") {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const { status } =
+        await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Permission needed", "We need access to your videos to upload memories.");
+        Alert.alert(
+          "Permission needed",
+          "We need access to your videos to upload memories."
+        );
         return;
       }
     }
@@ -625,14 +696,19 @@ export default function MemoryUpload({ navigation, route }: Props) {
     if (result.canceled) return;
 
     const asset = result.assets[0];
-    const item: SelectedMedia = { uri: asset.uri, type: "video", base64: null };
-    setMediaItems((prev) => [...prev, item]);
+    setMediaItems((prev) => [
+      ...prev,
+      { uri: asset.uri, type: "video", base64: null },
+    ]);
   };
 
   const captureWithCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert("Permission needed", "We need access to your camera to capture memories.");
+      Alert.alert(
+        "Permission needed",
+        "We need access to your camera to capture memories."
+      );
       return;
     }
 
@@ -642,21 +718,25 @@ export default function MemoryUpload({ navigation, route }: Props) {
       base64: true,
     });
 
-    if (result.canceled || !result.assets || !result.assets.length) return;
+    if (result.canceled || !result.assets?.length) return;
 
     const asset = result.assets[0];
-    const item: SelectedMedia = {
-      uri: asset.uri,
-      type: asset.type === "video" ? "video" : "image",
-      base64: asset.type === "video" ? null : asset.base64 ?? null,
-    };
-
-    setMediaItems((prev) => [...prev, item]);
+    setMediaItems((prev) => [
+      ...prev,
+      {
+        uri: asset.uri,
+        type: asset.type === "video" ? "video" : "image",
+        base64: asset.type === "video" ? null : asset.base64 ?? null,
+      },
+    ]);
   };
 
   const pickMedia = async () => {
     if (editMode) {
-      Alert.alert("Edit mode", "Right now you can only edit the caption and story setting, not the media.");
+      Alert.alert(
+        "Edit mode",
+        "Right now you can only edit the caption and story setting, not the media."
+      );
       return;
     }
 
@@ -668,21 +748,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ]);
   };
 
-  // ✅ mood object builder (use emoji from AI/user)
-  const getTodayMoodObject = (emoji?: string) => {
-    const now = new Date();
-    const yyyy = now.getFullYear();
-    const mm = String(now.getMonth() + 1).padStart(2, "0");
-    const dd = String(now.getDate()).padStart(2, "0");
-    return {
-      date: `${yyyy}-${mm}-${dd}`,
-      monthKey: `${yyyy}-${mm}`,
-      emoji: emoji && emoji.trim() ? emoji : "😐",
-    };
-  };
-
   // -------------------------------------------------------
-  // AI generate (caption + hashtags + friend tags + mood)
+  // AI generate
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -711,7 +778,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         return;
       }
 
-      let captionDraft = options?.useDraft ? draft || "" : caption || "";
+      const captionDraft = options?.useDraft ? draft || "" : caption || "";
       const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
 
       const stripHashtags = (text: string) =>
@@ -734,28 +801,31 @@ export default function MemoryUpload({ navigation, route }: Props) {
         setFriendTagsText(aiResult.friendTags.join(", "));
       }
 
-      // mood fields
-      if (typeof aiResult.moodScore === "number") {
-        const safeScore = Math.max(-1, Math.min(1, aiResult.moodScore));
-        setMoodScore(safeScore);
-      }
-
+      // ✅ moodLabel -> emoji
       if (aiResult.moodLabel) {
         const lbl = String(aiResult.moodLabel).toLowerCase();
-        const allowed: MoodLabel[] = ["happy", "neutral", "tired", "sad", "angry"];
-        if (allowed.includes(lbl as MoodLabel)) setMoodLabel(lbl as MoodLabel);
+        const allowed: MoodLabel[] = [
+          "happy",
+          "neutral",
+          "tired",
+          "sad",
+          "angry",
+        ];
+        if (allowed.includes(lbl as MoodLabel)) {
+          setMoodLabel(lbl as MoodLabel);
 
-        // ✅ set emoji from AI (ONLY if user has not edited)
-        if (!emojiEdited) setPostEmoji(emojiFromMoodLabel(lbl));
-      } else {
-        if (!emojiEdited) setPostEmoji(emojiFromMoodLabel(moodLabel));
+          // ✅ set emoji from AI only if user hasn't edited emoji
+          if (!emojiEdited) {
+            setPostEmoji(emojiFromMoodLabel(lbl));
+          }
+        }
       }
 
       if (aiResult.moodSource) {
-        const src = String(aiResult.moodSource) as MoodSource;
-        setMoodSource(src || "ai");
+        setMoodSource(String(aiResult.moodSource) as MoodSource);
       } else {
-        if (typeof aiResult.moodScore === "number") setMoodSource("ai");
+        // AI ran -> mark as ai
+        setMoodSource("ai");
       }
 
       // Face recognition batch
@@ -788,8 +858,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
           });
         }
       }
-
-      console.log("AI caption/tags generated.");
     } catch (e: any) {
       console.log("AI generate error:", e);
       Alert.alert(
@@ -829,7 +897,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     const safeAlbums: AlbumInfo[] = Array.isArray(albums) ? albums : [];
     const safeAlbumIds: string[] = Array.isArray(albumIds) ? albumIds : [];
 
-    const finalEmoji = (postEmoji && postEmoji.trim()) ? postEmoji.trim() : "😐";
+    const finalEmoji = postEmoji?.trim() ? postEmoji.trim() : "😐";
 
     // ---- EDIT MODE ----
     if (editMode && editingPostId) {
@@ -839,13 +907,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
         const now = Date.now();
         const expiry = Timestamp.fromDate(new Date(now + 24 * 60 * 60 * 1000));
 
-        // preserve original date/monthKey when editing
-        const prevMood = postData?.mood || getTodayMoodObject(finalEmoji);
-        const nextMood = {
-          ...prevMood,
-          emoji: finalEmoji,
-        };
-
         const refDoc = doc(firestore, "posts", editingPostId);
         await updateDoc(refDoc, {
           caption,
@@ -854,11 +915,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
           hashtags: hashtagList,
           friendTags: friendTagList,
 
-          // ✅ update emoji safely
-          mood: nextMood,
+          // ✅ IMPORTANT: top-level emoji (MoodCalendar uses this)
+          emoji: finalEmoji,
 
+          // optional: keep mood info
           moodLabel: postData?.moodLabel ?? moodLabel,
-          moodScore: typeof postData?.moodScore === "number" ? postData.moodScore : moodScore,
           moodSource: postData?.moodSource ?? moodSource,
 
           albums: safeAlbums,
@@ -930,12 +991,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
 
-        // ✅ mood object uses the emoji user sees/edits
-        mood: getTodayMoodObject(finalEmoji),
+        // ✅ IMPORTANT: top-level emoji (MoodCalendar uses this)
+        emoji: finalEmoji,
 
-        // (keep for analytics if you want)
+        // optional: keep mood info
         moodLabel,
-        moodScore: Math.max(-1, Math.min(1, Number(moodScore || 0))),
         moodSource: moodSource || "unknown",
 
         albums: safeAlbums,
@@ -954,28 +1014,19 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const arrowColor = isDarkmode ? themeColor.white : "#999";
 
-  // ✅ AI enabled only if there is at least one image with base64
   const canUseAI = useMemo(() => {
     return (
-      mediaItems.some((m) => m.type === "image" && !!m.base64) && !isGeneratingAI
+      mediaItems.some((m) => m.type === "image" && !!m.base64) &&
+      !isGeneratingAI
     );
   }, [mediaItems, isGeneratingAI]);
-
-  // Small label component: "Text + AI badge"
-  const LabelWithAI = ({ text }: { text: string }) => (
-    <View style={{ flexDirection: "row", alignItems: "center", marginTop: 20, marginBottom: 10 }}>
-      <Text style={{ flex: 1 }}>{text}</Text>
-      <Image
-        source={AI_BADGE}
-        style={{ width: 52, height: 24, resizeMode: "contain", opacity: 0.95 }}
-      />
-    </View>
-  );
 
   return (
     <Layout>
       <TopNav
-        middleContent={<Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>}
+        middleContent={
+          <Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>
+        }
         leftAction={() => navigation.goBack()}
         leftContent={
           <Ionicons
@@ -986,7 +1037,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
         }
       />
 
-      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
+      >
         <Button
           text={
             editMode
@@ -995,7 +1049,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
           }
           onPress={pickMedia}
         />
-
         {/* Preview selected media */}
         {mediaItems.length > 0 && (
           <View style={{ marginTop: 20 }}>
@@ -1054,38 +1107,62 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </ScrollView>
 
             {!editMode && (
-              <Text style={{ marginTop: 8, fontSize: 12, color: isDarkmode ? "#aaa" : "#777" }}>
+              <Text
+                style={{
+                  marginTop: 8,
+                  fontSize: 12,
+                  color: isDarkmode ? "#aaa" : "#777",
+                }}
+              >
                 Tip: Tap the “X” to remove a wrong file.
               </Text>
             )}
           </View>
         )}
-
         {/* 📍 Location */}
         <View style={{ marginTop: 16 }}>
-          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
-            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+          <View
+            style={{
+              flexDirection: "row",
+              alignItems: "center",
+              justifyContent: "space-between",
+            }}
+          >
+            <View
+              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
+            >
               <Ionicons
                 name="location-outline"
                 size={18}
                 color={isDarkmode ? themeColor.white : "#555"}
               />
               <Text
-                style={{ marginLeft: 6, color: isDarkmode ? themeColor.white : themeColor.dark }}
+                style={{
+                  marginLeft: 6,
+                  color: isDarkmode ? themeColor.white : themeColor.dark,
+                }}
                 numberOfLines={1}
               >
-                {locationLabel ? locationLabel : locationError ? locationError : "Detecting location..."}
+                {locationLabel
+                  ? locationLabel
+                  : locationError
+                  ? locationError
+                  : "Detecting location..."}
               </Text>
             </View>
 
             <TouchableOpacity onPress={autoDetectLocation}>
-              <Text style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}>
+              <Text
+                style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}
+              >
                 Detect again
               </Text>
             </TouchableOpacity>
           </View>
 
-          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}>
+          <View
+            style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}
+          >
             <View style={{ flex: 1, marginRight: 8 }}>
               <TextInput
                 placeholder="Search for a place (optional)"
@@ -1139,7 +1216,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
                   }}
                 >
                   <Text
-                    style={{ fontSize: 13, color: isDarkmode ? themeColor.white : themeColor.dark }}
+                    style={{
+                      fontSize: 13,
+                      color: isDarkmode ? themeColor.white : themeColor.dark,
+                    }}
                     numberOfLines={2}
                   >
                     {p.label}
@@ -1149,9 +1229,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </View>
           )}
         </View>
-
         {/* Draft / Keywords */}
-        <Text style={{ marginTop: 20, marginBottom: 10 }}>Draft / Keywords (optional)</Text>
+        <Text style={{ marginTop: 20, marginBottom: 10 }}>
+          Draft / Keywords (optional)
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1178,7 +1259,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
             <Ionicons name="arrow-forward" size={20} color={arrowColor} />
           </TouchableOpacity>
         </View>
-
         {/* Caption */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>Caption</Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -1190,62 +1270,64 @@ export default function MemoryUpload({ navigation, route }: Props) {
             />
           </View>
 
-          {/* ✨ button + AI badge overlay */}
-          <TouchableOpacity
-            onPress={() => {
-              if (!canUseAI) return;
-              handleGenerateWithAI({ useDraft: false });
-            }}
-            style={{
-              paddingHorizontal: 10,
-              paddingVertical: 8,
-              opacity: canUseAI ? 1 : 0.3,
-              borderWidth: 1,
-              borderColor: isDarkmode ? "#555" : "#ccc",
-              borderRadius: 8,
-              position: "relative",
-            }}
-          >
-            <Ionicons name="sparkles" size={20} color={arrowColor} />
-            <Image
-              source={AI_BADGE}
+          {/* ✨ button + AI pill overlay */}
+          <View style={{ position: "relative", justifyContent: "center" }}>
+            <TouchableOpacity
+              onPress={() => {
+                if (!canUseAI) return;
+                handleGenerateWithAI({ useDraft: false });
+              }}
+              style={{
+                paddingHorizontal: 10,
+                paddingVertical: 8,
+                opacity: canUseAI ? 1 : 0.3,
+                borderWidth: 1,
+                borderColor: isDarkmode ? "#555" : "#ccc",
+                borderRadius: 10,
+              }}
+            >
+              <Ionicons name="sparkles" size={20} color={arrowColor} />
+            </TouchableOpacity>
+
+            {/* keep it INSIDE screen, not sticking out */}
+            <View
+              pointerEvents="none"
               style={{
                 position: "absolute",
-                top: -10,
-                right: -10,
-                width: 52,
-                height: 24,
-                resizeMode: "contain",
+                top: -24,
+                right: -4, // ✅ move left a bit (no negative)
+                zIndex: 50,
+                elevation: 50,
               }}
-            />
-          </TouchableOpacity>
+            >
+              <AIPill compact />
+            </View>
+          </View>
         </View>
-
-        {/* Hashtags (no button, only AI badge at label) */}
-        <LabelWithAI text="Hashtags (AI / manual)" />
+        {/* Hashtags label with AI pill (no button) */}
+        <LabelWithAIPill label="Hashtags (AI / manual)" />
         <TextInput
           placeholder="#friends #holiday #2025"
           value={hashtagsText}
           onChangeText={setHashtagsText}
         />
-
-        {/* Friend tags (no button, only AI badge at label) */}
-        <LabelWithAI text="Friend tags (comma separated)" />
+        {/* Friend tags label with AI pill (no button) */}
+        <LabelWithAIPill label="Friend tags (comma separated)" />
         <TextInput
           placeholder="Angelina, Jamie, Alex"
           value={friendTagsText}
           onChangeText={setFriendTagsText}
         />
-
-        {/* (Optional) debug display for mood */}
+        {/* Mood display (optional) */}
         <View style={{ marginTop: 12 }}>
           <Text style={{ fontSize: 12, color: isDarkmode ? "#aaa" : "#666" }}>
-            Mood (AI): {moodLabel} ({moodScore.toFixed(2)}) • {moodSource}
+            Mood (AI): {moodLabel} • {moodSource}
           </Text>
         </View>
-
         {/* Remember this face */}
-        <Text style={{ marginTop: 24, marginBottom: 8 }}>Remember this face</Text>
+        <Text style={{ marginTop: 24, marginBottom: 8 }}>
+          Remember this face
+        </Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1263,23 +1345,49 @@ export default function MemoryUpload({ navigation, route }: Props) {
           />
         </View>
 
-        {/* ✅ Post Emoji input (AI suggested, user can edit) */}
+        {/* ✅ Post Emoji */}
         <Text style={{ marginTop: 18, marginBottom: 8 }}>
-          Post emoji (AI suggested)
+          Post emoji (AI auto fill)
         </Text>
+
         <View style={{ flexDirection: "row", alignItems: "center" }}>
+          {/* Emoji preview / picker */}
+          <TouchableOpacity
+            onPress={() => setEmojiPickerVisible(true)}
+            activeOpacity={0.85}
+            style={{
+              width: 54,
+              height: 48,
+              borderRadius: 12,
+              borderWidth: 1,
+              borderColor: isDarkmode ? "#555" : "#ccc",
+              alignItems: "center",
+              justifyContent: "center",
+              marginRight: 10,
+              backgroundColor: isDarkmode ? "#111" : "#fff",
+            }}
+          >
+            <Text style={{ fontSize: 22 }}>{postEmoji || "😐"}</Text>
+          </TouchableOpacity>
+
+          {/* Manual emoji typing (NO placeholder) */}
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
-              placeholder="😐"
               value={postEmoji}
+              placeholder="" // ✅ force empty
+              placeholderTextColor="transparent" // ✅ hide placeholder
               onChangeText={(t) => {
                 setEmojiEdited(true);
-                const v = String(t || "").trim();
-                setPostEmoji(v ? v.slice(0, 2) : "");
+                const emoji = Array.from(String(t || ""))[0] || "";
+                setPostEmoji(emoji);
               }}
+              autoCapitalize="none"
+              autoCorrect={false}
+              textAlign="center"
             />
           </View>
 
+          {/* Reset to AI */}
           <TouchableOpacity
             onPress={() => {
               setEmojiEdited(false);
@@ -1299,6 +1407,106 @@ export default function MemoryUpload({ navigation, route }: Props) {
           </TouchableOpacity>
         </View>
 
+        <Text
+          style={{
+            marginTop: 6,
+            fontSize: 12,
+            color: isDarkmode ? "#aaa" : "#777",
+          }}
+        >
+          Tip: Tap the emoji box to choose quickly.
+        </Text>
+
+        {/* Emoji picker modal */}
+        <Modal
+          visible={emojiPickerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setEmojiPickerVisible(false)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "rgba(0,0,0,0.55)",
+              alignItems: "center",
+              justifyContent: "center",
+              padding: 20,
+            }}
+          >
+            <View
+              style={{
+                width: "100%",
+                maxWidth: 380,
+                borderRadius: 16,
+                backgroundColor: isDarkmode ? "#0b1220" : "#fff",
+                padding: 14,
+              }}
+            >
+              <Text
+                style={{
+                  fontSize: 16,
+                  fontWeight: "700",
+                  color: isDarkmode ? "#fff" : "#111",
+                }}
+              >
+                Choose emoji
+              </Text>
+              <Text
+                style={{
+                  marginTop: 6,
+                  fontSize: 12,
+                  color: isDarkmode ? "#bbb" : "#666",
+                }}
+              >
+                This emoji will be saved into the post and shown in Mood
+                Calendar.
+              </Text>
+
+              <View
+                style={{
+                  flexDirection: "row",
+                  justifyContent: "space-between",
+                }}
+              >
+                {emojiOptions.map((item) => (
+                  <TouchableOpacity
+                    key={item.emoji}
+                    onPress={() => {
+                      setEmojiEdited(true);
+                      setPostEmoji(item.emoji);
+                      setEmojiPickerVisible(false);
+                    }}
+                    style={{
+                      width: 48,
+                      alignItems: "center",
+                    }}
+                  >
+                    <Text style={{ fontSize: 26 }}>{item.emoji}</Text>
+                    <Text
+                      style={{
+                        fontSize: 11,
+                        marginTop: 2,
+                        color: isDarkmode ? "#aaa" : "#666",
+                        textAlign: "center",
+                      }}
+                    >
+                      {item.label}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+
+              <View style={{ flexDirection: "row", marginTop: 12 }}>
+                <Button
+                  text="Close"
+                  status="info"
+                  style={{ flex: 1 }}
+                  onPress={() => setEmojiPickerVisible(false)}
+                />
+              </View>
+            </View>
+          </View>
+        </Modal>
         {/* Story toggle */}
         <View style={{ marginTop: 24 }}>
           <TouchableOpacity
@@ -1311,15 +1519,23 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color={isDarkmode ? themeColor.white : "#444"}
               style={{ marginRight: 8 }}
             />
-            <Text style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}>
+            <Text
+              style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}
+            >
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
-          <Text style={{ marginTop: 4, fontSize: 12, color: isDarkmode ? "#aaa" : "#777" }}>
-            When enabled, this memory will appear as a story and disappear after 24 hours.
+          <Text
+            style={{
+              marginTop: 4,
+              fontSize: 12,
+              color: isDarkmode ? "#aaa" : "#777",
+            }}
+          >
+            When enabled, this memory will appear as a story and disappear after
+            24 hours.
           </Text>
         </View>
-
         {/* Upload button */}
         <View style={{ marginTop: 30, marginBottom: 20 }}>
           <Button
@@ -1343,3 +1559,25 @@ export default function MemoryUpload({ navigation, route }: Props) {
     </Layout>
   );
 }
+
+const styles = StyleSheet.create({
+  aiPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 999,
+    backgroundColor: "#7C3AED",
+  },
+  aiText: {
+    color: "#fff",
+    fontWeight: "800",
+    fontSize: 12,
+  },
+  labelRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 20,
+    marginBottom: 10,
+  },
+});

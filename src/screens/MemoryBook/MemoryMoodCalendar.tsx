@@ -32,8 +32,55 @@ import MemoryFloatingMenu from "./MemoryFloatingMenu";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryMoodCalendar">;
 
-type OverrideMap = Record<string, string>; // dateKey -> emoji
+type OverrideMap = Record<string, string>; // dateKey -> emoji (manual edit)
 type DayEmojiMap = Record<string, string>; // dateKey -> emoji (from last post)
+
+// ✅ Build YYYY-MM-DD in LOCAL time (so 12am works correctly)
+function dateKeyFromDateLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
+function monthKeyFromDateLocal(d: Date) {
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  return `${y}-${m}`;
+}
+
+// ✅ Normalize Firestore timestamp / date / number into Date
+function toJsDate(v: any): Date | null {
+  try {
+    if (!v) return null;
+
+    // Firestore Timestamp
+    if (typeof v?.toDate === "function") {
+      return v.toDate();
+    }
+
+    // JS Date
+    if (v instanceof Date) {
+      return v;
+    }
+
+    // ISO string
+    if (typeof v === "string") {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    // millis
+    if (typeof v === "number") {
+      const d = new Date(v);
+      if (!isNaN(d.getTime())) return d;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 export default function MemoryMoodCalendar({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
@@ -52,11 +99,24 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
   const currentYear = monthDate.getFullYear();
   const currentMonthIndex = monthDate.getMonth(); // 0-11
-  const currentMonthKey = `${currentYear}-${String(currentMonthIndex + 1).padStart(2, "0")}`;
+  const currentMonthKey = `${currentYear}-${String(currentMonthIndex + 1).padStart(
+    2,
+    "0"
+  )}`;
 
   const monthNames = [
-    "January","February","March","April","May","June",
-    "July","August","September","October","November","December",
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
   ];
   const weekdayLabels = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
@@ -64,7 +124,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   const firstDayIndex = new Date(currentYear, currentMonthIndex, 1).getDay();
 
   const dateKeyFromDay = (day: number) =>
-    `${currentYear}-${String(currentMonthIndex + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
+    `${currentYear}-${String(currentMonthIndex + 1).padStart(2, "0")}-${String(
+      day
+    ).padStart(2, "0")}`;
 
   // =============================
   // Theme colors
@@ -98,8 +160,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
   };
 
   // =============================
-  // 1) Load LAST POST mood emoji per day (for current month)
+  // 1) Load LAST POST emoji per day (current month)
   // Rule: last post wins
+  // Uses: post.emoji + post.createdAt (LOCAL dateKey)
   // =============================
   useEffect(() => {
     if (!uid) return;
@@ -119,14 +182,19 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
 
       snap.forEach((ds) => {
         const data: any = ds.data();
-        const m = data?.mood;
 
-        // expect mood in post:
-        // mood: { date:"YYYY-MM-DD", monthKey:"YYYY-MM", emoji:"😊" }
-        if (!m?.date || !m?.monthKey || !m?.emoji) return;
-        if (String(m.monthKey) !== currentMonthKey) return;
+        // ✅ new field from AI server (and user can edit in upload screen)
+        const emoji = String(data?.emoji || "").trim();
+        if (!emoji) return;
 
-        map[String(m.date)] = String(m.emoji);
+        const createdAtDate = toJsDate(data?.createdAt);
+        if (!createdAtDate) return;
+
+        const monthKey = monthKeyFromDateLocal(createdAtDate);
+        if (monthKey !== currentMonthKey) return;
+
+        const dateKey = dateKeyFromDateLocal(createdAtDate);
+        map[dateKey] = emoji; // ✅ overwrite as we go (last post wins)
       });
 
       setLastPostEmojiByDay(map);
@@ -188,7 +256,6 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     const hasAi = !!lastPostEmojiByDay[dateKey];
     const hasOverride = !!overridesByDay[dateKey];
 
-    // If no posts and no override, show message (optional)
     if (!hasAi && !hasOverride) {
       Alert.alert("No mood yet", "No posts found for this day.");
       return;
@@ -299,14 +366,21 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
             </View>
 
             <TouchableOpacity onPress={goToNextMonth} style={{ padding: 4 }}>
-              <Ionicons name="chevron-forward" size={20} color={primaryTextColor} />
+              <Ionicons
+                name="chevron-forward"
+                size={20}
+                color={primaryTextColor}
+              />
             </TouchableOpacity>
           </View>
 
           {/* weekday labels */}
           <View style={{ flexDirection: "row", marginBottom: 6 }}>
             {weekdayLabels.map((w) => (
-              <View key={w} style={{ flex: 1, alignItems: "center", paddingVertical: 2 }}>
+              <View
+                key={w}
+                style={{ flex: 1, alignItems: "center", paddingVertical: 2 }}
+              >
                 <Text
                   style={{
                     fontSize: 11,
@@ -337,7 +411,10 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
               const hasOverride = !!overridesByDay[dateKey];
 
               return (
-                <View key={dateKey} style={{ width: "14.285%", aspectRatio: 1, padding: 2 }}>
+                <View
+                  key={dateKey}
+                  style={{ width: "14.285%", aspectRatio: 1, padding: 2 }}
+                >
                   <TouchableOpacity
                     onPress={() => requestEditDay(dateKey)}
                     activeOpacity={0.75}
@@ -351,11 +428,17 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                       borderColor: hasOverride ? themeColor.info : "transparent",
                     }}
                   >
-                    <Text style={{ fontSize: 11, color: primaryTextColor }}>{day}</Text>
-                    <Text style={{ fontSize: 16, marginTop: 2 }}>{emo || " "}</Text>
+                    <Text style={{ fontSize: 11, color: primaryTextColor }}>
+                      {day}
+                    </Text>
+                    <Text style={{ fontSize: 16, marginTop: 2 }}>
+                      {emo || " "}
+                    </Text>
 
                     {hasOverride && (
-                      <Text style={{ fontSize: 9, marginTop: 1, color: themeColor.info }}>
+                      <Text
+                        style={{ fontSize: 9, marginTop: 1, color: themeColor.info }}
+                      >
                         edited
                       </Text>
                     )}
@@ -391,7 +474,11 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
                 }}
               >
                 <Text style={{ fontSize: 16, marginRight: 4 }}>{emo}</Text>
-                <Text style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}>{label}</Text>
+                <Text
+                  style={{ fontSize: 11, color: isDarkmode ? "#ddd" : "#444" }}
+                >
+                  {label}
+                </Text>
               </View>
             ))}
           </View>
@@ -489,7 +576,9 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
       <Layout>
         <TopNav
           middleContent={<Text>Mood Calendar</Text>}
-          leftContent={<Ionicons name="chevron-back" size={20} color={primaryTextColor} />}
+          leftContent={
+            <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
+          }
           leftAction={() => navigation.popToTop()}
           rightContent={
             <Ionicons
@@ -514,10 +603,16 @@ export default function MemoryMoodCalendar({ navigation }: Props) {
     <Layout>
       <TopNav
         middleContent={<Text>Mood Calendar</Text>}
-        leftContent={<Ionicons name="chevron-back" size={20} color={primaryTextColor} />}
+        leftContent={
+          <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
+        }
         leftAction={() => navigation.popToTop()}
         rightContent={
-          <Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={primaryTextColor} />
+          <Ionicons
+            name={isDarkmode ? "sunny" : "moon"}
+            size={20}
+            color={primaryTextColor}
+          />
         }
         rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
