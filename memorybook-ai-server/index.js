@@ -761,8 +761,8 @@ app.post("/faces/recognize_batch", async (req, res) => {
 // Start server
 // -------------------------
 const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0";
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(`Local AI server running at http://0.0.0.0:${PORT}`);
+app.listen(PORT, HOST, () => {
+  console.log(`Local AI server running at http://${HOST}:${PORT}`);
 });
-
