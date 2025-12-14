@@ -7,8 +7,8 @@ import {
   ScrollView,
   TouchableOpacity,
   ActivityIndicator,
+  Platform,
 } from "react-native";
-import { Platform } from "react-native";
 import {
   Layout,
   TopNav,
@@ -41,6 +41,9 @@ import { useVideoPlayer, VideoView } from "expo-video";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
 
+// ✅ Put your AI badge here (change path if needed)
+const AI_BADGE = require("../../assets/ai-badge.png");
+
 // For multiple selection
 type SelectedMedia = {
   uri: string;
@@ -56,7 +59,7 @@ type PlaceOption = {
   longitude: number;
 };
 
-// ----- Face-recognition types (your Node returns faces[] with matches[]) -----
+// ----- Face-recognition types -----
 type FaceMatch = {
   name: string;
   distance: number;
@@ -91,9 +94,19 @@ type AlbumInfo = {
   name: string;
 };
 
-// ✅ Mood fields (stored in Firestore for MoodCalendar logic)
+// ✅ Mood fields
 type MoodLabel = "happy" | "neutral" | "tired" | "sad" | "angry";
 type MoodSource = "ai" | "user" | "face" | "caption" | "face+caption" | "unknown";
+
+function emojiFromMoodLabel(lbl: any): string {
+  const x = String(lbl || "").toLowerCase();
+  if (x === "happy") return "😊";
+  if (x === "neutral") return "😐";
+  if (x === "tired") return "😴";
+  if (x === "sad") return "😢";
+  if (x === "angry") return "😡";
+  return "😐";
+}
 
 function VideoPreview({ uri }: { uri: string }) {
   const player = useVideoPlayer(uri, (p) => {
@@ -124,9 +137,7 @@ function VideoPreview({ uri }: { uri: string }) {
         }}
       >
         <Ionicons name="videocam" size={14} color="#fff" />
-        <Text style={{ marginLeft: 6, fontSize: 11, color: "#fff" }}>
-          Video
-        </Text>
+        <Text style={{ marginLeft: 6, fontSize: 11, color: "#fff" }}>Video</Text>
       </View>
     </View>
   );
@@ -202,6 +213,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ? (String(postData.moodSource || "unknown") as MoodSource)
     : "unknown";
 
+  // ✅ emoji (AI suggests first, user can edit)
+  const initialPostEmoji = editMode
+    ? String(postData?.mood?.emoji || emojiFromMoodLabel(initialMoodLabel))
+    : emojiFromMoodLabel(initialMoodLabel);
+
+  const [postEmoji, setPostEmoji] = useState<string>(initialPostEmoji);
+  const [emojiEdited, setEmojiEdited] = useState<boolean>(editMode); // in editMode, assume user may want manual control
+
   // store ALL selected media here
   const [mediaItems, setMediaItems] = useState<SelectedMedia[]>(() =>
     initialMediaUrls.length
@@ -235,7 +254,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   );
 
   // face-learning UI state
-  const [faceName, setFaceName] = useState(""); // name typed by user
+  const [faceName, setFaceName] = useState("");
   const [isSavingFace, setIsSavingFace] = useState(false);
 
   // 🔹 Location state (auto-detect + search)
@@ -252,7 +271,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const [isSearchingPlace, setIsSearchingPlace] = useState(false);
 
   // On real phone, change to "http://<YOUR_PC_IP>:3000"
-  // You can also set EXPO_PUBLIC_AI_SERVER or AI_SERVER_URL in env to override.
   const LOCAL_AI_SERVER =
     ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
     ((process as any)?.env?.AI_SERVER_URL as string) ||
@@ -279,9 +297,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       try {
         const url = `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&zoom=16&addressdetails=1&accept-language=en`;
         const resp = await fetch(url, {
-          headers: {
-            "User-Agent": "memorybook-app",
-          },
+          headers: { "User-Agent": "memorybook-app" },
         });
 
         if (resp.ok) {
@@ -309,10 +325,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
       // 2) Fallback Expo reverseGeocode
       try {
-        const places = await Location.reverseGeocodeAsync({
-          latitude,
-          longitude,
-        });
+        const places = await Location.reverseGeocodeAsync({ latitude, longitude });
         if (places && places.length > 0) {
           const p = places[0];
           const parts = [
@@ -355,15 +368,12 @@ export default function MemoryUpload({ navigation, route }: Props) {
       const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(
         q
       )}&limit=5&addressdetails=1&accept-language=en`;
+
       const resp = await fetch(url, {
-        headers: {
-          "User-Agent": "memorybook-app",
-        },
+        headers: { "User-Agent": "memorybook-app" },
       });
 
-      if (!resp.ok) {
-        throw new Error(`HTTP ${resp.status}`);
-      }
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
 
       const data = await resp.json();
       const options: PlaceOption[] = data.map((item: any) => ({
@@ -384,61 +394,44 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const handleSelectPlace = (place: PlaceOption) => {
     setLocationLabel(place.label);
-    setLocationCoords({
-      latitude: place.latitude,
-      longitude: place.longitude,
-    });
+    setLocationCoords({ latitude: place.latitude, longitude: place.longitude });
     setLocationQuery(place.label);
     setPlaceOptions([]);
   };
 
   // -------------------------------------------------------
-  // Helper: call AI server (caption + hashtags + friendTags + mood)
+  // Helper: call AI server
   // -------------------------------------------------------
-  const callAiForPostMeta = async (
-    captionDraft: string,
-    imageBase64List: string[]
-  ) => {
+  const callAiForPostMeta = async (captionDraft: string, imageBase64List: string[]) => {
     const url = `${LOCAL_AI_SERVER}/generatePostMeta`;
     console.log("[CLIENT] calling:", url, "images:", imageBase64List.length);
 
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ captionDraft, imageBase64List }),
-      });
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ captionDraft, imageBase64List }),
+    });
 
-      const text = await response.text(); // 👈 important for debugging
-      console.log(
-        "[CLIENT] status:",
-        response.status,
-        "body:",
-        text.slice(0, 300)
-      );
+    const text = await response.text();
+    console.log("[CLIENT] status:", response.status, "body:", text.slice(0, 300));
 
-      if (!response.ok) {
-        throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
-      }
-
-      const data = JSON.parse(text);
-      return data as {
-        caption: string;
-        hashtags: string[];
-        friendTags: string[];
-        // ✅ optional mood fields (from Node)
-        moodLabel?: MoodLabel | string;
-        moodScore?: number;
-        moodSource?: MoodSource | string;
-      };
-    } catch (e: any) {
-      console.log("[CLIENT] AI fetch failed:", e?.message || e);
-      throw e;
+    if (!response.ok) {
+      throw new Error(`AI HTTP ${response.status}: ${text.slice(0, 120)}`);
     }
+
+    const data = JSON.parse(text);
+    return data as {
+      caption: string;
+      hashtags: string[];
+      friendTags: string[];
+      moodLabel?: MoodLabel | string;
+      moodScore?: number;
+      moodSource?: MoodSource | string;
+    };
   };
 
   // -------------------------------------------------------
-  // Face: single image recognize (kept for other usage)
+  // Face: single image recognize
   // -------------------------------------------------------
   const callFaceRecognize = async (
     imageBase64: string,
@@ -466,7 +459,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // ✅ Face: batch recognize (multiple images)
+  // Face: batch recognize
   // -------------------------------------------------------
   const callFaceRecognizeBatch = async (
     imageBase64List: string[],
@@ -493,18 +486,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // Helper – register a face under a given name
+  // register a face under a given name
   const callFaceRegister = async (name: string, imageBase64: string) => {
     const personId = name.trim().toLowerCase().replace(/\s+/g, "_");
 
     const resp = await fetch(`${LOCAL_AI_SERVER}/faces/register`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        personId,
-        name,
-        imageBase64,
-      }),
+      body: JSON.stringify({ personId, name, imageBase64 }),
     });
 
     if (!resp.ok) {
@@ -535,33 +524,22 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
 
     const firstImage = mediaItems.find((m) => m.type === "image" && m.base64);
-
     if (!firstImage || !firstImage.base64) {
-      Alert.alert(
-        "No image data",
-        "Please select a photo again so we can read the face."
-      );
+      Alert.alert("No image data", "Please select a photo again so we can read the face.");
       return;
     }
-    // ✅ Safety: only allow Remember when exactly ONE face is detected
-    const FACE_THRESHOLD = 0.37;
 
+    const FACE_THRESHOLD = 0.37;
     const recognize = await callFaceRecognize(firstImage.base64, FACE_THRESHOLD);
     const faces = Array.isArray(recognize?.faces) ? recognize.faces : [];
 
     if (faces.length === 0) {
-      Alert.alert(
-        "No face found",
-        "Please choose a clearer photo with one person."
-      );
+      Alert.alert("No face found", "Please choose a clearer photo with one person.");
       return;
     }
 
     if (faces.length > 1) {
-      Alert.alert(
-        "Multiple people detected",
-        "Please choose a photo with ONLY one person to remember."
-      );
+      Alert.alert("Multiple people detected", "Please choose a photo with ONLY one person to remember.");
       return;
     }
 
@@ -585,17 +563,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
       Alert.alert("Saved", `I'll try to recognize "${name}" in future photos.`);
     } catch (err) {
       console.log("handleRememberFace error:", err);
-      Alert.alert(
-        "Face learning failed",
-        "Could not save this face. Please check the face service / server."
-      );
+      Alert.alert("Face learning failed", "Could not save this face. Please check the face service / server.");
     } finally {
       setIsSavingFace(false);
     }
   };
 
   // -------------------------------------------------------
-  // ✅ Remove selected media (X button)
+  // Remove selected media (X button)
   // -------------------------------------------------------
   const removeMediaAt = (indexToRemove: number) => {
     setMediaItems((prev) => prev.filter((_, idx) => idx !== indexToRemove));
@@ -605,14 +580,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
   // Media picking
   // -------------------------------------------------------
   const pickPhotosFromLibrary = async () => {
-    // On web, permission prompt is not needed/available. Skip request there.
     if (Platform.OS !== "web") {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert(
-          "Permission needed",
-          "We need access to your photos to upload memories."
-        );
+        Alert.alert("Permission needed", "We need access to your photos to upload memories.");
         return;
       }
     }
@@ -621,7 +592,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       quality: 0.85,
       allowsMultipleSelection: true,
-      base64: true, // ✅ images only
+      base64: true,
     });
 
     if (result.canceled) return;
@@ -639,10 +610,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     if (Platform.OS !== "web") {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert(
-          "Permission needed",
-          "We need access to your videos to upload memories."
-        );
+        Alert.alert("Permission needed", "We need access to your videos to upload memories.");
         return;
       }
     }
@@ -657,29 +625,21 @@ export default function MemoryUpload({ navigation, route }: Props) {
     if (result.canceled) return;
 
     const asset = result.assets[0];
-    const item: SelectedMedia = {
-      uri: asset.uri,
-      type: "video",
-      base64: null,
-    };
-
+    const item: SelectedMedia = { uri: asset.uri, type: "video", base64: null };
     setMediaItems((prev) => [...prev, item]);
   };
 
   const captureWithCamera = async () => {
     const { status } = await ImagePicker.requestCameraPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(
-        "Permission needed",
-        "We need access to your camera to capture memories."
-      );
+      Alert.alert("Permission needed", "We need access to your camera to capture memories.");
       return;
     }
 
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
-      base64: true, // ✅ photos have base64, videos will be null
+      base64: true,
     });
 
     if (result.canceled || !result.assets || !result.assets.length) return;
@@ -696,10 +656,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const pickMedia = async () => {
     if (editMode) {
-      Alert.alert(
-        "Edit mode",
-        "Right now you can only edit the caption and story setting, not the media."
-      );
+      Alert.alert("Edit mode", "Right now you can only edit the caption and story setting, not the media.");
       return;
     }
 
@@ -711,21 +668,21 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ]);
   };
 
-  // ✅ helper for mood keys (kept for MoodCalendar field posts.mood)
-  const getTodayMoodObject = () => {
+  // ✅ mood object builder (use emoji from AI/user)
+  const getTodayMoodObject = (emoji?: string) => {
     const now = new Date();
     const yyyy = now.getFullYear();
     const mm = String(now.getMonth() + 1).padStart(2, "0");
     const dd = String(now.getDate()).padStart(2, "0");
     return {
-      date: `${yyyy}-${mm}-${dd}`, // YYYY-MM-DD
-      monthKey: `${yyyy}-${mm}`, // YYYY-MM
-      emoji: "😐",
+      date: `${yyyy}-${mm}-${dd}`,
+      monthKey: `${yyyy}-${mm}`,
+      emoji: emoji && emoji.trim() ? emoji : "😐",
     };
   };
 
   // -------------------------------------------------------
-  // ✅ AI generate (caption + hashtags + friend tags + mood)
+  // AI generate (caption + hashtags + friend tags + mood)
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -742,7 +699,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     try {
       setIsGeneratingAI(true);
 
-      // only images (videos have no base64)
       const imageBase64List = mediaItems
         .filter((m) => m.type === "image" && m.base64)
         .map((m) => m.base64 as string);
@@ -752,15 +708,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
           "Need photo data",
           "To use AI + face recognition, please select at least 1 photo (not only video)."
         );
-        setIsGeneratingAI(false);
         return;
       }
 
-      let captionDraft = "";
-      if (options?.useDraft) captionDraft = draft || "";
-      else captionDraft = caption || "";
-
-      // 1) Caption + hashtags + mood from Node
+      let captionDraft = options?.useDraft ? draft || "" : caption || "";
       const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
 
       const stripHashtags = (text: string) =>
@@ -779,33 +730,36 @@ export default function MemoryUpload({ navigation, route }: Props) {
         setHashtagsText(formatted.join(" "));
       }
 
-      // 2) Friend tags from AI (text model) - keep it if provided
       if (Array.isArray(aiResult.friendTags) && aiResult.friendTags.length) {
         setFriendTagsText(aiResult.friendTags.join(", "));
       }
 
-      // ✅ 2.5) Mood from AI (optional)
+      // mood fields
       if (typeof aiResult.moodScore === "number") {
         const safeScore = Math.max(-1, Math.min(1, aiResult.moodScore));
         setMoodScore(safeScore);
       }
+
       if (aiResult.moodLabel) {
         const lbl = String(aiResult.moodLabel).toLowerCase();
         const allowed: MoodLabel[] = ["happy", "neutral", "tired", "sad", "angry"];
         if (allowed.includes(lbl as MoodLabel)) setMoodLabel(lbl as MoodLabel);
+
+        // ✅ set emoji from AI (ONLY if user has not edited)
+        if (!emojiEdited) setPostEmoji(emojiFromMoodLabel(lbl));
+      } else {
+        if (!emojiEdited) setPostEmoji(emojiFromMoodLabel(moodLabel));
       }
+
       if (aiResult.moodSource) {
         const src = String(aiResult.moodSource) as MoodSource;
         setMoodSource(src || "ai");
       } else {
-        // if score exists but no source
         if (typeof aiResult.moodScore === "number") setMoodSource("ai");
       }
 
-      // 3) ✅ Face recognition batch across multiple images (faster + better)
+      // Face recognition batch
       const FACE_THRESHOLD = 0.37;
-
-      // scan first 3 images max for speed
       const scanImages = imageBase64List.slice(0, 3);
       const batch = await callFaceRecognizeBatch(scanImages, FACE_THRESHOLD);
 
@@ -875,6 +829,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
     const safeAlbums: AlbumInfo[] = Array.isArray(albums) ? albums : [];
     const safeAlbumIds: string[] = Array.isArray(albumIds) ? albumIds : [];
 
+    const finalEmoji = (postEmoji && postEmoji.trim()) ? postEmoji.trim() : "😐";
+
     // ---- EDIT MODE ----
     if (editMode && editingPostId) {
       try {
@@ -883,6 +839,13 @@ export default function MemoryUpload({ navigation, route }: Props) {
         const now = Date.now();
         const expiry = Timestamp.fromDate(new Date(now + 24 * 60 * 60 * 1000));
 
+        // preserve original date/monthKey when editing
+        const prevMood = postData?.mood || getTodayMoodObject(finalEmoji);
+        const nextMood = {
+          ...prevMood,
+          emoji: finalEmoji,
+        };
+
         const refDoc = doc(firestore, "posts", editingPostId);
         await updateDoc(refDoc, {
           caption,
@@ -890,13 +853,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
           friendTags: friendTagList,
-          // ✅ keep existing mood object field
-          mood: postData?.mood || getTodayMoodObject(),
-          // ✅ mood analytics fields for MoodCalendar scoring
+
+          // ✅ update emoji safely
+          mood: nextMood,
+
           moodLabel: postData?.moodLabel ?? moodLabel,
-          moodScore:
-            typeof postData?.moodScore === "number" ? postData.moodScore : moodScore,
+          moodScore: typeof postData?.moodScore === "number" ? postData.moodScore : moodScore,
           moodSource: postData?.moodSource ?? moodSource,
+
           albums: safeAlbums,
           albumIds: safeAlbumIds,
         });
@@ -966,10 +930,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
 
-        // ✅ keep existing mood object (emoji/day key)
-        mood: getTodayMoodObject(),
+        // ✅ mood object uses the emoji user sees/edits
+        mood: getTodayMoodObject(finalEmoji),
 
-        // ✅ NEW: mood scoring fields (used by MemoryMoodCalendar.tsx)
+        // (keep for analytics if you want)
         moodLabel,
         moodScore: Math.max(-1, Math.min(1, Number(moodScore || 0))),
         moodSource: moodSource || "unknown",
@@ -988,16 +952,25 @@ export default function MemoryUpload({ navigation, route }: Props) {
     }
   };
 
-  // UI states
   const arrowColor = isDarkmode ? themeColor.white : "#999";
 
   // ✅ AI enabled only if there is at least one image with base64
   const canUseAI = useMemo(() => {
     return (
-      mediaItems.some((m) => m.type === "image" && !!m.base64) &&
-      !isGeneratingAI
+      mediaItems.some((m) => m.type === "image" && !!m.base64) && !isGeneratingAI
     );
   }, [mediaItems, isGeneratingAI]);
+
+  // Small label component: "Text + AI badge"
+  const LabelWithAI = ({ text }: { text: string }) => (
+    <View style={{ flexDirection: "row", alignItems: "center", marginTop: 20, marginBottom: 10 }}>
+      <Text style={{ flex: 1 }}>{text}</Text>
+      <Image
+        source={AI_BADGE}
+        style={{ width: 52, height: 24, resizeMode: "contain", opacity: 0.95 }}
+      />
+    </View>
+  );
 
   return (
     <Layout>
@@ -1013,10 +986,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         }
       />
 
-      <ScrollView
-        style={{ flex: 1 }}
-        contentContainerStyle={{ padding: 20, paddingBottom: 40 }}
-      >
+      <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 20, paddingBottom: 40 }}>
         <Button
           text={
             editMode
@@ -1050,7 +1020,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
                     backgroundColor: isDarkmode ? "#111" : "#eee",
                   }}
                 >
-                  {/* ❌ Delete button */}
                   {!editMode && (
                     <TouchableOpacity
                       onPress={() => removeMediaAt(index)}
@@ -1071,7 +1040,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
                     </TouchableOpacity>
                   )}
 
-                  {/* Media preview */}
                   {item.type === "video" ? (
                     <VideoPreview uri={item.uri} />
                   ) : (
@@ -1086,13 +1054,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
             </ScrollView>
 
             {!editMode && (
-              <Text
-                style={{
-                  marginTop: 8,
-                  fontSize: 12,
-                  color: isDarkmode ? "#aaa" : "#777",
-                }}
-              >
+              <Text style={{ marginTop: 8, fontSize: 12, color: isDarkmode ? "#aaa" : "#777" }}>
                 Tip: Tap the “X” to remove a wrong file.
               </Text>
             )}
@@ -1101,13 +1063,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
         {/* 📍 Location */}
         <View style={{ marginTop: 16 }}>
-          <View
-            style={{
-              flexDirection: "row",
-              alignItems: "center",
-              justifyContent: "space-between",
-            }}
-          >
+          <View style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between" }}>
             <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
               <Ionicons
                 name="location-outline"
@@ -1115,17 +1071,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
                 color={isDarkmode ? themeColor.white : "#555"}
               />
               <Text
-                style={{
-                  marginLeft: 6,
-                  color: isDarkmode ? themeColor.white : themeColor.dark,
-                }}
+                style={{ marginLeft: 6, color: isDarkmode ? themeColor.white : themeColor.dark }}
                 numberOfLines={1}
               >
-                {locationLabel
-                  ? locationLabel
-                  : locationError
-                  ? locationError
-                  : "Detecting location..."}
+                {locationLabel ? locationLabel : locationError ? locationError : "Detecting location..."}
               </Text>
             </View>
 
@@ -1190,10 +1139,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
                   }}
                 >
                   <Text
-                    style={{
-                      fontSize: 13,
-                      color: isDarkmode ? themeColor.white : themeColor.dark,
-                    }}
+                    style={{ fontSize: 13, color: isDarkmode ? themeColor.white : themeColor.dark }}
                     numberOfLines={2}
                   >
                     {p.label}
@@ -1205,9 +1151,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
         </View>
 
         {/* Draft / Keywords */}
-        <Text style={{ marginTop: 20, marginBottom: 10 }}>
-          Draft / Keywords (optional)
-        </Text>
+        <Text style={{ marginTop: 20, marginBottom: 10 }}>Draft / Keywords (optional)</Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1246,38 +1190,47 @@ export default function MemoryUpload({ navigation, route }: Props) {
             />
           </View>
 
+          {/* ✨ button + AI badge overlay */}
           <TouchableOpacity
             onPress={() => {
               if (!canUseAI) return;
               handleGenerateWithAI({ useDraft: false });
             }}
             style={{
-              paddingHorizontal: 8,
-              paddingVertical: 6,
+              paddingHorizontal: 10,
+              paddingVertical: 8,
               opacity: canUseAI ? 1 : 0.3,
               borderWidth: 1,
               borderColor: isDarkmode ? "#555" : "#ccc",
-              borderRadius: 4,
+              borderRadius: 8,
+              position: "relative",
             }}
           >
             <Ionicons name="sparkles" size={20} color={arrowColor} />
+            <Image
+              source={AI_BADGE}
+              style={{
+                position: "absolute",
+                top: -10,
+                right: -10,
+                width: 52,
+                height: 24,
+                resizeMode: "contain",
+              }}
+            />
           </TouchableOpacity>
         </View>
 
-        {/* Hashtags */}
-        <Text style={{ marginTop: 20, marginBottom: 10 }}>
-          Hashtags (AI / manual)
-        </Text>
+        {/* Hashtags (no button, only AI badge at label) */}
+        <LabelWithAI text="Hashtags (AI / manual)" />
         <TextInput
           placeholder="#friends #holiday #2025"
           value={hashtagsText}
           onChangeText={setHashtagsText}
         />
 
-        {/* Friend tags */}
-        <Text style={{ marginTop: 20, marginBottom: 10 }}>
-          Friend tags (comma separated)
-        </Text>
+        {/* Friend tags (no button, only AI badge at label) */}
+        <LabelWithAI text="Friend tags (comma separated)" />
         <TextInput
           placeholder="Angelina, Jamie, Alex"
           value={friendTagsText}
@@ -1310,6 +1263,42 @@ export default function MemoryUpload({ navigation, route }: Props) {
           />
         </View>
 
+        {/* ✅ Post Emoji input (AI suggested, user can edit) */}
+        <Text style={{ marginTop: 18, marginBottom: 8 }}>
+          Post emoji (AI suggested)
+        </Text>
+        <View style={{ flexDirection: "row", alignItems: "center" }}>
+          <View style={{ flex: 1, marginRight: 10 }}>
+            <TextInput
+              placeholder="😐"
+              value={postEmoji}
+              onChangeText={(t) => {
+                setEmojiEdited(true);
+                const v = String(t || "").trim();
+                setPostEmoji(v ? v.slice(0, 2) : "");
+              }}
+            />
+          </View>
+
+          <TouchableOpacity
+            onPress={() => {
+              setEmojiEdited(false);
+              setPostEmoji(emojiFromMoodLabel(moodLabel));
+            }}
+            style={{
+              paddingHorizontal: 10,
+              paddingVertical: 10,
+              borderRadius: 10,
+              borderWidth: 1,
+              borderColor: isDarkmode ? "#555" : "#ccc",
+            }}
+          >
+            <Text style={{ fontSize: 12, color: isDarkmode ? "#fff" : "#333" }}>
+              Reset AI
+            </Text>
+          </TouchableOpacity>
+        </View>
+
         {/* Story toggle */}
         <View style={{ marginTop: 24 }}>
           <TouchableOpacity
@@ -1326,15 +1315,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
-          <Text
-            style={{
-              marginTop: 4,
-              fontSize: 12,
-              color: isDarkmode ? "#aaa" : "#777",
-            }}
-          >
-            When enabled, this memory will appear as a story and disappear after 24
-            hours.
+          <Text style={{ marginTop: 4, fontSize: 12, color: isDarkmode ? "#aaa" : "#777" }}>
+            When enabled, this memory will appear as a story and disappear after 24 hours.
           </Text>
         </View>
 
