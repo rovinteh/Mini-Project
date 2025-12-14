@@ -1,4 +1,5 @@
 import React from "react";
+import "./src/utils/ignoreWarnings"; // Import to apply console suppression logic side-effects
 import Navigation from "./src/navigation";
 import { AuthProvider } from "./src/provider/AuthProvider";
 import { ThemeProvider } from "react-native-rapi-ui";
