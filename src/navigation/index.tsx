@@ -1,8 +1,9 @@
 // src/navigation/index.tsx
 import React, { useContext } from "react";
+import { Platform } from "react-native";
 import { getApps, initializeApp } from "firebase/app";
 // @ts-ignore – available in RN bundle even if typings complain
-import { initializeAuth, getReactNativePersistence } from "firebase/auth";
+import { initializeAuth, getReactNativePersistence, browserLocalPersistence } from "firebase/auth";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 import { AuthContext } from "../provider/AuthProvider";
@@ -28,8 +29,15 @@ let app;
 if (getApps().length === 0) {
   app = initializeApp(firebaseConfig);
 
+  let persistence;
+  if (Platform.OS === 'web') {
+    persistence = browserLocalPersistence;
+  } else {
+    persistence = getReactNativePersistence(AsyncStorage);
+  }
+
   initializeAuth(app, {
-    persistence: getReactNativePersistence(AsyncStorage),
+    persistence,
   });
 }
 
