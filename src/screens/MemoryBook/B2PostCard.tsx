@@ -136,7 +136,7 @@ export default function B2PostCard({
           shadowRadius: 3,
           elevation: 3,
           position: "relative",
-          height: 270,
+          height: 285,
         }}
       >
         {/* Whole card tap → open post */}
