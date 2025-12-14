@@ -149,7 +149,7 @@ export default function ({
         taskArray.filter(t => {
             // "Planned" (Pending) Logic Update:
             // 1. Must be created on or before this day
-            const created = toDate(t.date); 
+            const created = toDate(t.startDate || t.createdAt || t.date); 
             // If creation date exists and is in the future relative to this chart day, ignore.
             // If missing -> assume valid old task
             if (created && toLocalISO(created) > dateStr) return false;
@@ -318,17 +318,27 @@ export default function ({
                     data={{
                       labels: chartData.labels,
                       datasets: [
-                        { data: chartData.completed, color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`, strokeWidth: 2 }, // Green
-                        { data: chartData.planned, color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`, strokeWidth: 2 } // Blue
+                        { data: chartData.completed.map(v => v === 0 ? 0.001 : v), color: (opacity = 1) => `rgba(16, 185, 129, ${opacity})`, strokeWidth: 2 }, // Green
+                        { data: chartData.planned.map(v => v === 0 ? 0.001 : v), color: (opacity = 1) => `rgba(59, 130, 246, ${opacity})`, strokeWidth: 2 } // Blue
                       ],
                       legend: ["Completed", "Planned"]
                     }}
                     width={Dimensions.get("window").width - 72}
-                    height={200}
+                    height={260}
                     yAxisInterval={1}
-                    verticalLabelRotation={45}
                     fromZero={true}
-                    segments={chartData.max < 5 ? (chartData.max || 1) : 4}
+                    segments={chartData.max || 1}
+                    formatYLabel={(() => {
+                      const shown = new Set<number>();
+                      return (y: string) => {
+                        const val = Math.round(Number(y));
+                        if (shown.has(val)) return "";
+                        shown.add(val);
+                        return val.toString();
+                      };
+                    })()}
+                    verticalLabelRotation={45}
+                    xLabelsOffset={-10}
                     chartConfig={{
                       backgroundColor: cardBg,
                       backgroundGradientFrom: cardBg,
@@ -337,7 +347,8 @@ export default function ({
                       color: (opacity = 1) => subTextColor,
                       labelColor: (opacity = 1) => subTextColor,
                       style: { borderRadius: 16 },
-                      propsForDots: { r: "4", strokeWidth: "2", stroke: "#ffa726" }
+                      propsForDots: { r: "4", strokeWidth: "2", stroke: "#ffa726" },
+                      propsForBackgroundLines: { strokeDasharray: "" }
                     }}
                     bezier
                     style={{ marginVertical: 8, borderRadius: 16 }}
