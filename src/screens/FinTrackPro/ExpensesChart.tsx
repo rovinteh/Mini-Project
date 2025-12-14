@@ -64,9 +64,9 @@ const API_HOST =
   (Platform.OS === "web"
     ? (process as any)?.env?.EXPO_PUBLIC_AI_SERVER
     : (process as any)?.env?.EXPO_PUBLIC_AI_SERVER) ||
-  "http://192.168.68.129:3000";
+  "http://192.168.0.16:11434";
 
-const OLLAMA_MODEL = "qwen2.5:7b-instruct";
+const OLLAMA_MODEL = "gemma3:1b";
 
 type Tx = {
   amount: number;
@@ -296,7 +296,7 @@ DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/ollama/generate", {
+      const res = await fetch(API_HOST + "/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
@@ -396,7 +396,7 @@ ANOMALIES (JSON):
 ${JSON.stringify(payload, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/ollama/generate", {
+      const res = await fetch(API_HOST + "/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
