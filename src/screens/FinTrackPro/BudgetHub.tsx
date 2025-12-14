@@ -210,7 +210,10 @@ export default function BudgetHub({ navigation }: Props) {
 
     const val = Number(budgetInput);
     if (!Number.isFinite(val) || val <= 0) {
-      Alert.alert("Invalid amount", "Please enter a valid positive budget limit.");
+      Alert.alert(
+        "Invalid amount",
+        "Please enter a valid positive budget limit."
+      );
       return;
     }
 
@@ -227,7 +230,10 @@ export default function BudgetHub({ navigation }: Props) {
       setBudgetLimit(val);
       setShowBudgetModal(false);
       setBudgetInput("");
-      Alert.alert("Saved", `Budget limit set to RM ${val.toFixed(2)} for ${monthKey}`);
+      Alert.alert(
+        "Saved",
+        `Budget limit set to RM ${val.toFixed(2)} for ${monthKey}`
+      );
     } catch (e: any) {
       Alert.alert("Error", e?.message ?? "Failed to save budget.");
     }
@@ -334,10 +340,14 @@ export default function BudgetHub({ navigation }: Props) {
                 style={{
                   padding: 16,
                   borderRadius: 12,
-                  backgroundColor: isDarkmode ? themeColor.dark200 : themeColor.white,
+                  backgroundColor: isDarkmode
+                    ? themeColor.dark200
+                    : themeColor.white,
                   marginBottom: 12,
                   borderWidth: 1,
-                  borderColor: isDarkmode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+                  borderColor: isDarkmode
+                    ? "rgba(255,255,255,0.08)"
+                    : "rgba(0,0,0,0.06)",
                 }}
               >
                 <View
@@ -371,16 +381,22 @@ export default function BudgetHub({ navigation }: Props) {
                 ) : (
                   <>
                     <Text style={{ marginTop: 8 }}>
-                      Limit: <Text fontWeight="bold">RM {budgetLimit!.toFixed(2)}</Text>
+                      Limit:{" "}
+                      <Text fontWeight="bold">
+                        RM {budgetLimit!.toFixed(2)}
+                      </Text>
                     </Text>
                     <Text style={{ marginTop: 4 }}>
-                      Used: <Text fontWeight="bold">RM {budgetUsed.toFixed(2)}</Text>
+                      Used:{" "}
+                      <Text fontWeight="bold">RM {budgetUsed.toFixed(2)}</Text>
                     </Text>
                     <Text style={{ marginTop: 4 }}>
                       Remaining:{" "}
                       <Text
                         fontWeight="bold"
-                        style={{ color: (budgetRemaining ?? 0) >= 0 ? "green" : "red" }}
+                        style={{
+                          color: (budgetRemaining ?? 0) >= 0 ? "green" : "red",
+                        }}
                       >
                         RM {(budgetRemaining ?? 0).toFixed(2)}
                       </Text>
@@ -421,17 +437,22 @@ export default function BudgetHub({ navigation }: Props) {
                 style={{
                   padding: 16,
                   borderRadius: 12,
-                  backgroundColor: isDarkmode ? themeColor.dark200 : themeColor.white,
+                  backgroundColor: isDarkmode
+                    ? themeColor.dark200
+                    : themeColor.white,
                   marginBottom: 14,
                   borderWidth: 1,
-                  borderColor: isDarkmode ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+                  borderColor: isDarkmode
+                    ? "rgba(255,255,255,0.08)"
+                    : "rgba(0,0,0,0.06)",
                 }}
               >
                 <Text size="h4" fontWeight="bold">
                   Motivation
                 </Text>
                 <Text style={{ marginTop: 8 }}>
-                  🔥 Tracking Streak: <Text fontWeight="bold">{streak} day(s)</Text>
+                  🔥 Tracking Streak:{" "}
+                  <Text fontWeight="bold">{streak} day(s)</Text>
                 </Text>
                 <Text style={{ marginTop: 6, opacity: 0.9 }}>{milestone}</Text>
               </View>
@@ -461,7 +482,9 @@ export default function BudgetHub({ navigation }: Props) {
           >
             <View
               style={{
-                backgroundColor: isDarkmode ? themeColor.dark : themeColor.white,
+                backgroundColor: isDarkmode
+                  ? themeColor.dark
+                  : themeColor.white,
                 borderRadius: 14,
                 padding: 18,
               }}
@@ -469,7 +492,9 @@ export default function BudgetHub({ navigation }: Props) {
               <Text size="h3" fontWeight="bold">
                 Set Monthly Budget
               </Text>
-              <Text style={{ marginTop: 6, opacity: 0.85 }}>Month: {monthKey}</Text>
+              <Text style={{ marginTop: 6, opacity: 0.85 }}>
+                Month: {monthKey}
+              </Text>
 
               <Text style={{ marginTop: 12 }}>Budget Limit (RM)</Text>
               <TextInput
@@ -486,13 +511,19 @@ export default function BudgetHub({ navigation }: Props) {
                   onPress={() => setShowBudgetModal(false)}
                   style={{
                     flex: 1,
-                    backgroundColor: isDarkmode ? themeColor.dark200 : "#e5e7eb",
+                    backgroundColor: isDarkmode
+                      ? themeColor.dark200
+                      : "#e5e7eb",
                   }}
                   textStyle={{
                     color: isDarkmode ? themeColor.white100 : themeColor.dark,
                   }}
                 />
-                <Button text="Save" onPress={saveBudgetLimit} style={{ flex: 1 }} />
+                <Button
+                  text="Save"
+                  onPress={saveBudgetLimit}
+                  style={{ flex: 1 }}
+                />
               </View>
             </View>
           </View>
