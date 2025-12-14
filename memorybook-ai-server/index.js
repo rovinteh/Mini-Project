@@ -1119,3 +1119,38 @@ const HOST = process.env.HOST || "0.0.0.0"; // ✅ important for phone access
 app.listen(PORT, HOST, () => {
   console.log(`Local AI server running at http://${HOST}:${PORT}`);
 });
+
+// -------------------------
+// Proxy to Ollama /api/generate (for web CORS)
+// -------------------------
+app.post("/ollama/generate", async (req, res) => {
+  try {
+    const { model, prompt, stream = false, options = {} } = req.body || {};
+    if (!model || !prompt) {
+      return res
+        .status(400)
+        .json({ error: "model and prompt are required." });
+    }
+
+    const body = {
+      model,
+      prompt,
+      stream,
+      options: {
+        temperature: 0.2,
+        num_predict: 256,
+        top_p: 0.9,
+        ...options,
+      },
+    };
+
+    const resp = await axios.post(`${OLLAMA_URL}/api/generate`, body, {
+      headers: { "Content-Type": "application/json" },
+    });
+
+    res.json(resp.data);
+  } catch (err) {
+    console.error("Proxy /ollama/generate error:", err?.message || err);
+    res.status(500).json({ error: "Failed to call Ollama generate" });
+  }
+});

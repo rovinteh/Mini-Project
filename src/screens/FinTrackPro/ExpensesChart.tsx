@@ -61,11 +61,12 @@ const MONTH_SHORT = [
 
 // ✅ Your hotspot PC IP (keep it correct)
 const API_HOST =
-  Platform.OS === "web"
-    ? "http://localhost:11434"
-    : "http://10.83.224.72:11434";
+  (Platform.OS === "web"
+    ? (process as any)?.env?.EXPO_PUBLIC_AI_SERVER
+    : (process as any)?.env?.EXPO_PUBLIC_AI_SERVER) ||
+  "http://192.168.68.129:3000";
 
-const OLLAMA_MODEL = "gemma3:1b";
+const OLLAMA_MODEL = "qwen2.5:7b-instruct";
 
 type Tx = {
   amount: number;
@@ -295,7 +296,7 @@ DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/api/generate", {
+      const res = await fetch(API_HOST + "/ollama/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
@@ -395,7 +396,7 @@ ANOMALIES (JSON):
 ${JSON.stringify(payload, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/api/generate", {
+      const res = await fetch(API_HOST + "/ollama/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
