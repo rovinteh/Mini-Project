@@ -31,7 +31,7 @@ import TeamManagement from "../screens/TaskManagementModule.tsx/TeamManagement";
 import MemoryNotifications from "../screens/MemoryBook/MemoryNotifications";
 import { startNotificationListener } from "../screens/MemoryBook/NotificationService";
 
-import MoneyManagementModule from "../screens/FinTrackPro/MoneyManagementModule";
+import MoneyManagementModule from "../screens/FinTrackPro/MoneyManagementModule"; //Money Management
 import SpendingInsights from "../screens/FinTrackPro/SpendingInsights";
 import TransactionAdd from "../screens/FinTrackPro/TransactionAdd";
 import TransactionList from "../screens/FinTrackPro/TransactionList";
@@ -97,8 +97,8 @@ const Main = () => {
         name="TaskManagementMenu"
         component={TaskManagementMenu}
       />
-
-      <MainStack.Screen
+      
+      <MainStack.Screen //Money Management
         name="MoneyManagementModule"
         component={MoneyManagementModule}
       />

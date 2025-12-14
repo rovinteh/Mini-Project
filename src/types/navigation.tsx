@@ -63,6 +63,14 @@ MemoryNotifications: undefined;
   TaskCalendar: undefined;
   TaskChart: undefined;
   TaskQRScanner: undefined;
+
+  //Money Management
+  MoneyManagementModule: undefined;
+  SpendingInsights: undefined;
+  TransactionAdd: { transactionId?: string } | undefined;
+  TransactionList: undefined;
+  ExpensesChart: undefined;
+  BudgetHub: undefined;
 };
 
 export type AuthStackParamList = {

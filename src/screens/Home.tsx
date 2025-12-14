@@ -46,7 +46,7 @@ export default function Home({ navigation }: Props) {
       icon: "wallet-outline",
       bgLight: "#E9FFE5",
       bgDark: "#123524",
-      route: "MoneyManagement" as keyof MainStackParamList,
+      route: "MoneyManagementModule" as keyof MainStackParamList,
     },
     {
       key: "HealthFitness",
@@ -235,7 +235,7 @@ export default function Home({ navigation }: Props) {
               {
                 label: "Add Expense",
                 icon: "cash-outline",
-                route: "MoneyManagement",
+                route: "TransactionAdd",
               },
               {
                 label: "Add Meal",
