@@ -2,6 +2,8 @@
 // ✅ Updated:
 // - Prevent captions starting with "Person/People/Friends"
 // - Keep no pronouns + no gender words
+// - Remove "glasses" mentions unless user typed it in draft
+// - Safer, less-weird fallback captions
 // - Keep: /generatePostMeta + face proxy endpoints + ollama proxy
 
 const express = require("express");
@@ -222,18 +224,57 @@ function neutralizePersonWords(text, captionDraft = "") {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// ✅ NEW: prevent caption starting with "person/people/friends"
+// ✅ NEW: remove accessory/clothing mentions unless user typed it
+const ACCESSORY_WORDS = [
+  "glasses", "spectacles", "eyeglasses", "sunglasses",
+];
+
+function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
+  const draftLower = String(captionDraft || "").toLowerCase();
+  let s = String(text || "");
+
+  // If user explicitly typed glasses/sunglasses/etc, allow it.
+  const allow = ACCESSORY_WORDS.some((w) => draftLower.includes(w));
+  if (allow) return s.replace(/\s+/g, " ").trim();
+
+  // Otherwise remove these words + common short patterns around them.
+  // Example: "glasses on" / "with glasses" / "wearing glasses"
+  const patterns = [
+    /\bglasses\s+on\b/gi,
+    /\bwith\s+glasses\b/gi,
+    /\bwearing\s+glasses\b/gi,
+    /\b(glasses|spectacles|eyeglasses|sunglasses)\b/gi,
+  ];
+
+  for (const re of patterns) s = s.replace(re, "");
+
+  // cleanup punctuation + spacing
+  s = s
+    .replace(/\s+/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ",")
+    .replace(/\s+\./g, ".")
+    .replace(/\.\s*\./g, ".")
+    .trim();
+
+  // remove leading separators if present
+  s = s.replace(/^[-–—,:]+\s*/g, "").trim();
+
+  return s;
+}
+
+// ✅ prevent caption starting with "person/people/friends"
 function avoidPersonStart(caption, visionDesc) {
   let c = String(caption || "").trim();
   if (!c) return c;
 
-  // starts with: Person..., A person..., People..., Friends...
   if (/^(a\s+)?(person|people|friends)\b/i.test(c)) {
     const v = String(visionDesc || "").toLowerCase();
+    // ❌ removed "glasses" fallback (this caused your weird caption)
     if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-    if (v.includes("store") || v.includes("shopping")) return "Store run vibes, quick and fun.";
+    if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
     if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, lowkey and cozy.";
-    if (v.includes("glasses")) return "Glasses on, focus mode.";
+    if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
     return "Lowkey moment, captured.";
   }
 
@@ -355,14 +396,14 @@ function stripGenericIntros(text) {
 
 function buildNeutralCaptionFromVision(visionCombined) {
   const v = String(visionCombined || "").toLowerCase();
-  if (v.includes("outdoor")) return "Outdoor moment, good vibes.";
-  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe moment, locked in.";
-  if (v.includes("store") || v.includes("shopping")) return "Quick shopping moment, good vibes.";
-  if (v.includes("table")) return "Table talk vibes.";
-  if (v.includes("laptop")) return "Laptop open, focus mode.";
-  if (v.includes("phone")) return "Phone time, don’t disturb.";
+  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
+  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
+  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
+  if (v.includes("table")) return "Table vibes, simple and nice.";
+  if (v.includes("laptop")) return "Locked in, focus vibes.";
+  if (v.includes("phone")) return "No distractions, just vibes.";
   if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-  return "Moment captured.";
+  return "Lowkey moment, captured.";
 }
 
 function detectUserIntent(draft) {
@@ -629,11 +670,14 @@ CAPTION STYLE:
 - IMPORTANT: Do NOT say "a man" / "a woman" / boy / girl / male / female / guy / lady.
   Use "friends", "people", or "person" only.
 - ✅ Do NOT start the caption with: "person", "a person", "people", "friends".
-  Start with an activity/scene/vibe (e.g., "Books out..." "Store run..." "Cafe vibes...").
-- Sound like a real social post: short, confident.
+  Start with a vibe/scene, e.g. "Lowkey moment..." "Out and about..." "Cafe vibes..."
 - 8–20 words, 0–1 emoji.
 - No hashtags inside the caption.
 - Avoid generic “Today...” openings.
+
+IMPORTANT DETAIL RULE:
+- Do NOT mention clothing/accessories/body features (e.g., glasses, hair, shirt color)
+  UNLESS the user wrote them in the draft.
 
 HASHTAGS:
 - 1–5 tags, lowercase.
@@ -683,6 +727,7 @@ Vision description (may be empty):
 Previous answer not acceptable.
 - Follow draft topic strongly if draft exists.
 - Keep grounded; do NOT invent places/events.
+- Do NOT mention clothes/accessories unless user typed it.
 - Do NOT start with "Person/People/Friends".
 Return ONLY JSON.
 `.trim();
@@ -708,21 +753,28 @@ Return ONLY JSON.
 
     caption = stripGenericIntros(caption);
     caption = removePronouns(caption);
-
     caption = neutralizePersonWords(caption, draftText);
+
+    // ✅ remove "glasses" mentions unless in draft
+    caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
 
     if (draftHasText && draftKeywords.length) caption = ensureCaptionMentionsDraft(caption, draftKeywords);
 
     caption = normalizeCaptionLength(caption, draftText);
 
-    // ✅ NEW: post-process to avoid "Person..." starts
+    // ✅ prevent "Person..." starts (and no glasses fallback anymore)
     caption = avoidPersonStart(caption, visionDescription);
 
     // Fallback only if empty
     if (!caption) {
-      caption = draftHasText ? `${draftText.split(/\s+/).slice(0, 4).join(" ")} vibes.` : buildNeutralCaptionFromVision(visionDescription);
+      caption = draftHasText
+        ? `${draftText.split(/\s+/).slice(0, 4).join(" ")} vibes.`
+        : buildNeutralCaptionFromVision(visionDescription);
+
       caption = neutralizePersonWords(caption, draftText);
+      caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
       caption = avoidPersonStart(caption, visionDescription);
+      caption = normalizeCaptionLength(caption, draftText);
     }
 
     // Hashtags: draft-first
