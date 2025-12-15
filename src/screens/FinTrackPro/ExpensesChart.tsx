@@ -303,18 +303,21 @@ export default function ExpensesChart({ navigation }: Props) {
       const prompt = `
 You are a personal finance assistant.
 
-IMPORTANT:
-- The currency used is Malaysian Ringgit.
-- Use "RM" or "MYR" for all monetary values.
+IMPORTANT RULES:
+- Currency is Malaysian Ringgit (RM / MYR).
 - Do NOT use "$".
+- Do NOT use Markdown.
+- Do NOT use **bold**, *, _, or bullet symbols.
+- Use plain text only.
 
-Write a short "AI Insight Summary" in 3–6 bullet points.
+Write an AI Insight Summary in 4–6 short bullet-style lines.
+Each line must start with a dash (-).
 
-Rules:
-- Use simple student-friendly English.
-- Mention overall trend (up/down), top categories, and one practical suggestion.
-- Do NOT invent numbers. Only use numbers from the JSON.
-- Bullet points only.
+Focus on:
+- Overall trend
+- Top categories
+- Monthly change
+- One practical suggestion
 
 DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
