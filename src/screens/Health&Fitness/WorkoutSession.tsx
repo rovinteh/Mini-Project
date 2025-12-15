@@ -1270,7 +1270,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
                                 textAlign: "center",
                               }}
                             >
-                              Demo link added (not a direct GIF URL)
+                              Demo GIF link
                             </Text>
 
                             <TouchableOpacity
