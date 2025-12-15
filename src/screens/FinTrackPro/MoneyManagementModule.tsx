@@ -85,9 +85,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "home")}
             />
-            <Text style={labelStyle("home")}>
-              Home
-            </Text>
+            <Text style={labelStyle("home")}>Home</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -100,9 +98,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "list")}
             />
-            <Text style={labelStyle("list")}>
-              List
-            </Text>
+            <Text style={labelStyle("list")}>List</Text>
           </TouchableOpacity>
 
           <View style={{ width: 72 }} />
@@ -112,14 +108,20 @@ export default function MoneyManagementModule({ navigation }: Props) {
             onPress={() => go("budget")}
             activeOpacity={0.85}
           >
-            <Ionicons
-              name="wallet-outline"
-              size={22}
-              color={iconColor(activeTab === "budget")}
-            />
-            <Text style={labelStyle("budget")}>
-              Budget
-            </Text>
+            <View style={{ position: "relative" }}>
+              <Ionicons
+                name="wallet-outline"
+                size={22}
+                color={iconColor(activeTab === "budget")}
+              />
+
+              {/* AI badge */}
+              <View style={styles.aiBadge}>
+                <Ionicons name="sparkles" size={10} color="#fff" />
+              </View>
+            </View>
+
+            <Text style={labelStyle("budget")}>Budget</Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -132,9 +134,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "chart")}
             />
-            <Text style={labelStyle("chart")}>
-              Chart
-            </Text>
+            <Text style={labelStyle("chart")}>Chart</Text>
           </TouchableOpacity>
         </View>
 
