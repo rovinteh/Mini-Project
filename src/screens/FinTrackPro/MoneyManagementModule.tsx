@@ -129,11 +129,16 @@ export default function MoneyManagementModule({ navigation }: Props) {
             onPress={() => go("chart")}
             activeOpacity={0.85}
           >
-            <Ionicons
-              name="stats-chart-outline"
-              size={22}
-              color={iconColor(activeTab === "chart")}
-            />
+            <View style={{ position: "relative" }}>
+              <Ionicons
+                name="stats-chart-outline"
+                size={22}
+                color={iconColor(activeTab === "chart")}
+              />
+              <View style={styles.aiBadge}>
+                <Ionicons name="sparkles" size={10} color="#fff" />
+              </View>
+            </View>
             <Text style={labelStyle("chart")}>Chart</Text>
           </TouchableOpacity>
         </View>
