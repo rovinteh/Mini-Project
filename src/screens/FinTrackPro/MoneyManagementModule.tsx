@@ -1,5 +1,12 @@
-import React, { useMemo } from "react";
-import { View, TouchableOpacity, StyleSheet, Platform } from "react-native";
+import React, { useEffect, useMemo, useState } from "react";
+import {
+  View,
+  TouchableOpacity,
+  StyleSheet,
+  Platform,
+  Modal,
+  Pressable,
+} from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import {
   Layout,
@@ -11,6 +18,15 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { MainStackParamList } from "../../types/navigation";
 
+// ✅ ADD: currency store
+import {
+  CURRENCY_OPTIONS,
+  CurrencyCode,
+  codeToLabel,
+  getCurrencyCode,
+  setCurrencyCode,
+} from "../../utils/currencyStore";
+
 type Props = NativeStackScreenProps<
   MainStackParamList,
   "MoneyManagementModule"
@@ -20,19 +36,24 @@ type TabKey = "home" | "list" | "budget" | "insights" | "chart";
 
 export default function MoneyManagementModule({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
-  const [activeTab] = React.useState<TabKey>("home");
   const styles = useMemo(() => makeStyles(!!isDarkmode), [isDarkmode]);
+
+  // ✅ ADD: currency state
+  const [currency, setCurrency] = useState<CurrencyCode>("MYR");
+  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
+
+  // ✅ ADD: load saved currency on mount
+  useEffect(() => {
+    (async () => {
+      const saved = await getCurrencyCode();
+      setCurrency(saved);
+    })();
+  }, []);
 
   const iconColor = (active: boolean) => {
     if (active) return "#38BDF8";
     return isDarkmode ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.6)";
   };
-
-  const labelStyle = (tab: TabKey) =>
-    StyleSheet.flatten([
-      styles.navLabel,
-      { color: iconColor(activeTab === tab) },
-    ]);
 
   const go = (tab: TabKey) => {
     if (tab === "home") return;
@@ -40,6 +61,14 @@ export default function MoneyManagementModule({ navigation }: Props) {
     if (tab === "budget") return navigation.navigate("BudgetHub");
     if (tab === "insights") return navigation.navigate("SpendingInsights");
     if (tab === "chart") return navigation.navigate("ExpensesChart");
+  };
+
+  const activeTab: TabKey = "home";
+
+  const pickCurrency = async (code: CurrencyCode) => {
+    setCurrency(code);
+    await setCurrencyCode(code);
+    setShowCurrencyModal(false);
   };
 
   return (
@@ -71,11 +100,27 @@ export default function MoneyManagementModule({ navigation }: Props) {
         <Text style={styles.subtitle}>
           Manage your income, expenses and budgets in one place.
         </Text>
+
+        {/* ✅ ADD: currency selector button */}
+        <TouchableOpacity
+          activeOpacity={0.9}
+          onPress={() => setShowCurrencyModal(true)}
+          style={styles.currencyBtn}
+        >
+          <Ionicons
+            name="cash-outline"
+            size={16}
+            color={isDarkmode ? "#fff" : "#111"}
+            style={{ marginRight: 8 }}
+          />
+          <Text style={styles.currencyBtnText}>
+            Currency: {codeToLabel(currency)}
+          </Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.bottomBar}>
-          {/* Home */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("home")}
@@ -86,10 +131,16 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "home")}
             />
-            <Text style={labelStyle("home")}>Home</Text>
+            <Text
+              style={[
+                styles.navLabel,
+                { color: iconColor(activeTab === "home") },
+              ]}
+            >
+              Home
+            </Text>
           </TouchableOpacity>
 
-          {/* List */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("list")}
@@ -100,40 +151,38 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "list")}
             />
-            <Text style={labelStyle("list")}>List</Text>
+            <Text
+              style={[
+                styles.navLabel,
+                { color: iconColor(activeTab === "list") },
+              ]}
+            >
+              List
+            </Text>
           </TouchableOpacity>
 
           <View style={{ width: 72 }} />
 
-          {/* Budget (with AI pill) */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("budget")}
             activeOpacity={0.85}
           >
-            <View style={{ position: "relative", alignItems: "center" }}>
-              <Ionicons
-                name="wallet-outline"
-                size={22}
-                color={iconColor(activeTab === "budget")}
-              />
-
-              {/* AI Pill */}
-              <View style={styles.budgetAiPill}>
-                <Ionicons
-                  name="sparkles-outline"
-                  size={10}
-                  color="#fff"
-                  style={{ marginRight: 2 }}
-                />
-                <Text style={styles.budgetAiText}>AI</Text>
-              </View>
-            </View>
-
-            <Text style={labelStyle("budget")}>Budget</Text>
+            <Ionicons
+              name="wallet-outline"
+              size={22}
+              color={iconColor(activeTab === "budget")}
+            />
+            <Text
+              style={[
+                styles.navLabel,
+                { color: iconColor(activeTab === "budget") },
+              ]}
+            >
+              Budget
+            </Text>
           </TouchableOpacity>
 
-          {/* Chart */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("chart")}
@@ -144,11 +193,17 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "chart")}
             />
-            <Text style={labelStyle("chart")}>Chart</Text>
+            <Text
+              style={[
+                styles.navLabel,
+                { color: iconColor(activeTab === "chart") },
+              ]}
+            >
+              Chart
+            </Text>
           </TouchableOpacity>
         </View>
 
-        {/* FAB */}
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={() => navigation.navigate("TransactionAdd")}
@@ -157,7 +212,9 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Ionicons name="add" size={32} color="#fff" />
         </TouchableOpacity>
 
-        {/* Global AI Shortcut */}
+        {/* ✅ REMOVE this if you don’t want “Add” text under the button */}
+        <Text style={styles.fabLabel}>Add</Text>
+
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={() => navigation.navigate("SpendingInsights")}
@@ -172,6 +229,55 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Text style={styles.aiText}>AI</Text>
         </TouchableOpacity>
       </View>
+
+      {/* ✅ ADD: Currency modal */}
+      <Modal
+        visible={showCurrencyModal}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setShowCurrencyModal(false)}
+      >
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => setShowCurrencyModal(false)}
+        >
+          <Pressable style={styles.modalCard} onPress={() => {}}>
+            <Text fontWeight="bold" style={{ fontSize: 16, marginBottom: 10 }}>
+              Select Currency
+            </Text>
+
+            {CURRENCY_OPTIONS.map((c) => {
+              const active = c.code === currency;
+              return (
+                <TouchableOpacity
+                  key={c.code}
+                  activeOpacity={0.85}
+                  onPress={() => pickCurrency(c.code)}
+                  style={[
+                    styles.currencyRow,
+                    active && styles.currencyRowActive,
+                  ]}
+                >
+                  <Text style={{ fontWeight: "700" }}>{c.label}</Text>
+                  {active ? (
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={20}
+                      color="#22C55E"
+                    />
+                  ) : (
+                    <Ionicons
+                      name="ellipse-outline"
+                      size={20}
+                      color="rgba(255,255,255,0.35)"
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </Pressable>
+        </Pressable>
+      </Modal>
     </Layout>
   );
 }
@@ -187,8 +293,25 @@ const makeStyles = (isDark: boolean) =>
     },
     subtitle: {
       textAlign: "center",
-      marginBottom: 20,
+      marginBottom: 16,
       opacity: isDark ? 0.85 : 0.8,
+      color: isDark ? "#fff" : "#111",
+    },
+
+    // ✅ ADD
+    currencyBtn: {
+      flexDirection: "row",
+      alignItems: "center",
+      paddingHorizontal: 12,
+      paddingVertical: 10,
+      borderRadius: 999,
+      backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
+    },
+    currencyBtnText: {
+      fontWeight: "700",
+      color: isDark ? "#fff" : "#111",
     },
 
     bottomWrap: {
@@ -246,6 +369,14 @@ const makeStyles = (isDark: boolean) =>
       elevation: 14,
     },
 
+    fabLabel: {
+      marginTop: 48,
+      fontSize: 11,
+      fontWeight: "700",
+      opacity: isDark ? 0.75 : 0.65,
+      color: isDark ? "#fff" : "#000",
+    },
+
     aiPill: {
       position: "absolute",
       right: 16,
@@ -263,21 +394,32 @@ const makeStyles = (isDark: boolean) =>
       fontSize: 12,
     },
 
-    /* Budget AI pill */
-    budgetAiPill: {
-      position: "absolute",
-      top: -16,
-      right: -24,
+    // ✅ ADD modal styles
+    modalBackdrop: {
+      flex: 1,
+      backgroundColor: "rgba(0,0,0,0.55)",
+      justifyContent: "center",
+      paddingHorizontal: 18,
+    },
+    modalCard: {
+      backgroundColor: isDark ? "#0B1220" : "#FFFFFF",
+      borderRadius: 16,
+      padding: 14,
+      borderWidth: 1,
+      borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
+    },
+    currencyRow: {
       flexDirection: "row",
       alignItems: "center",
-      paddingHorizontal: 6,
-      paddingVertical: 2,
-      borderRadius: 999,
-      backgroundColor: "#7C3AED",
+      justifyContent: "space-between",
+      paddingVertical: 12,
+      paddingHorizontal: 10,
+      borderRadius: 12,
+      marginTop: 8,
+      backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
     },
-    budgetAiText: {
-      color: "#fff",
-      fontSize: 9,
-      fontWeight: "800",
+    currencyRowActive: {
+      borderWidth: 1,
+      borderColor: "#38BDF8",
     },
   });
