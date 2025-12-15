@@ -1,9 +1,10 @@
 // index.js - Local AI + Face proxy server for MemoryBook
-// ✅ Updated:
-// - Prevent captions starting with "Person/People/Friends"
-// - Keep no pronouns + no gender words
+// ✅ Updated (your requests):
+// - NEVER start caption with "lowkey", "friend/friends", "person/people"
+// - If user sends draft/keywords, caption MUST contain user keyword/draft (enforced)
+// - If draft exists: use (draft + vision) to write caption (draft is PRIMARY)
 // - Remove "glasses" mentions unless user typed it in draft
-// - Safer, less-weird fallback captions
+// - Safer, less-weird fallback captions (no "lowkey moment, captured.")
 // - Keep: /generatePostMeta + face proxy endpoints + ollama proxy
 
 const express = require("express");
@@ -13,7 +14,11 @@ const axios = require("axios");
 const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
-const { detectFacesInList, registerFace, recognizeFace } = require("./face-service");
+const {
+  detectFacesInList,
+  registerFace,
+  recognizeFace,
+} = require("./face-service");
 
 const app = express();
 app.use(cors());
@@ -27,10 +32,12 @@ app.get("/health", (req, res) => {
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 
 // ✅ Better default text model for instruction-following
-const OLLAMA_TEXT_MODEL = process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
+const OLLAMA_TEXT_MODEL =
+  process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
 
 // Vision model
-const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
+const OLLAMA_VISION_MODEL =
+  process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
 // ✅ base64 normalizer
@@ -104,7 +111,8 @@ function extractJsonBlock(raw) {
 
   const first = cleaned.indexOf("{");
   const last = cleaned.lastIndexOf("}");
-  if (first !== -1 && last !== -1 && last > first) cleaned = cleaned.slice(first, last + 1);
+  if (first !== -1 && last !== -1 && last > first)
+    cleaned = cleaned.slice(first, last + 1);
 
   return cleaned.trim();
 }
@@ -134,9 +142,19 @@ function emojiFromMoodLabel(label) {
 // Cleanup helpers
 // -------------------------
 const BANNED_BACKGROUND_WORDS = [
-  "matches", "matchbox", "box of matches",
-  "pencil", "pencils", "pen", "pens", "marker", "markers",
-  "notebook", "notebooks", "remote control", "remote",
+  "matches",
+  "matchbox",
+  "box of matches",
+  "pencil",
+  "pencils",
+  "pen",
+  "pens",
+  "marker",
+  "markers",
+  "notebook",
+  "notebooks",
+  "remote control",
+  "remote",
 ];
 
 function removeBannedWords(text) {
@@ -149,9 +167,20 @@ function removeBannedWords(text) {
 }
 
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes","take notes","doing homework","do homework","studying","study session",
-  "working on my notes","working on notes","working on homework","working on assignments",
-  "doing my assignment","doing assignments","preparing for exams","studying for exams",
+  "taking notes",
+  "take notes",
+  "doing homework",
+  "do homework",
+  "studying",
+  "study session",
+  "working on my notes",
+  "working on notes",
+  "working on homework",
+  "working on assignments",
+  "doing my assignment",
+  "doing assignments",
+  "preparing for exams",
+  "studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
@@ -178,8 +207,20 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog","dogs","puppy","puppies","cat","cats","kitten","kittens",
-  "bear","bears","bunny","bunnies","rabbit","rabbits",
+  "dog",
+  "dogs",
+  "puppy",
+  "puppies",
+  "cat",
+  "cats",
+  "kitten",
+  "kittens",
+  "bear",
+  "bears",
+  "bunny",
+  "bunnies",
+  "rabbit",
+  "rabbits",
 ];
 
 function fixPlushAnimalHallucination(caption, captionDraft) {
@@ -200,8 +241,14 @@ function neutralizePersonWords(text, captionDraft = "") {
   const d = String(captionDraft || "").toLowerCase();
 
   const allowGenderWords =
-    d.includes("man") || d.includes("woman") || d.includes("boy") || d.includes("girl") ||
-    d.includes("male") || d.includes("female") || d.includes("guy") || d.includes("lady");
+    d.includes("man") ||
+    d.includes("woman") ||
+    d.includes("boy") ||
+    d.includes("girl") ||
+    d.includes("male") ||
+    d.includes("female") ||
+    d.includes("guy") ||
+    d.includes("lady");
 
   if (allowGenderWords) return s.replace(/\s+/g, " ").trim();
 
@@ -224,21 +271,16 @@ function neutralizePersonWords(text, captionDraft = "") {
   return s.replace(/\s+/g, " ").trim();
 }
 
-// ✅ NEW: remove accessory/clothing mentions unless user typed it
-const ACCESSORY_WORDS = [
-  "glasses", "spectacles", "eyeglasses", "sunglasses",
-];
+// ✅ remove accessory/clothing mentions unless user typed it
+const ACCESSORY_WORDS = ["glasses", "spectacles", "eyeglasses", "sunglasses"];
 
 function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
   const draftLower = String(captionDraft || "").toLowerCase();
   let s = String(text || "");
 
-  // If user explicitly typed glasses/sunglasses/etc, allow it.
   const allow = ACCESSORY_WORDS.some((w) => draftLower.includes(w));
   if (allow) return s.replace(/\s+/g, " ").trim();
 
-  // Otherwise remove these words + common short patterns around them.
-  // Example: "glasses on" / "with glasses" / "wearing glasses"
   const patterns = [
     /\bglasses\s+on\b/gi,
     /\bwith\s+glasses\b/gi,
@@ -248,7 +290,6 @@ function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
 
   for (const re of patterns) s = s.replace(re, "");
 
-  // cleanup punctuation + spacing
   s = s
     .replace(/\s+/g, " ")
     .replace(/\s+,/g, ",")
@@ -257,28 +298,43 @@ function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
     .replace(/\.\s*\./g, ".")
     .trim();
 
-  // remove leading separators if present
   s = s.replace(/^[-–—,:]+\s*/g, "").trim();
 
   return s;
 }
 
-// ✅ prevent caption starting with "person/people/friends"
-function avoidPersonStart(caption, visionDesc) {
+// ✅ prevent caption starting with "person/people/friends" (and NEVER "lowkey")
+function avoidBadStarts(caption, visionDesc, captionDraft) {
   let c = String(caption || "").trim();
   if (!c) return c;
 
-  if (/^(a\s+)?(person|people|friends)\b/i.test(c)) {
-    const v = String(visionDesc || "").toLowerCase();
-    // ❌ removed "glasses" fallback (this caused your weird caption)
-    if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-    if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
-    if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, lowkey and cozy.";
-    if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
-    return "Lowkey moment, captured.";
+  const badStartRe = /^(lowkey\b|low-key\b|friend\b|friends\b|a\s+friend\b|person\b|a\s+person\b|people\b)/i;
+  if (!badStartRe.test(c)) return c;
+
+  const v = String(visionDesc || "").toLowerCase();
+  const d = String(captionDraft || "").trim();
+
+  // If draft exists and is short, lead with draft instead of generic starter
+  if (d) {
+    const shortDraft = d.replace(/\s+/g, " ").trim();
+    if (shortDraft.length <= 45) {
+      c = `${shortDraft} — ${c.replace(badStartRe, "").trim()}`.trim();
+      c = c.replace(/^[—–-]+\s*/g, "").trim();
+      if (!badStartRe.test(c)) return c;
+    }
   }
 
-  return c;
+  // Otherwise choose safe starter by vision
+  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
+  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
+  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
+  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
+  if (v.includes("table")) return "Simple table vibes, clean and calm.";
+  if (v.includes("laptop")) return "Locked in, focus vibes.";
+  if (v.includes("phone")) return "Phone out, keep it simple.";
+
+  // No "lowkey moment, captured." anymore:
+  return "Clean moment, good vibes.";
 }
 
 // -------------------------
@@ -317,14 +373,55 @@ function fallbackTagsFromDraft(captionDraft, max = 3) {
 }
 
 function extractDraftKeywords(draft, max = 2) {
-  const d = String(draft || "").toLowerCase();
-  if (!d.trim()) return [];
+  const raw = String(draft || "").trim();
+  const d = raw.toLowerCase();
+  if (!d) return [];
+
+  // keep hashtags as keywords too
+  const hash = raw
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.startsWith("#"))
+    .map((t) => t.replace(/^#+/, "").replace(/[^a-z0-9_-]/gi, ""))
+    .filter(Boolean);
 
   const stop = new Set([
-    "a","an","the","and","or","but","to","for","of","in","on","at","with",
-    "this","that","these","those","is","are","was","were","be","been","being",
-    "today","yesterday","tomorrow","very","so","just","really","pls","please",
-    "trip","travel",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "to",
+    "for",
+    "of",
+    "in",
+    "on",
+    "at",
+    "with",
+    "this",
+    "that",
+    "these",
+    "those",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "today",
+    "yesterday",
+    "tomorrow",
+    "very",
+    "so",
+    "just",
+    "really",
+    "pls",
+    "please",
+    "trip",
+    "travel",
   ]);
 
   const tokens = d
@@ -337,40 +434,85 @@ function extractDraftKeywords(draft, max = 2) {
     .filter((t) => !stop.has(t));
 
   const uniq = [];
-  for (const t of tokens) {
+  for (const t of [...hash, ...tokens]) {
     if (!uniq.includes(t)) uniq.push(t);
     if (uniq.length >= max) break;
   }
   return uniq;
 }
 
-function ensureCaptionMentionsDraft(caption, draftKeywords) {
+// ✅ HARD ENFORCE: caption must contain user keyword/draft (when draft exists)
+function enforceCaptionContainsUserInput(caption, draftText, draftKeywords) {
   let c = String(caption || "").trim();
-  if (!draftKeywords || draftKeywords.length === 0) return c;
+  const d = String(draftText || "").trim();
+  if (!d) return c;
 
   const lc = c.toLowerCase();
-  const hasAny = draftKeywords.some((k) => lc.includes(k.toLowerCase()));
-  if (hasAny) return c;
+  const hasKeyword =
+    Array.isArray(draftKeywords) && draftKeywords.length
+      ? draftKeywords.some((k) => lc.includes(String(k).toLowerCase()))
+      : false;
 
-  const prefix = draftKeywords.join(" ");
-  return `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
+  // If user draft is short, require the EXACT draft string (as substring)
+  const shortDraft = d.replace(/\s+/g, " ").trim();
+  const requireExact = shortDraft.length <= 45;
+
+  if (requireExact) {
+    if (!c.includes(shortDraft)) {
+      c = `${shortDraft} — ${c}`.replace(/\s+/g, " ").trim();
+    }
+    return c;
+  }
+
+  // Otherwise require at least one extracted keyword
+  if (draftKeywords && draftKeywords.length && !hasKeyword) {
+    const prefix = draftKeywords.join(" ");
+    c = `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
+  }
+
+  return c;
 }
 
 // ---------------------------------------------------------
 // Pronoun blockers
 // ---------------------------------------------------------
 const PRONOUN_BLOCKLIST = [
-  "i","i'm","im","me","my","mine",
-  "we","we're","were","our","ours","us",
-  "you","you're","youre","your","yours",
-  "he","she","him","her","his","hers",
-  "they","them","their","theirs",
+  "i",
+  "i'm",
+  "im",
+  "me",
+  "my",
+  "mine",
+  "we",
+  "we're",
+  "were",
+  "our",
+  "ours",
+  "us",
+  "you",
+  "you're",
+  "youre",
+  "your",
+  "yours",
+  "he",
+  "she",
+  "him",
+  "her",
+  "his",
+  "hers",
+  "they",
+  "them",
+  "their",
+  "theirs",
 ];
 
 function removePronouns(text) {
   let s = String(text || "");
   for (const p of PRONOUN_BLOCKLIST) {
-    const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
+    const re = new RegExp(
+      `\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "gi"
+    );
     s = s.replace(re, "");
   }
   return s.replace(/\s+/g, " ").trim();
@@ -394,21 +536,22 @@ function stripGenericIntros(text) {
   return s.trim();
 }
 
+// ✅ No more "Lowkey moment, captured."
 function buildNeutralCaptionFromVision(visionCombined) {
   const v = String(visionCombined || "").toLowerCase();
   if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
   if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
   if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
-  if (v.includes("table")) return "Table vibes, simple and nice.";
+  if (v.includes("table")) return "Simple table vibes, clean and calm.";
   if (v.includes("laptop")) return "Locked in, focus vibes.";
-  if (v.includes("phone")) return "No distractions, just vibes.";
+  if (v.includes("phone")) return "Phone out, keep it simple.";
   if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-  return "Lowkey moment, captured.";
+  return "Simple scene, good vibes.";
 }
 
 function detectUserIntent(draft) {
   const d = String(draft || "").toLowerCase();
-  const flex = ["flex","new look","new style","hair","hairstyle","outfit","ootd","slay","glow up"];
+  const flex = ["flex", "new look", "new style", "hair", "hairstyle", "outfit", "ootd", "slay", "glow up"];
   if (flex.some((k) => d.includes(k))) return "FLEX";
   return "NORMAL";
 }
@@ -596,7 +739,7 @@ function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKe
     if (!ok) return true;
   }
 
-  const fantasy = ["childhood","nostalgia","cherished","magical","lucky charm","river","stream","summer","winter","sun touched","fish"];
+  const fantasy = ["childhood", "nostalgia", "cherished", "magical", "lucky charm", "river", "stream", "summer", "winter", "sun touched", "fish"];
   for (const w of fantasy) {
     if (c.includes(w) && !v.includes(w) && !d.includes(w)) return true;
   }
@@ -640,7 +783,7 @@ app.post("/generatePostMeta", async (req, res) => {
     const draftKeywords = draftHasText ? extractDraftKeywords(draftText, 2) : [];
     const draftKeywordsLine =
       draftKeywords.length > 0
-        ? `- MUST keep the topic aligned with these draft keywords: ${draftKeywords.join(", ")}.`
+        ? `- MUST include user keyword(s) in final caption: ${draftKeywords.join(", ")}.`
         : `- If draft is empty, rely on vision description only.`;
 
     // 2) TEXT model prompt
@@ -655,8 +798,8 @@ Return ONLY valid JSON:
 }
 
 PRIORITY RULES:
-- If user draft/keywords is NOT empty, it is the PRIMARY source of truth.
-  Caption + hashtags must follow what user typed.
+- If user draft is NOT empty, it is the PRIMARY source of truth.
+  The final caption MUST contain the user's draft (or user's keywords) — do not drop it.
 - Vision description is SECONDARY: only used to support tone or add safe detail.
 - Never override user draft with a different place/event.
 ${draftKeywordsLine}
@@ -668,9 +811,10 @@ GROUNDING RULES:
 CAPTION STYLE:
 - Do NOT use 1st/2nd/3rd person pronouns (no I / we / you / he / she / they).
 - IMPORTANT: Do NOT say "a man" / "a woman" / boy / girl / male / female / guy / lady.
-  Use "friends", "people", or "person" only.
-- ✅ Do NOT start the caption with: "person", "a person", "people", "friends".
-  Start with a vibe/scene, e.g. "Lowkey moment..." "Out and about..." "Cafe vibes..."
+  Use "friends", "people", or "person" only (but NOT as the opening word).
+- ✅ Do NOT start the caption with any of these:
+  "lowkey", "low-key", "friend", "friends", "person", "people".
+  Start with a vibe/scene/action words instead.
 - 8–20 words, 0–1 emoji.
 - No hashtags inside the caption.
 - Avoid generic “Today...” openings.
@@ -712,23 +856,28 @@ Vision description (may be empty):
     let parsed = safeJsonParse(rawContent, null);
     if (!parsed) parsed = { caption: draftText, hashtags: [], friendTags: [] };
 
-    // Retry once if ungrounded OR violates draft alignment
+    // Retry once if ungrounded OR violates draft alignment OR starts badly
     let captionTry = String(parsed.caption || draftText || "").trim();
+
     const violatesDraft =
       draftHasText && draftKeywords.length
         ? !draftKeywords.some((k) => captionTry.toLowerCase().includes(String(k).toLowerCase()))
         : false;
 
-    if (captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) || violatesDraft) {
+    const startsBad = /^(lowkey\b|low-key\b|friend\b|friends\b|person\b|people\b|a\s+person\b|a\s+friend\b)/i.test(
+      captionTry
+    );
+
+    if (captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) || violatesDraft || startsBad) {
       const retryPrompt =
         combinedPrompt +
         `
 
 Previous answer not acceptable.
-- Follow draft topic strongly if draft exists.
+- MUST keep user draft/keyword in caption (do not omit).
 - Keep grounded; do NOT invent places/events.
 - Do NOT mention clothes/accessories unless user typed it.
-- Do NOT start with "Person/People/Friends".
+- Do NOT start with "lowkey/low-key/friend(s)/person/people".
 Return ONLY JSON.
 `.trim();
 
@@ -758,22 +907,24 @@ Return ONLY JSON.
     // ✅ remove "glasses" mentions unless in draft
     caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
 
-    if (draftHasText && draftKeywords.length) caption = ensureCaptionMentionsDraft(caption, draftKeywords);
+    // ✅ HARD enforce: must include user keyword/draft if provided
+    caption = enforceCaptionContainsUserInput(caption, draftText, draftKeywords);
 
     caption = normalizeCaptionLength(caption, draftText);
 
-    // ✅ prevent "Person..." starts (and no glasses fallback anymore)
-    caption = avoidPersonStart(caption, visionDescription);
+    // ✅ final: remove bad starts like "lowkey" / "friend" / "person"
+    caption = avoidBadStarts(caption, visionDescription, draftText);
 
     // Fallback only if empty
     if (!caption) {
       caption = draftHasText
-        ? `${draftText.split(/\s+/).slice(0, 4).join(" ")} vibes.`
+        ? `${draftText.split(/\s+/).slice(0, 6).join(" ")} — keep it chill.`
         : buildNeutralCaptionFromVision(visionDescription);
 
       caption = neutralizePersonWords(caption, draftText);
       caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
-      caption = avoidPersonStart(caption, visionDescription);
+      caption = enforceCaptionContainsUserInput(caption, draftText, draftKeywords);
+      caption = avoidBadStarts(caption, visionDescription, draftText);
       caption = normalizeCaptionLength(caption, draftText);
     }
 
