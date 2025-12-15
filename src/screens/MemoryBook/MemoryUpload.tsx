@@ -41,16 +41,12 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 // ✅ expo-video (new API)
 import { useVideoPlayer, VideoView } from "expo-video";
 
-// ✅ video thumbnail -> base64
-import * as VideoThumbnails from "expo-video-thumbnails";
-import * as FileSystem from "expo-file-system";
-
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
 
 type SelectedMedia = {
   uri: string;
   type: "image" | "video";
-  base64?: string | null; // image base64; ALSO used to cache video thumbnail base64
+  base64?: string | null; // ONLY for image base64 (AI uses images only now)
 };
 
 type PlaceOption = {
@@ -64,13 +60,6 @@ type PlaceOption = {
 type FaceMatch = { name: string; distance: number };
 type FaceMatchesPerFace = { faceIndex: number; matches: FaceMatch[] };
 type FaceRecognizeResponse = { ok?: boolean; faces: FaceMatchesPerFace[] };
-type FaceBatchItem = {
-  index: number;
-  ok?: boolean;
-  faces: FaceMatchesPerFace[];
-  error?: string;
-};
-type FaceBatchResponse = { ok: boolean; count: number; results: FaceBatchItem[] };
 
 // ✅ Album info stored under posts
 type AlbumInfo = { id: string; name: string };
@@ -254,7 +243,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     initialMediaUrls.length
       ? initialMediaUrls.map((uri: string, idx: number) => ({
           uri,
-          type: initialMediaTypes[idx] || "image",
+          type: (initialMediaTypes[idx] || "image") as "image" | "video",
           base64: null,
         }))
       : []
@@ -299,56 +288,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
     ((process as any)?.env?.AI_SERVER_URL as string) ||
     "http://192.168.1.74:3000";
-
-  // -------------------------------------------------------
-  // ✅ Android content:// -> file:// helper (important for video thumbnails)
-  // -------------------------------------------------------
-  const ensureFileUri = async (uri: string): Promise<string> => {
-    try {
-      if (!uri) return uri;
-
-      // already file://
-      if (!uri.startsWith("content://")) return uri;
-
-      const FS = FileSystem as any;
-      const cacheDir = FS.cacheDirectory || FS.documentDirectory;
-      if (!cacheDir) return uri;
-
-      const target = `${cacheDir}mb_video_${Date.now()}.mp4`;
-
-      await FileSystem.copyAsync({ from: uri, to: target });
-      return target;
-    } catch (e) {
-      console.log("ensureFileUri error:", e);
-      return uri;
-    }
-  };
-
-  // -------------------------------------------------------
-  // ✅ Create thumbnail base64 for video (robust)
-  // -------------------------------------------------------
-  const getVideoThumbBase64 = async (
-    videoUri: string
-  ): Promise<string | null> => {
-    try {
-      const safeUri = await ensureFileUri(videoUri);
-
-      const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(
-        safeUri,
-        { time: 1000, quality: 0.8 }
-      );
-
-      // ✅ TS-safe: use string literal "base64"
-      const b64 = await FileSystem.readAsStringAsync(thumbUri, {
-        encoding: "base64" as any,
-      } as any);
-
-      return b64 || null;
-    } catch (e) {
-      console.log("getVideoThumbBase64 error:", e);
-      return null;
-    }
-  };
 
   // -------------------------------------------------------
   // Location: auto-detect
@@ -706,7 +645,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     setMediaItems((prev) => [...prev, ...selected]);
   };
 
-  // ✅ UPDATED: generate + cache video thumbnail base64 immediately
+  // ✅ VIDEO: keep upload + preview, but NO AI processing for video anymore
   const pickVideoFromLibrary = async () => {
     if (Platform.OS !== "web") {
       const { status } =
@@ -730,27 +669,10 @@ export default function MemoryUpload({ navigation, route }: Props) {
     if (result.canceled) return;
 
     const asset = result.assets[0];
-
-    // Add first (so user sees preview)
-    setMediaItems((prev) => [...prev, { uri: asset.uri, type: "video", base64: null }]);
-
-    // Generate thumbnail base64
-    const thumbB64 = await getVideoThumbBase64(asset.uri);
-    if (!thumbB64) {
-      Alert.alert(
-        "Video thumbnail failed",
-        "Could not create a thumbnail for AI. Try another video or record with camera."
-      );
-      return;
-    }
-
-    // Cache into the added item (match by uri)
-    setMediaItems((prev) => {
-      const next = [...prev];
-      const idx = next.findIndex((x) => x.uri === asset.uri && x.type === "video");
-      if (idx !== -1) next[idx] = { ...next[idx], base64: thumbB64 };
-      return next;
-    });
+    setMediaItems((prev) => [
+      ...prev,
+      { uri: asset.uri, type: "video", base64: null },
+    ]);
   };
 
   const captureWithCamera = async () => {
@@ -774,17 +696,11 @@ export default function MemoryUpload({ navigation, route }: Props) {
     const asset = result.assets[0];
 
     if (asset.type === "video") {
-      setMediaItems((prev) => [...prev, { uri: asset.uri, type: "video", base64: null }]);
-
-      const thumbB64 = await getVideoThumbBase64(asset.uri);
-      if (thumbB64) {
-        setMediaItems((prev) => {
-          const next = [...prev];
-          const idx = next.findIndex((x) => x.uri === asset.uri && x.type === "video");
-          if (idx !== -1) next[idx] = { ...next[idx], base64: thumbB64 };
-          return next;
-        });
-      }
+      // ✅ no thumbnail generation anymore
+      setMediaItems((prev) => [
+        ...prev,
+        { uri: asset.uri, type: "video", base64: null },
+      ]);
     } else {
       setMediaItems((prev) => [
         ...prev,
@@ -816,7 +732,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // ✅ AI generate
+  // ✅ AI generate (IMAGES ONLY — video AI removed)
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -830,46 +746,24 @@ export default function MemoryUpload({ navigation, route }: Props) {
       return;
     }
 
+    // ✅ Only images can be used for AI
+    const imageBase64List = mediaItems
+      .filter((m) => m.type === "image" && !!m.base64)
+      .map((m) => m.base64 as string);
+
+    if (!imageBase64List.length) {
+      Alert.alert(
+        "AI (photos only for now)",
+        "AI caption/hashtags currently support photos only. If you selected only video, please type manually or add at least 1 photo."
+      );
+      return;
+    }
+
     try {
       setIsGeneratingAI(true);
 
-      const aiBase64List: string[] = [];
-      const nextMedia = [...mediaItems];
-
-      // photos
-      for (const m of nextMedia) {
-        if (m.type === "image" && m.base64) aiBase64List.push(m.base64);
-      }
-
-      // video thumbs
-      for (let i = 0; i < nextMedia.length; i++) {
-        const m = nextMedia[i];
-        if (m.type !== "video") continue;
-
-        if (m.base64) {
-          aiBase64List.push(m.base64);
-          continue;
-        }
-
-        const thumbB64 = await getVideoThumbBase64(m.uri);
-        if (thumbB64) {
-          aiBase64List.push(thumbB64);
-          nextMedia[i] = { ...m, base64: thumbB64 };
-        }
-      }
-
-      setMediaItems(nextMedia);
-
-      if (!aiBase64List.length) {
-        Alert.alert(
-          "Need media data",
-          "AI needs at least 1 photo OR a video (thumbnail). Please try again.\n\nTip: Try another video, or record using camera."
-        );
-        return;
-      }
-
       const captionDraft = options?.useDraft ? draft || "" : caption || "";
-      const aiResult = await callAiForPostMeta(captionDraft, aiBase64List);
+      const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
 
       const stripHashtags = (text: string) =>
         (text || "")
@@ -969,7 +863,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
           albums: safeAlbums,
           albumIds: safeAlbumIds,
 
-          // ✅ FIX: save location when editing
+          // ✅ save location when editing
           locationLabel: locationLabel || null,
           locationCoords: locationCoords || null,
         });
@@ -1007,9 +901,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
           .toString(36)
           .slice(2)}.${ext}`;
 
-        const storageRef = ref(storage, filename);
-        await uploadBytes(storageRef, blob);
-        const downloadURL = await getDownloadURL(storageRef);
+        const storageRefObj = ref(storage, filename);
+        await uploadBytes(storageRefObj, blob);
+        const downloadURL = await getDownloadURL(storageRefObj);
 
         uploadedUrls.push(downloadURL);
         uploadedTypes.push(item.type);
@@ -1060,10 +954,12 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const arrowColor = isDarkmode ? themeColor.white : "#999";
 
+  // ✅ AI only enabled when there is at least 1 IMAGE base64
   const canUseAI = useMemo(() => {
-    const hasImageB64 = mediaItems.some((m) => m.type === "image" && !!m.base64);
-    const hasVideo = mediaItems.some((m) => m.type === "video");
-    return (hasImageB64 || hasVideo) && !isGeneratingAI;
+    const hasImageB64 = mediaItems.some(
+      (m) => m.type === "image" && !!m.base64
+    );
+    return hasImageB64 && !isGeneratingAI;
   }, [mediaItems, isGeneratingAI]);
 
   return (
