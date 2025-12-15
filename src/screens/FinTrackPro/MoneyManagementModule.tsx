@@ -1,20 +1,12 @@
-import React, { useMemo } from "react";
+// src/screens/FinTrackPro/MoneyManagementModule.tsx
+import React, { useMemo, useState } from "react";
 import { View, TouchableOpacity, StyleSheet, Platform } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
-import {
-  Layout,
-  TopNav,
-  Text,
-  useTheme,
-  themeColor,
-} from "react-native-rapi-ui";
+import { Layout, TopNav, Text, useTheme, themeColor } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { MainStackParamList } from "../../types/navigation";
 
-type Props = NativeStackScreenProps<
-  MainStackParamList,
-  "MoneyManagementModule"
->;
+type Props = NativeStackScreenProps<MainStackParamList, "MoneyManagementModule">;
 
 type TabKey = "home" | "list" | "budget" | "insights" | "chart";
 
@@ -22,12 +14,17 @@ export default function MoneyManagementModule({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const styles = useMemo(() => makeStyles(!!isDarkmode), [isDarkmode]);
 
+  // ✅ make it real state so TS won't treat it as only "home"
+  const [activeTab, setActiveTab] = useState<TabKey>("home");
+
   const iconColor = (active: boolean) => {
     if (active) return "#38BDF8";
     return isDarkmode ? "rgba(255,255,255,0.72)" : "rgba(0,0,0,0.6)";
   };
 
   const go = (tab: TabKey) => {
+    setActiveTab(tab);
+
     if (tab === "home") return;
     if (tab === "list") return navigation.navigate("TransactionList");
     if (tab === "budget") return navigation.navigate("BudgetHub");
@@ -35,12 +32,10 @@ export default function MoneyManagementModule({ navigation }: Props) {
     if (tab === "chart") return navigation.navigate("ExpensesChart");
   };
 
-  const activeTab: TabKey = "home";
-
   return (
     <Layout>
       <TopNav
-        middleContent={<Text>Money Management Module</Text>}
+        middleContent="Money Management Module"
         leftContent={
           <Ionicons
             name="chevron-back"
@@ -64,12 +59,13 @@ export default function MoneyManagementModule({ navigation }: Props) {
           FinTrack Pro
         </Text>
         <Text style={styles.subtitle}>
-          Manage your income, expenses and budgets in one place.
+          Manage income, expenses and budgets in one place.
         </Text>
       </View>
 
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.bottomBar}>
+          {/* Home */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("home")}
@@ -80,16 +76,13 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "home")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "home") },
-              ]}
-            >
+            {/* ✅ NO style array */}
+            <Text style={{ ...styles.navLabel, color: iconColor(activeTab === "home") }}>
               Home
             </Text>
           </TouchableOpacity>
 
+          {/* List */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("list")}
@@ -100,18 +93,15 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "list")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "list") },
-              ]}
-            >
+            <Text style={{ ...styles.navLabel, color: iconColor(activeTab === "list") }}>
               List
             </Text>
           </TouchableOpacity>
 
+          {/* spacer for FAB */}
           <View style={{ width: 72 }} />
 
+          {/* Budget */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("budget")}
@@ -122,16 +112,12 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "budget")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "budget") },
-              ]}
-            >
+            <Text style={{ ...styles.navLabel, color: iconColor(activeTab === "budget") }}>
               Budget
             </Text>
           </TouchableOpacity>
 
+          {/* Chart */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("chart")}
@@ -142,17 +128,13 @@ export default function MoneyManagementModule({ navigation }: Props) {
               size={22}
               color={iconColor(activeTab === "chart")}
             />
-            <Text
-              style={[
-                styles.navLabel,
-                { color: iconColor(activeTab === "chart") },
-              ]}
-            >
+            <Text style={{ ...styles.navLabel, color: iconColor(activeTab === "chart") }}>
               Chart
             </Text>
           </TouchableOpacity>
         </View>
 
+        {/* ✅ FAB */}
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={() => navigation.navigate("TransactionAdd")}
@@ -161,11 +143,10 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Ionicons name="add" size={32} color="#fff" />
         </TouchableOpacity>
 
-
-        {/* AI Shortcut (no 'gap' used) */}
+        {/* ✅ AI Shortcut */}
         <TouchableOpacity
           activeOpacity={0.9}
-          onPress={() => navigation.navigate("SpendingInsights")}
+          onPress={() => go("insights")}
           style={styles.aiPill}
         >
           <Ionicons
@@ -194,6 +175,7 @@ const makeStyles = (isDark: boolean) =>
       textAlign: "center",
       marginBottom: 20,
       opacity: isDark ? 0.85 : 0.8,
+      color: isDark ? themeColor.white100 : themeColor.dark,
     },
 
     bottomWrap: {
@@ -251,17 +233,9 @@ const makeStyles = (isDark: boolean) =>
       elevation: 14,
     },
 
-    fabLabel: {
-      marginTop: 48,
-      fontSize: 11,
-      fontWeight: "700",
-      opacity: isDark ? 0.75 : 0.65,
-      color: isDark ? "#fff" : "#000",
-    },
-
     aiPill: {
       position: "absolute",
-      right: 55, // ✅ FIX
+      right: 55,
       top: -12,
       flexDirection: "row",
       alignItems: "center",
