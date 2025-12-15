@@ -8,6 +8,7 @@ import {
   Platform,
   Alert,
   RefreshControl,
+  ActivityIndicator,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -35,12 +36,27 @@ type Props = NativeStackScreenProps<MainStackParamList, "WorkoutPreference">;
 
 const WEEK_DAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
-// --- Vibrant Palette ---
+// Accent Colors
 const COLOR_ABOUT = "#3B82F6"; // Blue
 const COLOR_GOAL = "#8B5CF6"; // Purple
 const COLOR_INTENSITY = "#F97316"; // Orange
 const COLOR_SCHEDULE = "#10B981"; // Emerald
-const FITNESS_COLOR = "#22C55E"; // Keep for save button / main accents
+const FITNESS_COLOR = "#22C55E"; // Save button / main accent
+
+// --- Base Theme (match FitnessMenu / WeeklySummary) ---
+const COLORS = {
+  bgDark: "#050B14",
+  cardDark: "#0B1220",
+  borderDark: "#111827",
+  dimDark: "rgba(255,255,255,0.55)",
+  dimDark2: "rgba(255,255,255,0.38)",
+
+  bgLight: "#F7F8FA",
+  cardLight: "#FFFFFF",
+  borderLight: "#E5E7EB",
+  dimLight: "rgba(0,0,0,0.55)",
+  dimLight2: "rgba(0,0,0,0.38)",
+};
 
 // Helper to get suggested minutes
 const recommendMinutes = (difficulty: "easy" | "moderate" | "hard") => {
@@ -54,7 +70,14 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
   const auth = getAuth();
   const db = getFirestore();
 
-  // --- Form State ---
+  // --- Theme (match FitnessMenu / WeeklySummary) ---
+  const bg = isDarkmode ? COLORS.bgDark : COLORS.bgLight;
+  const cardBg = isDarkmode ? COLORS.cardDark : COLORS.cardLight;
+  const borderColor = isDarkmode ? COLORS.borderDark : COLORS.borderLight;
+  const dimText = isDarkmode ? COLORS.dimDark : COLORS.dimLight;
+  const dimText2 = isDarkmode ? COLORS.dimDark2 : COLORS.dimLight2;
+
+  // --- Form State (DO NOT CHANGE) ---
   const [goal, setGoal] = useState("");
   const [difficulty, setDifficulty] = useState<"easy" | "moderate" | "hard">(
     "easy"
@@ -65,15 +88,16 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     "Fri",
   ]);
   const [sessionLength, setSessionLength] = useState("20");
-
   const [height, setHeight] = useState("");
   const [weight, setWeight] = useState("");
 
+  // --- Loading / Refresh (DO NOT CHANGE) ---
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // --- Save (DO NOT CHANGE) ---
   const [saving, setSaving] = useState(false);
 
-  // --- Load Data Function ---
   const loadData = useCallback(async () => {
     const user = auth.currentUser;
     if (!user) {
@@ -81,11 +105,13 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
       return;
     }
 
-    const ref = doc(db, "WorkoutPreference", user.uid);
     try {
+      const ref = doc(db, "WorkoutPreference", user.uid);
       const snap = await getDoc(ref);
+
       if (snap.exists()) {
         const data = snap.data() as any;
+
         setGoal(data.goal || "");
         setDifficulty(data.difficulty || "easy");
         setSelectedDays(data.workoutDays || ["Mon", "Wed", "Fri"]);
@@ -103,7 +129,6 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
     }
   }, [auth.currentUser, db]);
 
-  // Initial Load
   useEffect(() => {
     loadData();
   }, [loadData]);
@@ -127,11 +152,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
 
   const handleDifficultyChange = (level: "easy" | "moderate" | "hard") => {
     setDifficulty(level);
-    // Auto-update duration suggestion
     setSessionLength(String(recommendMinutes(level)));
   };
 
-  // Real-time BMI
   const bmiStats = useMemo(() => {
     const h = parseFloat(height);
     const w = parseFloat(weight);
@@ -213,6 +236,7 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
         },
         { merge: true }
       );
+
       Alert.alert("Saved", "Your fitness profile has been updated.");
       navigation.goBack();
     } catch (err: any) {
@@ -249,19 +273,34 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
         />
 
         {loading ? (
-          <View style={styles.center}>
-            <Text>Loading profile...</Text>
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: bg,
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <ActivityIndicator size="large" color={FITNESS_COLOR} />
+            <Text style={{ marginTop: 10, opacity: 0.7 }}>Loading...</Text>
           </View>
         ) : (
           <ScrollView
-            style={styles.scroll}
-            contentContainerStyle={{ paddingBottom: 32 }}
+            style={{ flex: 1, backgroundColor: bg }}
+            contentContainerStyle={{
+              paddingHorizontal: 14,
+              paddingTop: 12,
+              paddingBottom: 32,
+            }}
             refreshControl={
               <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
             }
+            showsVerticalScrollIndicator={false}
           >
             {/* 1) About You (Blue) */}
-            <Section style={styles.card}>
+            <Section
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
+            >
               <View style={styles.sectionTitleRow}>
                 <Ionicons
                   name="body"
@@ -274,13 +313,16 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 </Text>
               </View>
 
-              <Text style={styles.subtext}>
+              {/* ✅ FIX: no style array on rapi-ui Text */}
+              <Text style={{ ...styles.subtext, color: dimText }}>
                 Optional, but improves BMI & future personalisation.
               </Text>
 
               <View style={styles.row}>
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Height (cm)</Text>
+                  <Text style={{ ...styles.label, color: dimText }}>
+                    Height (cm)
+                  </Text>
                   <TextInput
                     placeholder="175"
                     keyboardType="numeric"
@@ -288,8 +330,11 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                     onChangeText={(v) => setHeight(v.replace(/[^\d.]/g, ""))}
                   />
                 </View>
+
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.label}>Weight (kg)</Text>
+                  <Text style={{ ...styles.label, color: dimText }}>
+                    Weight (kg)
+                  </Text>
                   <TextInput
                     placeholder="70"
                     keyboardType="numeric"
@@ -303,16 +348,26 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 <View
                   style={[
                     styles.bmiContainer,
-                    { backgroundColor: isDarkmode ? "#1f2937" : "#f0f9ff" },
+                    {
+                      backgroundColor: isDarkmode
+                        ? "rgba(255,255,255,0.03)"
+                        : "rgba(0,0,0,0.03)",
+                      borderColor: isDarkmode
+                        ? "rgba(255,255,255,0.08)"
+                        : "rgba(0,0,0,0.08)",
+                    },
                   ]}
                 >
-                  <Text style={{ fontSize: 13, opacity: 0.8 }}>
+                  <Text style={{ fontSize: 13, color: dimText }}>
                     Estimated BMI
                   </Text>
                   <Text
-                    size="h2"
                     fontWeight="bold"
-                    style={{ color: bmiStats.color, marginVertical: 2 }}
+                    style={{
+                      color: bmiStats.color,
+                      marginVertical: 2,
+                      fontSize: 26,
+                    }}
                   >
                     {bmiStats.score}
                   </Text>
@@ -324,7 +379,9 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
             </Section>
 
             {/* 2) Goal (Purple) */}
-            <Section style={styles.card}>
+            <Section
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
+            >
               <View style={styles.sectionTitleRow}>
                 <Ionicons
                   name="trophy"
@@ -349,40 +406,50 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   "Muscle Gain",
                   "Better Stamina",
                   "Stay Active",
-                ].map((g) => (
-                  <TouchableOpacity
-                    key={g}
-                    style={[
-                      styles.chip,
-                      {
-                        borderColor: goal === g ? COLOR_GOAL : "transparent",
-                        borderWidth: 1,
-                        backgroundColor:
-                          goal === g
+                ].map((g) => {
+                  const active = goal === g;
+                  return (
+                    <TouchableOpacity
+                      key={g}
+                      style={[
+                        styles.goalChip,
+                        {
+                          borderColor: active
+                            ? COLOR_GOAL
+                            : isDarkmode
+                            ? "rgba(255,255,255,0.10)"
+                            : "rgba(0,0,0,0.10)",
+                          backgroundColor: active
                             ? isDarkmode
-                              ? "rgba(139, 92, 246, 0.2)"
-                              : "#F3E8FF"
-                            : "rgba(150,150,150,0.1)",
-                      },
-                    ]}
-                    onPress={() => setGoal(g)}
-                  >
-                    <Text
-                      size="sm"
-                      style={{
-                        color: goal === g ? COLOR_GOAL : undefined,
-                        fontWeight: goal === g ? "bold" : "normal",
-                      }}
+                              ? "rgba(139, 92, 246, 0.16)"
+                              : "rgba(139, 92, 246, 0.10)"
+                            : isDarkmode
+                            ? "rgba(255,255,255,0.03)"
+                            : "rgba(0,0,0,0.03)",
+                        },
+                      ]}
+                      onPress={() => setGoal(g)}
+                      activeOpacity={0.9}
                     >
-                      {g}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: "900",
+                          color: active ? COLOR_GOAL : dimText,
+                        }}
+                      >
+                        {g}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
               </View>
             </Section>
 
             {/* 3) Intensity (Orange) */}
-            <Section style={styles.card}>
+            <Section
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
+            >
               <View style={styles.sectionTitleRow}>
                 <Ionicons
                   name="speedometer"
@@ -395,26 +462,15 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 </Text>
               </View>
 
-              <View style={styles.radioContainer}>
+              <Text style={{ ...styles.subtext, color: dimText }}>
+                Auto-suggests session duration.
+              </Text>
+
+              <View style={{ flexDirection: "row", gap: 10 } as any}>
                 {[
-                  {
-                    label: "Beginner",
-                    val: "easy",
-                    desc: "Light (~20m)",
-                    time: 20,
-                  },
-                  {
-                    label: "Balanced",
-                    val: "moderate",
-                    desc: "Sweat (~30m)",
-                    time: 30,
-                  },
-                  {
-                    label: "Intense",
-                    val: "hard",
-                    desc: "Push (~45m)",
-                    time: 45,
-                  },
+                  { label: "Beginner", val: "easy", desc: "Light (~20m)" },
+                  { label: "Balanced", val: "moderate", desc: "Sweat (~30m)" },
+                  { label: "Intense", val: "hard", desc: "Push (~45m)" },
                 ].map((opt) => {
                   const active = difficulty === opt.val;
                   return (
@@ -423,39 +479,32 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                       style={[
                         styles.radioBtn,
                         {
-                          borderColor: active
-                            ? COLOR_INTENSITY
+                          borderColor: active ? COLOR_INTENSITY : borderColor,
+                          backgroundColor: active
+                            ? isDarkmode
+                              ? "rgba(249, 115, 22, 0.15)"
+                              : "#FFF7ED"
                             : isDarkmode
-                            ? "#374151"
-                            : "#e2e8f0",
-                        },
-                        active && {
-                          backgroundColor: isDarkmode
-                            ? "rgba(249, 115, 22, 0.15)"
-                            : "#FFF7ED",
+                            ? "rgba(255,255,255,0.02)"
+                            : "rgba(0,0,0,0.02)",
                         },
                       ]}
-                      onPress={() =>
-                        handleDifficultyChange(
-                          opt.val as "easy" | "moderate" | "hard"
-                        )
-                      }
+                      onPress={() => handleDifficultyChange(opt.val as any)}
+                      activeOpacity={0.9}
                     >
                       <Text
                         style={{
-                          color: active ? COLOR_INTENSITY : undefined,
-                          fontWeight: active ? "bold" : "normal",
+                          color: active ? COLOR_INTENSITY : dimText,
+                          fontWeight: "900",
                         }}
                       >
                         {opt.label}
                       </Text>
                       <Text
-                        size="sm"
                         style={{
-                          opacity: active ? 1 : 0.6,
-                          fontSize: 10,
-                          marginTop: 2,
-                          color: active ? COLOR_INTENSITY : undefined,
+                          fontSize: 11,
+                          marginTop: 4,
+                          color: active ? COLOR_INTENSITY : dimText2,
                         }}
                       >
                         {opt.desc}
@@ -464,10 +513,26 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   );
                 })}
               </View>
+
+              <View style={{ marginTop: 12 }}>
+                <Text style={{ ...styles.label, color: dimText }}>
+                  Duration (minutes)
+                </Text>
+                <TextInput
+                  value={sessionLength}
+                  onChangeText={(v) =>
+                    setSessionLength(v.replace(/[^\d]/g, ""))
+                  }
+                  keyboardType="numeric"
+                  placeholder="20"
+                />
+              </View>
             </Section>
 
             {/* 4) Schedule (Emerald) */}
-            <Section style={styles.card}>
+            <Section
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
+            >
               <View style={styles.sectionTitleRow}>
                 <Ionicons
                   name="calendar"
@@ -480,40 +545,53 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                 </Text>
               </View>
 
-              <Text style={styles.label}>Weekly Frequency</Text>
-              <View style={{ flexDirection: "row", gap: 8, marginBottom: 16 }}>
-                <TouchableOpacity
-                  onPress={() => applyPresetSchedule("light")}
-                  style={[
-                    styles.quickBtn,
-                    { backgroundColor: isDarkmode ? "#1f2937" : "#f3f4f6" },
-                  ]}
-                >
-                  <Text style={{ fontSize: 12 }}>Light (2x)</Text>
-                </TouchableOpacity>
+              <Text style={{ ...styles.label, color: dimText }}>
+                Weekly Frequency
+              </Text>
 
-                <TouchableOpacity
-                  onPress={() => applyPresetSchedule("standard")}
-                  style={[
-                    styles.quickBtn,
-                    { backgroundColor: isDarkmode ? "#1f2937" : "#f3f4f6" },
-                  ]}
-                >
-                  <Text style={{ fontSize: 12 }}>Standard (3x)</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  onPress={() => applyPresetSchedule("active")}
-                  style={[
-                    styles.quickBtn,
-                    { backgroundColor: isDarkmode ? "#1f2937" : "#f3f4f6" },
-                  ]}
-                >
-                  <Text style={{ fontSize: 12 }}>Active (5x)</Text>
-                </TouchableOpacity>
+              <View
+                style={
+                  { flexDirection: "row", gap: 8, marginBottom: 16 } as any
+                }
+              >
+                {[
+                  { k: "light", t: "Light (2x)" },
+                  { k: "standard", t: "Standard (3x)" },
+                  { k: "active", t: "Active (5x)" },
+                ].map((p) => (
+                  <TouchableOpacity
+                    key={p.k}
+                    onPress={() => applyPresetSchedule(p.k as any)}
+                    style={[
+                      styles.quickBtn,
+                      {
+                        backgroundColor: isDarkmode
+                          ? "rgba(255,255,255,0.03)"
+                          : "rgba(0,0,0,0.03)",
+                        borderColor: isDarkmode
+                          ? "rgba(255,255,255,0.10)"
+                          : "rgba(0,0,0,0.10)",
+                      },
+                    ]}
+                    activeOpacity={0.9}
+                  >
+                    <Text
+                      style={{
+                        fontSize: 12,
+                        color: dimText,
+                        fontWeight: "900",
+                      }}
+                    >
+                      {p.t}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
               </View>
 
-              <Text style={styles.label}>Customize Days</Text>
+              <Text style={{ ...styles.label, color: dimText }}>
+                Customize Days
+              </Text>
+
               <View style={styles.chipContainer}>
                 {WEEK_DAYS.map((day) => {
                   const active = selectedDays.includes(day);
@@ -527,15 +605,20 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                           backgroundColor: active
                             ? COLOR_SCHEDULE
                             : "transparent",
-                          borderColor: active ? COLOR_SCHEDULE : "#cbd5e1",
+                          borderColor: active
+                            ? COLOR_SCHEDULE
+                            : isDarkmode
+                            ? "rgba(255,255,255,0.10)"
+                            : "rgba(0,0,0,0.10)",
                         },
                       ]}
+                      activeOpacity={0.9}
                     >
                       <Text
                         style={{
-                          fontSize: 10, // Smaller Font
-                          color: active ? "#fff" : isDarkmode ? "#fff" : "#000",
-                          fontWeight: active ? "bold" : "normal", // ✅ move into style
+                          fontSize: 10,
+                          color: active ? "#fff" : dimText,
+                          fontWeight: "900",
                         }}
                       >
                         {day}
@@ -544,31 +627,21 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
                   );
                 })}
               </View>
-
-              <Text style={{ ...styles.label, marginTop: 16 }}>
-                Duration (minutes)
-              </Text>
-
-              <TextInput
-                value={sessionLength}
-                onChangeText={(v) => setSessionLength(v.replace(/[^\d]/g, ""))}
-                keyboardType="numeric"
-                placeholder="20"
-                style={{ width: 120 }}
-              />
-
-              <Text style={{ fontSize: 11, opacity: 0.6, marginTop: 10 }}>
-                Tip: The duration above updated automatically based on your
-                chosen intensity, but you can override it here.
-              </Text>
             </Section>
 
             <Button
               text={saving ? "Saving Profile..." : "Save Profile"}
               onPress={onSave}
-              style={{ marginHorizontal: 16, marginTop: 8 }}
+              style={{ marginTop: 8 }}
               color={FITNESS_COLOR}
               disabled={saving}
+              rightContent={
+                saving ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="checkmark" size={18} color="#fff" />
+                )
+              }
             />
           </ScrollView>
         )}
@@ -578,60 +651,81 @@ export default function WorkoutPreferenceScreen({ navigation }: Props) {
 }
 
 const styles = StyleSheet.create({
-  scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 12 },
-  center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  card: { borderRadius: 16, marginBottom: 16, padding: 16 },
+  card: {
+    borderRadius: 20,
+    marginBottom: 12,
+    padding: 14,
+    borderWidth: 1,
+  },
+
   sectionTitleRow: {
     flexDirection: "row",
     alignItems: "center",
     marginBottom: 10,
   },
-  subtext: { fontSize: 12, opacity: 0.6, marginBottom: 12 },
+
+  subtext: {
+    fontSize: 12,
+    opacity: 0.9,
+    marginBottom: 12,
+  },
+
   row: { flexDirection: "row", gap: 12 } as any,
-  label: { fontSize: 12, fontWeight: "600", marginBottom: 4, opacity: 0.8 },
+
+  label: {
+    fontSize: 12,
+    fontWeight: "900",
+    marginBottom: 6,
+    opacity: 0.9,
+  },
+
   bmiContainer: {
-    marginTop: 16,
+    marginTop: 14,
     padding: 12,
-    borderRadius: 12,
+    borderRadius: 16,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: "transparent",
   },
+
   chipContainer: {
     flexDirection: "row",
     flexWrap: "wrap",
-    gap: 8,
+    gap: 10,
     marginTop: 8,
   } as any,
-  chip: {
+
+  goalChip: {
     paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: 20,
-    backgroundColor: "rgba(150,150,150,0.1)",
-  },
-  dayChip: {
-    width: 36, // Smaller circle
-    height: 36,
-    borderRadius: 18,
-    alignItems: "center",
-    justifyContent: "center",
+    paddingVertical: 8,
+    borderRadius: 999,
     borderWidth: 1,
   },
-  radioContainer: { flexDirection: "row", gap: 8 } as any,
+
   radioBtn: {
     flex: 1,
+    borderRadius: 16,
     paddingVertical: 12,
-    paddingHorizontal: 4,
-    borderRadius: 12,
+    paddingHorizontal: 6,
     borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
   },
-  quickBtn: {
-    flex: 1,
-    borderRadius: 8,
-    paddingVertical: 10,
+
+  dayChip: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
     alignItems: "center",
     justifyContent: "center",
+  },
+
+  quickBtn: {
+    flex: 1,
+    borderRadius: 16,
+    paddingVertical: 12,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
   } as any,
 });
