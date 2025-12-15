@@ -1,4 +1,10 @@
-import React, { useEffect, useState, useMemo, useCallback } from "react";
+import React, {
+  useEffect,
+  useState,
+  useMemo,
+  useCallback,
+  useRef,
+} from "react";
 import {
   View,
   StyleSheet,
@@ -6,6 +12,7 @@ import {
   Dimensions,
   ActivityIndicator,
   RefreshControl,
+  TouchableOpacity,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -16,7 +23,6 @@ import {
   useTheme,
   themeColor,
   Section,
-  Button,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { getAuth } from "firebase/auth";
@@ -44,12 +50,29 @@ type DayStat = {
 
 const screenWidth = Dimensions.get("window").width;
 
-// --- Vibrant Palette ---
-const COLOR_ACTIVE = "#3B82F6"; // Blue
-const COLOR_WORKOUT = "#8B5CF6"; // Purple
-const COLOR_MEAL = "#F97316"; // Orange
-const COLOR_WATER = "#0EA5E9"; // Sky Blue
-const COLOR_TIP = "#F59E0B"; // Amber
+// --- Theme ---
+const COLORS = {
+  bgDark: "#050B14",
+  cardDark: "#0B1220",
+  borderDark: "#111827",
+  dimDark: "rgba(255,255,255,0.55)",
+  dimDark2: "rgba(255,255,255,0.38)",
+
+  bgLight: "#F7F8FA",
+  cardLight: "#FFFFFF",
+  borderLight: "#E5E7EB",
+  dimLight: "rgba(0,0,0,0.55)",
+  dimLight2: "rgba(0,0,0,0.38)",
+};
+
+const ACCENT = {
+  active: "#3B82F6",
+  workout: "#8B5CF6",
+  meal: "#F97316",
+  water: "#06B6D4",
+  warn: "#F59E0B",
+  good: "#22C55E",
+};
 
 function last7Days(): DayStat[] {
   const days: DayStat[] = [];
@@ -69,24 +92,50 @@ function last7Days(): DayStat[] {
   return days;
 }
 
+const toDate = (yyyyMmDd: string) => new Date(`${yyyyMmDd}T00:00:00`);
+const clamp01 = (n: number) => Math.min(1, Math.max(0, n));
+
+const fmtRange = (start: string, end: string) => {
+  const s = toDate(start);
+  const e = toDate(end);
+  const sTxt = s.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  const eTxt = e.toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+  });
+  return `${sTxt} – ${eTxt}`;
+};
+
 export default function WeeklySummaryScreen({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const auth = getAuth();
   const db = getFirestore();
 
+  const bg = isDarkmode ? COLORS.bgDark : COLORS.bgLight;
+  const cardBg = isDarkmode ? COLORS.cardDark : COLORS.cardLight;
+  const borderColor = isDarkmode ? COLORS.borderDark : COLORS.borderLight;
+  const dimText = isDarkmode ? COLORS.dimDark : COLORS.dimLight;
+  const dimText2 = isDarkmode ? COLORS.dimDark2 : COLORS.dimLight2;
+
   const [stats, setStats] = useState<DayStat[]>(last7Days());
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  // --- Data Loading Logic ---
+  const unsubRef = useRef<null | (() => void)>(null);
+
   const loadData = useCallback(() => {
     const user = auth.currentUser;
     if (!user) {
       setLoading(false);
+      setRefreshing(false);
       return () => {};
     }
 
     const base = last7Days();
+
     const startWindow = new Date();
     startWindow.setDate(startWindow.getDate() - 6);
     startWindow.setHours(0, 0, 0, 0);
@@ -101,14 +150,15 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
         workouts: workoutAgg[d.fullDate]?.workouts || 0,
         workoutMinutes: workoutAgg[d.fullDate]?.minutes || 0,
         meals: mealAgg[d.fullDate]?.meals || 0,
-        waterMl: mealAgg[d.fullDate]?.waterMl || 0,
+        waterMl: mealAgg[d.fullDate]?.waterMl || 0, // ✅ water comes from MealEntry like your menu
       }));
+
       setStats(merged);
       setLoading(false);
       setRefreshing(false);
     };
 
-    // 1. Workouts Query
+    // --- Workouts (same as menu) ---
     const workoutQ = query(
       collection(db, "WorkoutSession"),
       where("userId", "==", user.uid),
@@ -120,13 +170,12 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       workoutAgg = {};
       wSnap.forEach((doc) => {
         const data: any = doc.data();
-        if (data.status !== "completed" || !data.createdAtClient?.toDate)
-          return;
+        if (data.status !== "completed") return;
 
-        const dateStr = data.createdAtClient
-          .toDate()
-          .toISOString()
-          .slice(0, 10);
+        const ts = data.createdAtClient?.toDate?.();
+        if (!ts) return;
+
+        const dateStr = ts.toISOString().slice(0, 10);
         const mins =
           typeof data.actualDurationSec === "number"
             ? Math.round(data.actualDurationSec / 60)
@@ -140,7 +189,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       recompute();
     });
 
-    // 2. Meals Query
+    // --- Meals + Water (✅ from MealEntry, matches your Quick Water button) ---
     const mealQ = query(
       collection(db, "MealEntry"),
       where("userId", "==", user.uid),
@@ -152,14 +201,26 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       mealAgg = {};
       mSnap.forEach((doc) => {
         const data: any = doc.data();
-        if (!data.mealTimeClient?.toDate) return;
 
-        const dateStr = data.mealTimeClient.toDate().toISOString().slice(0, 10);
+        const ts =
+          data.mealTimeClient?.toDate?.() ||
+          data.createdAtClient?.toDate?.() ||
+          data.createdAt?.toDate?.();
+
+        if (!ts) return;
+
+        const dateStr = ts.toISOString().slice(0, 10);
         if (!mealAgg[dateStr]) mealAgg[dateStr] = { meals: 0, waterMl: 0 };
 
-        if (data.isWater) {
-          mealAgg[dateStr].waterMl +=
-            typeof data.volumeMl === "number" ? data.volumeMl : 0;
+        const isWater =
+          data.isWater === true ||
+          data.mealType === "water" ||
+          data.type === "water";
+
+        if (isWater) {
+          // ✅ FitnessMenu writes "volumeMl"
+          const ml = Number(data.volumeMl ?? data.waterMl ?? data.ml ?? 0) || 0;
+          mealAgg[dateStr].waterMl += ml;
         } else {
           mealAgg[dateStr].meals += 1;
         }
@@ -171,66 +232,286 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       unsubWorkouts();
       unsubMeals();
     };
-  }, []);
+  }, [auth.currentUser, db]);
 
   useEffect(() => {
     setLoading(true);
-    const unsub = loadData();
-    return unsub;
+    unsubRef.current?.();
+    unsubRef.current = loadData();
+
+    return () => {
+      unsubRef.current?.();
+      unsubRef.current = null;
+    };
   }, [loadData]);
 
   const onRefresh = () => {
     setRefreshing(true);
-    setTimeout(() => setRefreshing(false), 800);
+    setLoading(true);
+    unsubRef.current?.();
+    unsubRef.current = loadData();
   };
 
-  // --- Derived Data ---
+  // --- Derived ---
   const labels = stats.map((d) => d.label);
-  const dataMinutes = stats.map((d) => d.workoutMinutes);
-  const dataMeals = stats.map((d) => d.meals);
-  const dataWaterCups = stats.map((d) => Math.round(d.waterMl / 250));
+  const minutesArr = stats.map((d) => d.workoutMinutes);
+  const mealsArr = stats.map((d) => d.meals);
+  const waterCupsArr = stats.map((d) => Math.round(d.waterMl / 250));
 
-  const totalMinutes = dataMinutes.reduce((a, b) => a + b, 0);
+  const totalMinutes = minutesArr.reduce((a, b) => a + b, 0);
   const totalWorkouts = stats.reduce((a, b) => a + b.workouts, 0);
-  const totalMeals = dataMeals.reduce((a, b) => a + b, 0);
+  const totalMeals = mealsArr.reduce((a, b) => a + b, 0);
   const totalWaterMl = stats.reduce((a, b) => a + b.waterMl, 0);
-  const dailyAvgMinutes = Math.round(totalMinutes / 7);
 
-  const bestDay = useMemo(() => {
-    if (totalMinutes === 0) return "None";
-    const max = Math.max(...dataMinutes);
-    const idx = dataMinutes.indexOf(max);
-    return stats[idx]?.label || "-";
-  }, [dataMinutes, totalMinutes, stats]);
+  const avgMinutes = Math.round(totalMinutes / 7);
+  const avgCups = Math.round(totalWaterMl / 250 / 7);
 
-  // --- Chart Helpers ---
+  const workoutDays = stats.filter((d) => d.workouts > 0).length;
+  const mealDays = stats.filter((d) => d.meals > 0).length;
 
-  // Calculate max segments dynamically to avoid repeated integers on Y-axis
-  const getMaxSegments = (dataArray: number[]) => {
-    const maxVal = Math.max(...dataArray, 1); // ensure at least 1
-    // If max value is small (e.g. 3), use 3 segments (0, 1, 2, 3)
-    // If max value is large, cap it at 4 segments for cleanliness
+  const WATER_GOAL_CUPS = 8;
+  const waterGoalDays = waterCupsArr.filter((c) => c >= WATER_GOAL_CUPS).length;
+
+  const bestIdx = (arr: number[]) => {
+    let best = 0;
+    for (let i = 0; i < arr.length; i++) if (arr[i] > arr[best]) best = i;
+    return best;
+  };
+
+  const bestMinuteDayIdx = useMemo(() => bestIdx(minutesArr), [minutesArr]);
+  const bestMealDayIdx = useMemo(() => bestIdx(mealsArr), [mealsArr]);
+  const bestWaterDayIdx = useMemo(() => bestIdx(waterCupsArr), [waterCupsArr]);
+
+  const rangeText = useMemo(() => {
+    if (!stats.length) return "Last 7 days";
+    return fmtRange(stats[0].fullDate, stats[stats.length - 1].fullDate);
+  }, [stats]);
+
+  const insights = useMemo(() => {
+    const lines: { icon: any; color: string; text: string }[] = [];
+
+    if (totalWorkouts === 0) {
+      lines.push({
+        icon: "fitness",
+        color: ACCENT.workout,
+        text: "No workouts this week. Start with a short session (5–10 min) to build momentum.",
+      });
+    } else if (workoutDays < 3) {
+      lines.push({
+        icon: "trending-up",
+        color: ACCENT.workout,
+        text: `You trained ${workoutDays}/7 days. Aim for 3–4 days/week for a strong baseline.`,
+      });
+    } else {
+      lines.push({
+        icon: "trophy",
+        color: ACCENT.good,
+        text: `Great consistency: ${workoutDays}/7 days trained. Keep recovery balanced.`,
+      });
+    }
+
+    if (totalWaterMl === 0) {
+      lines.push({
+        icon: "water",
+        color: ACCENT.water,
+        text: "No water logged this week. Tap Quick Water to start tracking hydration.",
+      });
+    } else if (avgCups < WATER_GOAL_CUPS) {
+      lines.push({
+        icon: "water-outline",
+        color: ACCENT.water,
+        text: `Hydration average ~${avgCups} cups/day. Add 1–2 cups around lunch.`,
+      });
+    } else {
+      lines.push({
+        icon: "shield-checkmark",
+        color: ACCENT.good,
+        text: `Hydration is strong: ~${avgCups} cups/day. Nice consistency.`,
+      });
+    }
+
+    if (totalMeals === 0) {
+      lines.push({
+        icon: "restaurant",
+        color: ACCENT.meal,
+        text: "No meals logged. Log meals with a photo + dish name to build awareness.",
+      });
+    } else if (mealDays < 4) {
+      lines.push({
+        icon: "camera",
+        color: ACCENT.meal,
+        text: `Meals logged on ${mealDays}/7 days. Try 1 meal/day for better tracking.`,
+      });
+    } else {
+      lines.push({
+        icon: "sparkles",
+        color: ACCENT.good,
+        text: `Meal logging is consistent (${mealDays}/7 days). Keep it simple.`,
+      });
+    }
+
+    return lines.slice(0, 3);
+  }, [totalWorkouts, workoutDays, totalWaterMl, avgCups, totalMeals, mealDays]);
+
+  const getMaxSegments = (arr: number[]) => {
+    const maxVal = Math.max(...arr, 1);
     return maxVal < 5 ? maxVal : 4;
   };
 
-  const getChartConfig = (colorHex: string) => ({
-    backgroundGradientFrom: isDarkmode ? "#1F2937" : "#ffffff",
-    backgroundGradientTo: isDarkmode ? "#1F2937" : "#ffffff",
-    fillShadowGradientFrom: colorHex,
-    fillShadowGradientTo: colorHex,
+  const chartConfig = (colorHex: string) => ({
+    backgroundGradientFrom: cardBg,
+    backgroundGradientTo: cardBg,
     decimalPlaces: 0,
-    color: (opacity = 1) => colorHex,
-    labelColor: (opacity = 1) =>
-      isDarkmode ? `rgba(255,255,255,${opacity})` : `rgba(0,0,0,0.5)`,
-    style: { borderRadius: 16 },
+    color: () => colorHex,
+    labelColor: () =>
+      isDarkmode ? `rgba(255,255,255,0.75)` : `rgba(17,24,39,0.55)`,
     propsForDots: { r: "4", strokeWidth: "2", stroke: colorHex },
-    barPercentage: 0.6,
+    propsForBackgroundLines: {
+      stroke: isDarkmode ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)",
+    },
+    barPercentage: 0.62,
+    style: { borderRadius: 18 },
   });
+
+  const StatCard = ({
+    icon,
+    title,
+    value,
+    subtitle,
+    color,
+  }: {
+    icon: any;
+    title: string;
+    value: string;
+    subtitle: string;
+    color: string;
+  }) => (
+    <View style={[styles.statCard, { backgroundColor: cardBg, borderColor }]}>
+      <View
+        style={[
+          styles.statIcon,
+          {
+            backgroundColor: isDarkmode
+              ? "rgba(255,255,255,0.05)"
+              : "rgba(0,0,0,0.04)",
+          },
+        ]}
+      >
+        <Ionicons name={icon} size={18} color={color} />
+      </View>
+      <Text style={{ color: dimText, fontSize: 12, marginTop: 10 }}>
+        {title}
+      </Text>
+      <Text style={{ fontSize: 20, fontWeight: "900", marginTop: 4 }}>
+        {value}
+      </Text>
+      <Text style={{ color: dimText2, fontSize: 12, marginTop: 2 }}>
+        {subtitle}
+      </Text>
+    </View>
+  );
+
+  const ProgressRow = ({
+    label,
+    valueText,
+    ratio,
+    color,
+  }: {
+    label: string;
+    valueText: string;
+    ratio: number;
+    color: string;
+  }) => (
+    <View style={{ marginTop: 12 }}>
+      <View style={styles.progressTopRow}>
+        <Text style={{ fontWeight: "900" }}>{label}</Text>
+        <Text style={{ color: dimText, fontSize: 12 }}>{valueText}</Text>
+      </View>
+      <View
+        style={[
+          styles.progressTrack,
+          {
+            backgroundColor: isDarkmode
+              ? "rgba(255,255,255,0.06)"
+              : "rgba(0,0,0,0.06)",
+          },
+        ]}
+      >
+        <View
+          style={[
+            styles.progressFill,
+            {
+              width: `${Math.round(clamp01(ratio) * 100)}%`,
+              backgroundColor: color,
+            },
+          ]}
+        />
+      </View>
+    </View>
+  );
+
+  const ChartCard = ({
+    icon,
+    title,
+    subtitle,
+    children,
+  }: {
+    icon: any;
+    title: string;
+    subtitle: string;
+    children: React.ReactNode;
+  }) => (
+    <View style={[styles.card, { backgroundColor: cardBg, borderColor }]}>
+      <View style={styles.cardHeader}>
+        <View
+          style={{ flexDirection: "row", alignItems: "center", gap: 10 } as any}
+        >
+          <View
+            style={[
+              styles.headerIcon,
+              {
+                backgroundColor: isDarkmode
+                  ? "rgba(255,255,255,0.05)"
+                  : "rgba(0,0,0,0.04)",
+              },
+            ]}
+          >
+            <Ionicons name={icon} size={18} color={ACCENT.active} />
+          </View>
+          <View>
+            <Text style={{ fontWeight: "900" }}>{title}</Text>
+            <Text style={{ fontSize: 12, color: dimText, marginTop: 2 }}>
+              {subtitle}
+            </Text>
+          </View>
+        </View>
+      </View>
+      <View style={{ marginTop: 10 }}>{children}</View>
+    </View>
+  );
+
+  const EmptyState = ({ text }: { text: string }) => (
+    <View
+      style={[
+        styles.emptyBox,
+        {
+          borderColor: isDarkmode
+            ? "rgba(255,255,255,0.08)"
+            : "rgba(0,0,0,0.08)",
+          backgroundColor: isDarkmode
+            ? "rgba(255,255,255,0.03)"
+            : "rgba(0,0,0,0.03)",
+        },
+      ]}
+    >
+      <Text style={{ color: dimText, textAlign: "center" }}>{text}</Text>
+    </View>
+  );
 
   return (
     <Layout>
       <TopNav
-        middleContent="Weekly Trends"
+        middleContent="Weekly Summary"
         leftContent={
           <Ionicons
             name="chevron-back"
@@ -250,256 +531,268 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       />
 
       {loading ? (
-        <View style={styles.center}>
-          <ActivityIndicator size="large" color={COLOR_ACTIVE} />
-          <Text style={{ marginTop: 10 }}>Analyzing Data...</Text>
+        <View style={[styles.center, { backgroundColor: bg }]}>
+          <ActivityIndicator size="large" color={ACCENT.active} />
+          <Text style={{ marginTop: 10, opacity: 0.7 }}>
+            Calculating insights...
+          </Text>
         </View>
       ) : (
         <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={{ paddingBottom: 40 }}
+          style={{ flex: 1, backgroundColor: bg }}
+          contentContainerStyle={{ padding: 14, paddingBottom: 40 }}
           showsVerticalScrollIndicator={false}
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} />
           }
         >
-          {/* Header */}
-          <View style={{ marginBottom: 16 }}>
-            <Text size="h3" fontWeight="bold">
-              Last 7 Days
+          <View style={{ marginBottom: 14 }}>
+            <Text style={{ fontSize: 24, fontWeight: "900" }}>Your Week</Text>
+            <Text style={{ color: dimText, marginTop: 6, fontSize: 13 }}>
+              {rangeText}
             </Text>
-            <Text style={{ opacity: 0.5 }}>Your fitness at a glance</Text>
           </View>
 
-          {/* Highlights Row 1 */}
-          <View style={styles.highlightRow}>
-            <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#EFF6FF" },
-              ]}
-            >
-              <Ionicons name="time" size={24} color={COLOR_ACTIVE} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {totalMinutes}m
-              </Text>
-              <Text style={styles.highlightLabel}>Active Time</Text>
-            </View>
-
-            <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#F5F3FF" },
-              ]}
-            >
-              <Ionicons name="barbell" size={24} color={COLOR_WORKOUT} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {totalWorkouts}
-              </Text>
-              <Text style={styles.highlightLabel}>Workouts</Text>
-            </View>
-
-            <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#FFF7ED" },
-              ]}
-            >
-              <Ionicons name="restaurant" size={24} color={COLOR_MEAL} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {totalMeals}
-              </Text>
-              <Text style={styles.highlightLabel}>Meals</Text>
-            </View>
+          <View style={styles.grid}>
+            <StatCard
+              icon="time"
+              title="Active Minutes"
+              value={`${totalMinutes}m`}
+              subtitle={`Avg ${avgMinutes}m/day`}
+              color={ACCENT.active}
+            />
+            <StatCard
+              icon="fitness"
+              title="Workouts"
+              value={`${totalWorkouts}`}
+              subtitle={`${workoutDays}/7 days`}
+              color={ACCENT.workout}
+            />
+            <StatCard
+              icon="restaurant"
+              title="Meals Logged"
+              value={`${totalMeals}`}
+              subtitle={`${mealDays}/7 days`}
+              color={ACCENT.meal}
+            />
+            <StatCard
+              icon="water"
+              title="Hydration"
+              value={`${Math.round(totalWaterMl / 250)} cups`}
+              subtitle={`${waterGoalDays}/7 goal days`}
+              color={ACCENT.water}
+            />
           </View>
 
-          {/* Highlights Row 2 */}
-          <View style={styles.highlightRow}>
+          <Section style={{ marginTop: 12 }}>
             <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#E0F2FE" },
-              ]}
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
             >
-              <Ionicons name="water" size={24} color={COLOR_WATER} />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {totalWaterMl}ml
-              </Text>
-              <Text style={styles.highlightLabel}>Hydration</Text>
-            </View>
-
-            <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#F3F4F6" },
-              ]}
-            >
-              <Ionicons name="trophy" size={24} color="#F59E0B" />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {bestDay}
-              </Text>
-              <Text style={styles.highlightLabel}>Best Day</Text>
-            </View>
-
-            <View
-              style={[
-                styles.highlightCard,
-                { backgroundColor: isDarkmode ? "#1f2937" : "#F3F4F6" },
-              ]}
-            >
-              <Ionicons name="pulse" size={24} color="#10B981" />
-              <Text fontWeight="bold" size="h3" style={{ marginTop: 8 }}>
-                {dailyAvgMinutes}m
-              </Text>
-              <Text style={styles.highlightLabel}>Daily Avg</Text>
-            </View>
-          </View>
-
-          {/* Coach Tip Insight */}
-          <Section style={[styles.tipCard, { borderColor: COLOR_TIP }]}>
-            <View
-              style={{
-                flexDirection: "row",
-                alignItems: "flex-start",
-                gap: 12,
-              }}
-            >
-              <View
-                style={[
-                  styles.tipIconBox,
-                  {
-                    backgroundColor: isDarkmode
-                      ? "rgba(245, 158, 11, 0.2)"
-                      : "#FEF3C7",
-                  },
-                ]}
-              >
-                <Ionicons name="bulb" size={24} color={COLOR_TIP} />
+              <View style={styles.cardHeader}>
+                <View
+                  style={
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    } as any
+                  }
+                >
+                  <View
+                    style={[
+                      styles.headerIcon,
+                      {
+                        backgroundColor: isDarkmode
+                          ? "rgba(255,255,255,0.05)"
+                          : "rgba(0,0,0,0.04)",
+                      },
+                    ]}
+                  >
+                    <Ionicons name="pulse" size={18} color={ACCENT.good} />
+                  </View>
+                  <View>
+                    <Text style={{ fontWeight: "900" }}>Weekly Goals</Text>
+                    <Text
+                      style={{ fontSize: 12, color: dimText, marginTop: 2 }}
+                    >
+                      These show consistency (not just totals)
+                    </Text>
+                  </View>
+                </View>
               </View>
-              <View style={{ flex: 1 }}>
-                <Text fontWeight="bold" style={{ marginBottom: 4 }}>
-                  Weekly Insight
-                </Text>
-                <Text style={{ opacity: 0.8, lineHeight: 20 }}>
-                  {totalWorkouts === 0
-                    ? "Your week is a blank canvas. Even a 5-minute warm-up today counts as a win!"
-                    : totalWorkouts < 3
-                    ? "You've made a start! Try to squeeze in one more quick session to build consistency."
-                    : "You are crushing it! Remember to balance high intensity with good rest and hydration."}
-                </Text>
-              </View>
+
+              <ProgressRow
+                label="Workout consistency"
+                valueText={`${workoutDays}/7 days`}
+                ratio={workoutDays / 7}
+                color={ACCENT.workout}
+              />
+              <ProgressRow
+                label="Meal logging"
+                valueText={`${mealDays}/7 days`}
+                ratio={mealDays / 7}
+                color={ACCENT.meal}
+              />
+              <ProgressRow
+                label="Hydration goal"
+                valueText={`${waterGoalDays}/7 days (≥ 8 cups)`}
+                ratio={waterGoalDays / 7}
+                color={ACCENT.water}
+              />
             </View>
           </Section>
 
-          {/* Chart 1: Activity */}
-          <Section style={styles.chartSection}>
-            <View style={styles.chartHeader}>
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-              >
-                <Ionicons name="analytics" size={20} color={COLOR_ACTIVE} />
-                <Text fontWeight="bold">Activity Trend</Text>
+          <Section style={{ marginTop: 12 }}>
+            <View
+              style={[styles.card, { backgroundColor: cardBg, borderColor }]}
+            >
+              <View style={styles.cardHeader}>
+                <View
+                  style={
+                    {
+                      flexDirection: "row",
+                      alignItems: "center",
+                      gap: 10,
+                    } as any
+                  }
+                >
+                  <View
+                    style={[
+                      styles.headerIcon,
+                      {
+                        backgroundColor: isDarkmode
+                          ? "rgba(255,255,255,0.05)"
+                          : "rgba(0,0,0,0.04)",
+                      },
+                    ]}
+                  >
+                    <Ionicons name="bulb" size={18} color={ACCENT.warn} />
+                  </View>
+                  <View>
+                    <Text style={{ fontWeight: "900" }}>Insights</Text>
+                    <Text
+                      style={{ fontSize: 12, color: dimText, marginTop: 2 }}
+                    >
+                      What your data suggests this week
+                    </Text>
+                  </View>
+                </View>
               </View>
-              <Text style={{ fontSize: 10, opacity: 0.5 }}>MINUTES</Text>
-            </View>
 
-            {totalMinutes === 0 ? (
-              <View style={styles.emptyChart}>
-                <Text style={{ opacity: 0.5 }}>No activity recorded yet.</Text>
-                <Button
-                  text="Start First Workout"
-                  size="sm"
-                  style={{ marginTop: 10 }}
-                  onPress={() => navigation.navigate("WorkoutSession")}
+              {insights.map((it, idx) => (
+                <View key={idx} style={styles.insightRow}>
+                  <Ionicons name={it.icon} size={18} color={it.color} />
+                  <Text
+                    style={{
+                      marginLeft: 10,
+                      color: dimText,
+                      lineHeight: 20,
+                      flex: 1,
+                    }}
+                  >
+                    {it.text}
+                  </Text>
+                </View>
+              ))}
+            </View>
+          </Section>
+
+          <Section style={{ marginTop: 12 }}>
+            <ChartCard
+              icon="bar-chart"
+              title="Active Minutes"
+              subtitle={
+                totalMinutes === 0
+                  ? "Shows workout consistency over the week"
+                  : `Best day: ${labels[bestMinuteDayIdx]} • Avg: ${avgMinutes}m/day`
+              }
+            >
+              {totalMinutes === 0 ? (
+                <EmptyState text="No workouts logged yet. Complete one session to see your trend." />
+              ) : (
+                <LineChart
+                  data={{ labels, datasets: [{ data: minutesArr }] }}
+                  width={screenWidth - 28}
+                  height={220}
+                  yAxisLabel=""
+                  yAxisSuffix=""
+                  fromZero
+                  chartConfig={chartConfig(ACCENT.active)}
+                  bezier
+                  style={{ borderRadius: 18 }}
+                  segments={getMaxSegments(minutesArr)}
+                  withInnerLines
+                  withOuterLines={false}
                 />
-              </View>
-            ) : (
-              <LineChart
-                data={{ labels, datasets: [{ data: dataMinutes }] }}
-                width={screenWidth - 48}
-                height={200}
-                yAxisLabel=""
-                yAxisSuffix=""
-                chartConfig={getChartConfig(COLOR_ACTIVE)}
-                bezier
-                style={{ borderRadius: 12, marginVertical: 8 }}
-                withInnerLines={true}
-                withOuterLines={false}
-              />
-            )}
-          </Section>
+              )}
+            </ChartCard>
 
-          {/* Chart 2: Meals */}
-          <Section style={styles.chartSection}>
-            <View style={styles.chartHeader}>
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-              >
-                <Ionicons name="restaurant" size={20} color={COLOR_MEAL} />
-                <Text fontWeight="bold">Meal Frequency</Text>
-              </View>
-              <Text style={{ fontSize: 10, opacity: 0.5 }}>COUNT</Text>
-            </View>
+            <View style={{ height: 12 }} />
 
-            {totalMeals === 0 ? (
-              <View style={styles.emptyChart}>
-                <Text style={{ opacity: 0.5 }}>No meals logged.</Text>
-                <Button
-                  text="Log a Meal"
-                  size="sm"
-                  status="warning"
-                  style={{ marginTop: 10 }}
-                  onPress={() => navigation.navigate("LogMeal")}
+            <ChartCard
+              icon="restaurant"
+              title="Meal Logging"
+              subtitle={
+                totalMeals === 0
+                  ? "See how consistent your meal logging is"
+                  : `Most logged: ${labels[bestMealDayIdx]} • ${mealDays}/7 days logged`
+              }
+            >
+              {totalMeals === 0 ? (
+                <EmptyState text="No meals logged. Log meals with a photo + dish name to build a habit." />
+              ) : (
+                <BarChart
+                  data={{ labels, datasets: [{ data: mealsArr }] }}
+                  width={screenWidth - 28}
+                  height={220}
+                  yAxisLabel=""
+                  yAxisSuffix=""
+                  fromZero
+                  chartConfig={chartConfig(ACCENT.meal)}
+                  style={{ borderRadius: 18 }}
+                  segments={getMaxSegments(mealsArr)}
+                  showBarTops={false}
+                  withInnerLines
                 />
-              </View>
-            ) : (
-              <BarChart
-                data={{ labels, datasets: [{ data: dataMeals }] }}
-                width={screenWidth - 48}
-                height={200}
-                yAxisLabel=""
-                yAxisSuffix=""
-                segments={getMaxSegments(dataMeals)} // FIX: prevent repeated axis
-                chartConfig={getChartConfig(COLOR_MEAL)}
-                style={{ borderRadius: 12, marginVertical: 8 }}
-                fromZero
-                showBarTops={false}
-                withInnerLines={true}
-              />
-            )}
-          </Section>
+              )}
+            </ChartCard>
 
-          {/* Chart 3: Hydration */}
-          <Section style={styles.chartSection}>
-            <View style={styles.chartHeader}>
-              <View
-                style={{ flexDirection: "row", alignItems: "center", gap: 8 }}
-              >
-                <Ionicons name="water" size={20} color={COLOR_WATER} />
-                <Text fontWeight="bold">Water Intake</Text>
-              </View>
-              <Text style={{ fontSize: 10, opacity: 0.5 }}>CUPS (~250ml)</Text>
-            </View>
+            <View style={{ height: 12 }} />
 
-            {totalWaterMl === 0 ? (
-              <View style={styles.emptyChart}>
-                <Text style={{ opacity: 0.5 }}>No water logged.</Text>
+            <ChartCard
+              icon="water"
+              title="Hydration"
+              subtitle={
+                totalWaterMl === 0
+                  ? "Track cups per day (goal: 8 cups)"
+                  : `Best day: ${labels[bestWaterDayIdx]} • Goal met: ${waterGoalDays}/7 days`
+              }
+            >
+              {totalWaterMl === 0 ? (
+                <EmptyState text="No water logged. Use Quick Water to add 250ml entries." />
+              ) : (
+                <BarChart
+                  data={{ labels, datasets: [{ data: waterCupsArr }] }}
+                  width={screenWidth - 28}
+                  height={220}
+                  yAxisLabel=""
+                  yAxisSuffix=""
+                  fromZero
+                  chartConfig={chartConfig(ACCENT.water)}
+                  style={{ borderRadius: 18 }}
+                  segments={getMaxSegments(waterCupsArr)}
+                  showBarTops={false}
+                  withInnerLines
+                />
+              )}
+
+              <View style={styles.goalHint}>
+                <Ionicons name="flag" size={14} color={dimText2} />
+                <Text style={{ marginLeft: 8, fontSize: 12, color: dimText }}>
+                  Goal: 8 cups/day (≈ 2000ml)
+                </Text>
               </View>
-            ) : (
-              <BarChart
-                data={{ labels, datasets: [{ data: dataWaterCups }] }}
-                width={screenWidth - 48}
-                height={200}
-                yAxisLabel=""
-                yAxisSuffix=""
-                segments={getMaxSegments(dataWaterCups)} // FIX: prevent repeated axis
-                chartConfig={getChartConfig(COLOR_WATER)}
-                style={{ borderRadius: 12, marginVertical: 8 }}
-                fromZero
-                showBarTops={false}
-                withInnerLines={true}
-              />
-            )}
+            </ChartCard>
           </Section>
         </ScrollView>
       )}
@@ -509,69 +802,88 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
 const styles = StyleSheet.create({
   center: { flex: 1, alignItems: "center", justifyContent: "center" },
-  scroll: { flex: 1, paddingHorizontal: 16, paddingTop: 16 },
 
-  highlightRow: {
+  grid: {
     flexDirection: "row",
-    justifyContent: "space-between",
+    flexWrap: "wrap",
     gap: 12,
-    marginBottom: 12,
+  } as any,
+
+  statCard: {
+    width: (screenWidth - 14 * 2 - 12) / 2,
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
   },
-  highlightCard: {
-    flex: 1,
-    borderRadius: 16,
-    paddingVertical: 16,
-    paddingHorizontal: 8,
+  statIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    // Subtle shadow
-    shadowColor: "#000",
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 3,
-    elevation: 1,
-  },
-  highlightLabel: {
-    fontSize: 10,
-    opacity: 0.6,
-    textTransform: "uppercase",
-    marginTop: 2,
-    fontWeight: "600",
   },
 
-  tipCard: {
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-    borderLeftWidth: 4,
-  },
-  tipIconBox: {
-    width: 40,
-    height: 40,
+  card: {
+    borderWidth: 1,
     borderRadius: 20,
-    alignItems: "center",
-    justifyContent: "center",
+    padding: 14,
   },
-
-  chartSection: {
-    borderRadius: 16,
-    padding: 16,
-    marginBottom: 16,
-  },
-  chartHeader: {
+  cardHeader: {
     flexDirection: "row",
     justifyContent: "space-between",
     alignItems: "center",
-    marginBottom: 12,
   },
-  emptyChart: {
-    height: 180,
+  headerIcon: {
+    width: 34,
+    height: 34,
+    borderRadius: 12,
     alignItems: "center",
     justifyContent: "center",
-    backgroundColor: "rgba(0,0,0,0.03)",
-    borderRadius: 12,
+  },
+
+  progressTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 8,
+  },
+  progressTrack: {
+    height: 8,
+    borderRadius: 999,
+    overflow: "hidden",
+  },
+  progressFill: {
+    height: "100%",
+    borderRadius: 999,
+  },
+
+  insightRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    marginTop: 12,
+  },
+
+  emptyBox: {
+    height: 170,
     borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.05)",
-    borderStyle: "dashed",
+    borderRadius: 18,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 14,
+  },
+
+  goalHint: {
+    marginTop: 10,
+    flexDirection: "row",
+    alignItems: "center",
+  },
+
+  backPill: {
+    borderWidth: 1,
+    borderRadius: 18,
+    paddingVertical: 14,
+    paddingHorizontal: 14,
+    flexDirection: "row",
+    alignItems: "center",
   },
 });
