@@ -1,6 +1,9 @@
 // index.js - Local AI + Face proxy server for MemoryBook
-// Caption goal: "human social caption" + grounded + NO 1st/2nd/3rd person pronouns
-// UPDATED: return emoji per post (AI), no score needed
+// ✅ Updated:
+// - Caption can be a bit longer (default 8–20 words, hard cap 20 words)
+// - If user types Draft/Keywords -> AI MUST follow draft topic + draft hashtags first
+// - Fix "shoe detected as human" mood bug: mood uses Python face detection as truth
+// - Keep AI auto caption behavior same when draft is empty
 
 const express = require("express");
 const cors = require("cors");
@@ -17,7 +20,9 @@ const {
 
 const app = express();
 app.use(cors());
-app.use(bodyParser.json({ limit: "20mb" }));
+
+// ✅ If you send multiple images/thumbs, base64 can be big
+app.use(bodyParser.json({ limit: "50mb" }));
 
 app.get("/health", (req, res) => {
   res.json({ ok: true, message: "ai server alive" });
@@ -35,6 +40,33 @@ const OLLAMA_VISION_MODEL =
   process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
+// ✅ base64 normalizer
+// -------------------------
+function normalizeBase64Image(input) {
+  if (!input) return "";
+  let s = String(input).trim();
+  if (!s) return "";
+
+  // data URL -> strip header
+  const comma = s.indexOf(",");
+  if (s.startsWith("data:") && comma !== -1) {
+    s = s.slice(comma + 1);
+  }
+
+  // remove whitespace/newlines
+  s = s.replace(/\s+/g, "").trim();
+
+  // light sanity
+  if (s.length < 64) return "";
+  return s;
+}
+
+function normalizeBase64List(list) {
+  const arr = Array.isArray(list) ? list : [];
+  return arr.map(normalizeBase64Image).filter(Boolean);
+}
+
+// -------------------------
 // Small helpers
 // -------------------------
 function clamp(n, min, max) {
@@ -50,6 +82,7 @@ function countWords(str) {
     .filter(Boolean).length;
 }
 
+// ✅ Caption length: a bit longer now
 function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
@@ -57,7 +90,7 @@ function normalizeCaptionLength(caption, captionDraft) {
   result = result.replace(/\s+/g, " ").trim();
   const words = countWords(result);
 
-  const MAX_WORDS = 14;
+  const MAX_WORDS = 20; // ✅ was 14
   if (words <= MAX_WORDS) return result;
 
   const tokens = result.split(/\s+/);
@@ -103,7 +136,7 @@ function safeJsonParse(raw, fallback = null) {
   }
 }
 
-// ✅ Emoji mapping (used by client + mood calendar)
+// ✅ Emoji mapping
 function emojiFromMoodLabel(label) {
   const l = String(label || "neutral").toLowerCase();
   if (l === "happy") return "😊";
@@ -114,71 +147,9 @@ function emojiFromMoodLabel(label) {
   return "😐";
 }
 
-const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog",
-  "dogs",
-  "puppy",
-  "puppies",
-  "cat",
-  "cats",
-  "kitten",
-  "kittens",
-  "bear",
-  "bears",
-  "bunny",
-  "bunnies",
-  "rabbit",
-  "rabbits",
-];
-
-function fixPlushAnimalHallucination(caption, captionDraft) {
-  const draftLower = String(captionDraft || "").toLowerCase();
-  if (!draftLower.includes("plush")) return caption;
-
-  let result = String(caption || "");
-  ANIMAL_WORDS_FOR_PLUSH.forEach((word) => {
-    const re = new RegExp("\\b" + word + "\\b", "gi");
-    result = result.replace(re, "plush toy");
-  });
-  return result;
-}
-
-// Hashtags: don’t allow sensitive guesses
-const SENSITIVE_TAGS_REQUIRE_DRAFT = [
-  "birthday",
-  "cake",
-  "cakes",
-  "dessert",
-  "desserts",
-  "party",
-  "celebration",
-  "boh",
-];
-
-function adjustHashtags(hashtags, captionDraft) {
-  let tags = Array.isArray(hashtags) ? [...hashtags] : [];
-
-  tags = tags
-    .map((t) => String(t).trim())
-    .filter(Boolean)
-    .map((t) => t.toLowerCase().replace(/\s+/g, ""));
-
-  tags = Array.from(new Set(tags));
-
-  const draftLower = String(captionDraft || "").toLowerCase();
-  tags = tags.filter((t) => {
-    if (SENSITIVE_TAGS_REQUIRE_DRAFT.includes(t)) {
-      return draftLower.includes(t);
-    }
-    return true;
-  });
-
-  const BANNED_ALWAYS = ["boh", "bohtea", "bohteamalaysia"];
-  tags = tags.filter((t) => !BANNED_ALWAYS.includes(t));
-
-  return tags.slice(0, 5);
-}
-
+// -------------------------
+// Hashtags + cleanup helpers
+// -------------------------
 const BANNED_BACKGROUND_WORDS = [
   "matches",
   "matchbox",
@@ -247,6 +218,52 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
   return result.replace(/\s+/g, " ").trim();
 }
 
+const ANIMAL_WORDS_FOR_PLUSH = [
+  "dog",
+  "dogs",
+  "puppy",
+  "puppies",
+  "cat",
+  "cats",
+  "kitten",
+  "kittens",
+  "bear",
+  "bears",
+  "bunny",
+  "bunnies",
+  "rabbit",
+  "rabbits",
+];
+
+function fixPlushAnimalHallucination(caption, captionDraft) {
+  const draftLower = String(captionDraft || "").toLowerCase();
+  if (!draftLower.includes("plush")) return caption;
+
+  let result = String(caption || "");
+  ANIMAL_WORDS_FOR_PLUSH.forEach((word) => {
+    const re = new RegExp("\\b" + word + "\\b", "gi");
+    result = result.replace(re, "plush toy");
+  });
+  return result;
+}
+
+// ✅ Hashtags: allow cake/birthday always if model gives it
+function adjustHashtags(hashtags) {
+  let tags = Array.isArray(hashtags) ? [...hashtags] : [];
+
+  tags = tags
+    .map((t) => String(t).trim())
+    .filter(Boolean)
+    .map((t) => t.toLowerCase().replace(/\s+/g, ""));
+
+  tags = Array.from(new Set(tags));
+
+  const BANNED_ALWAYS = ["boh", "bohtea", "bohteamalaysia"];
+  tags = tags.filter((t) => !BANNED_ALWAYS.includes(t));
+
+  return tags.slice(0, 5);
+}
+
 function fallbackTagsFromDraft(captionDraft, max = 3) {
   const draft = String(captionDraft || "").trim();
   if (!draft) return [];
@@ -257,43 +274,67 @@ function fallbackTagsFromDraft(captionDraft, max = 3) {
     .split(/[,;\n\r\t ]+/)
     .map((t) => t.trim())
     .filter(Boolean)
-    .filter((t) => t.length >= 3)
+    .filter((t) => t.length >= 2)
     .filter((t) => /^[a-z0-9]+$/i.test(t));
 
   return Array.from(new Set(cleaned)).slice(0, max);
 }
 
+// ✅ Stronger: draft keywords -> must appear in caption/hashtags
+function extractDraftKeywords(draft, max = 2) {
+  const d = String(draft || "").toLowerCase();
+  if (!d.trim()) return [];
+
+  const stop = new Set([
+    "a","an","the","and","or","but","to","for","of","in","on","at","with",
+    "this","that","these","those","is","are","was","were","be","been","being",
+    "today","yesterday","tomorrow","very","so","just","really","pls","please",
+    "trip","travel", // keep "trip" out so we can keep real place words
+  ]);
+
+  const tokens = d
+    .replace(/[^a-z0-9\s#_-]/g, " ")
+    .replace(/[#]/g, " ")
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.length >= 2)
+    .filter((t) => !stop.has(t));
+
+  // prefer unique, keep order
+  const uniq = [];
+  for (const t of tokens) {
+    if (!uniq.includes(t)) uniq.push(t);
+    if (uniq.length >= max) break;
+  }
+  return uniq;
+}
+
+function ensureCaptionMentionsDraft(caption, draftKeywords) {
+  let c = String(caption || "").trim();
+  if (!draftKeywords || draftKeywords.length === 0) return c;
+  const lc = c.toLowerCase();
+
+  const hasAny = draftKeywords.some((k) => lc.includes(k.toLowerCase()));
+  if (hasAny) return c;
+
+  // prepend short hint (no pronouns)
+  const prefix = draftKeywords.join(" ");
+  if (!prefix) return c;
+
+  // keep it natural
+  return `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
+}
+
 // ---------------------------------------------------------
-// Caption: "no 1st/2nd/3rd person" human social style helpers
+// Caption: "no 1st/2nd/3rd person" helpers
 // ---------------------------------------------------------
 const PRONOUN_BLOCKLIST = [
-  "i",
-  "i'm",
-  "im",
-  "me",
-  "my",
-  "mine",
-  "we",
-  "we're",
-  "were",
-  "our",
-  "ours",
-  "us",
-  "you",
-  "you're",
-  "youre",
-  "your",
-  "yours",
-  "he",
-  "she",
-  "him",
-  "her",
-  "his",
-  "hers",
-  "they",
-  "them",
-  "their",
-  "theirs",
+  "i","i'm","im","me","my","mine",
+  "we","we're","were","our","ours","us",
+  "you","you're","youre","your","yours",
+  "he","she","him","her","his","hers",
+  "they","them","their","theirs",
 ];
 
 function removePronouns(text) {
@@ -310,7 +351,6 @@ function removePronouns(text) {
 
 function stripGenericIntros(text) {
   let s = String(text || "").trim();
-
   const patterns = [
     /^today\b[,:]?\s*/i,
     /^this\s+(is|was)\b[,:]?\s*/i,
@@ -325,13 +365,11 @@ function stripGenericIntros(text) {
       break;
     }
   }
-
   return s.trim();
 }
 
 function buildNeutralCaptionFromVision(visionCombined) {
   const v = String(visionCombined || "").toLowerCase();
-
   if (v.includes("outdoor")) return "Fresh air, good vibes.";
   if (v.includes("cafe") || v.includes("restaurant"))
     return "Cafe moment, locked in.";
@@ -344,22 +382,10 @@ function buildNeutralCaptionFromVision(visionCombined) {
 
 function detectUserIntent(draft) {
   const d = String(draft || "").toLowerCase();
-
   const flex = [
-    "flex",
-    "new look",
-    "new style",
-    "hair",
-    "hairstyle",
-    "outfit",
-    "ootd",
-    "slay",
-    "glow up",
+    "flex","new look","new style","hair","hairstyle","outfit","ootd","slay","glow up",
   ];
-
-  if (flex.some((k) => d.includes(k))) {
-    return "FLEX";
-  }
+  if (flex.some((k) => d.includes(k))) return "FLEX";
   return "NORMAL";
 }
 
@@ -378,7 +404,7 @@ async function callOllamaChatText(prompt, modelOverride, temperatureOverride) {
       temperature:
         typeof temperatureOverride === "number" ? temperatureOverride : 0.25,
       top_p: 0.9,
-      num_predict: 220,
+      num_predict: 260,
     },
   });
 
@@ -418,8 +444,7 @@ Style: 1–2 short sentences, simple English.
 }
 
 // -------------------------
-// Vision – multi images describe (FIXED for carousel)
-// Returns { combined, perPhoto }
+// Vision – multi images describe
 // -------------------------
 async function callOllamaVisionDescribeMulti(imageBase64List) {
   const safeList = Array.isArray(imageBase64List)
@@ -446,8 +471,6 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
   const lines = perPhoto.map((d, i) =>
     d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`
   );
-
-  // ✅ keep newlines so the text model understands "photo 1 vs photo 2"
   let combined = lines.join("\n");
   combined = combined.replace(/\bBOH\b/gi, "").trim();
 
@@ -456,31 +479,33 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
 }
 
 // -------------------------
-// Mood labels (emoji is derived from this)
+// Mood labels
 // -------------------------
 const MOOD_LABELS = ["happy", "neutral", "tired", "sad", "angry"];
 
 // -------------------------
-// NEW: Vision mood detection (faces + vibe)
-// Returns { moodLabel, confidence }
+// Vision mood detection (faces only - AI estimate)
+// Returns { moodLabel, confidence, hasHumanFace }
 // -------------------------
 async function detectMoodFromVisionFirstImage(imageBase64) {
   if (!imageBase64) {
-    return { moodLabel: "neutral", confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0, hasHumanFace: false };
   }
 
   const prompt = `
 Return ONLY valid JSON:
 {
+  "hasHumanFace": true|false,
   "moodLabel": "happy|neutral|tired|sad|angry",
-  "confidence": 0.0-1.0,
-  "reason": "short"
+  "confidence": 0.0-1.0
 }
 
 Task:
-- Look ONLY at visible facial expression(s) in the photo.
-- If facial expression is unclear / no face visible, return moodLabel "neutral" with low confidence (<= 0.25).
-- Do NOT guess personal identity, age, or private traits.
+- First decide if a REAL HUMAN FACE is visible (not toys/prints/dolls).
+- If no human face visible -> hasHumanFace=false, moodLabel="neutral", confidence<=0.25.
+- If human face is visible -> infer mood ONLY from facial expression.
+- If facial expression unclear -> moodLabel="neutral" with low confidence (<=0.25).
+- Do NOT guess identity, age, or private traits.
 `.trim();
 
   const body = {
@@ -494,6 +519,8 @@ Task:
     const raw = String(resp.data?.message?.content || "");
     const parsed = safeJsonParse(raw, null);
 
+    const hasHumanFace = !!parsed?.hasHumanFace;
+
     const moodLabel = MOOD_LABELS.includes(
       String(parsed?.moodLabel).toLowerCase()
     )
@@ -502,108 +529,14 @@ Task:
 
     const confidence = clamp(parsed?.confidence ?? 0, 0, 1);
 
-    return {
-      moodLabel,
-      confidence,
-    };
+    return { moodLabel, confidence, hasHumanFace };
   } catch (e) {
-    return { moodLabel: "neutral", confidence: 0.0 };
+    return { moodLabel: "neutral", confidence: 0.0, hasHumanFace: false };
   }
 }
 
 // -------------------------
-// NEW: Caption mood detection (text-only)
-// Returns { moodLabel, confidence }
-// -------------------------
-async function detectMoodFromCaptionText(captionText) {
-  const caption = String(captionText || "").trim();
-
-  if (!caption) {
-    return { moodLabel: "neutral", confidence: 0.0 };
-  }
-
-  const prompt = `
-Return ONLY valid JSON:
-{
-  "moodLabel": "happy|neutral|tired|sad|angry",
-  "confidence": 0.0-1.0
-}
-
-Infer mood ONLY from the caption text tone.
-If unsure, return "neutral" with confidence <= 0.25.
-
-Caption:
-"${caption}"
-`.trim();
-
-  try {
-    const raw = await callOllamaChatText(prompt, OLLAMA_TEXT_MODEL, 0.1);
-    const parsed = safeJsonParse(raw, null);
-
-    const moodLabel = MOOD_LABELS.includes(
-      String(parsed?.moodLabel).toLowerCase()
-    )
-      ? String(parsed.moodLabel).toLowerCase()
-      : "neutral";
-    const confidence = clamp(parsed?.confidence ?? 0, 0, 1);
-
-    return {
-      moodLabel,
-      confidence,
-    };
-  } catch {
-    return { moodLabel: "neutral", confidence: 0.0 };
-  }
-}
-
-// -------------------------
-// NEW: Combine mood (face + caption) WITHOUT score
-// Returns { moodLabel, moodSource, confidence }
-// -------------------------
-function combineMood(faceMood, captionMood) {
-  const f = faceMood || { moodLabel: "neutral", confidence: 0 };
-  const c = captionMood || { moodLabel: "neutral", confidence: 0 };
-
-  // If both confident and same label -> boost
-  if (
-    f.confidence >= 0.45 &&
-    c.confidence >= 0.45 &&
-    f.moodLabel === c.moodLabel
-  ) {
-    return {
-      moodLabel: f.moodLabel,
-      moodSource: "face+caption",
-      confidence: clamp((f.confidence + c.confidence) / 2 + 0.1, 0, 1),
-    };
-  }
-
-  // Pick higher-confidence one if decent
-  if (f.confidence >= c.confidence && f.confidence >= 0.35) {
-    return {
-      moodLabel: f.moodLabel,
-      moodSource: "face",
-      confidence: f.confidence,
-    };
-  }
-
-  if (c.confidence > f.confidence && c.confidence >= 0.35) {
-    return {
-      moodLabel: c.moodLabel,
-      moodSource: "caption",
-      confidence: c.confidence,
-    };
-  }
-
-  // Otherwise neutral
-  return {
-    moodLabel: "neutral",
-    moodSource: "unknown",
-    confidence: Math.max(f.confidence, c.confidence),
-  };
-}
-
-// -------------------------
-// Face recognize batch
+// Face recognize batch (python)
 // -------------------------
 async function recognizeFaceBatch(imageBase64List, threshold) {
   const safeList = Array.isArray(imageBase64List)
@@ -650,20 +583,11 @@ function buildMustKeywordsFromFirstPhoto(perPhoto) {
     "table",
     "phone",
   ];
-
-  // ✅ only enforce if FIRST photo clearly shows it
   const must = pool.filter((k) => first.includes(k));
-
-  // ✅ keep very light: 0–1 keyword (avoid forcing weird object captions)
   return Array.from(new Set(must)).slice(0, 1);
 }
 
-function captionLooksUngrounded(
-  caption,
-  visionDescription,
-  captionDraft,
-  mustKeywords
-) {
+function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKeywords) {
   const c = String(caption || "").toLowerCase();
   const v = String(visionDescription || "").toLowerCase();
   const d = String(captionDraft || "").toLowerCase();
@@ -694,13 +618,15 @@ function captionLooksUngrounded(
 }
 
 // -------------------------
-// /ai/random-memory (kept + bugfix)
+// /ai/random-memory
 // -------------------------
 app.post("/ai/random-memory", async (req, res) => {
   try {
     const { groups = [] } = req.body || {};
     if (!Array.isArray(groups) || groups.length === 0) {
-      return res.status(400).json({ error: "groups must be a non-empty array" });
+      return res
+        .status(400)
+        .json({ error: "groups must be a non-empty array" });
     }
 
     const trimmed = groups.slice(0, 80).map((g) => ({
@@ -737,7 +663,6 @@ groups = ${JSON.stringify(trimmed)}
 
     let parsed = safeJsonParse(raw, null);
 
-    // fallback picker
     const good = trimmed.filter((g) => g.postCount >= 2);
     const pickFrom = good.length ? good : trimmed;
 
@@ -777,27 +702,25 @@ groups = ${JSON.stringify(trimmed)}
 // -------------------------
 app.post("/generatePostMeta", async (req, res) => {
   try {
-    const {
-      captionDraft = "",
-      imageBase64List = [],
-      imageBase64 = null,
-    } = req.body || {};
+    const { captionDraft = "", imageBase64List = [], imageBase64 = null } =
+      req.body || {};
 
+    const listFromArray = normalizeBase64List(imageBase64List);
+    const single = normalizeBase64Image(imageBase64);
     const images =
-      Array.isArray(imageBase64List) && imageBase64List.length > 0
-        ? imageBase64List.filter(Boolean)
-        : imageBase64
-        ? [imageBase64]
-        : [];
+      listFromArray.length > 0 ? listFromArray : single ? [single] : [];
+
+    const draftText = String(captionDraft || "").trim();
+    const draftHasText = draftText.length > 0;
 
     console.log(
       "\n🧠 /generatePostMeta received. Images count:",
       images.length,
       "Draft:",
-      captionDraft
+      draftText
     );
 
-    // 1) Vision (objects/scene) - FIXED for carousel
+    // 1) Vision (always ok to run, but draft may override content)
     let visionDescription = "";
     let visionPerPhoto = [];
 
@@ -812,19 +735,17 @@ app.post("/generatePostMeta", async (req, res) => {
       }
     }
 
-    // ✅ mustKeywords only from photo 1 (prevents 2nd photo "phone" forcing caption)
     const mustKeywords = buildMustKeywordsFromFirstPhoto(visionPerPhoto);
+    const intent = detectUserIntent(draftText);
 
-    const mustLine =
-      mustKeywords.length > 0
-        ? `- Caption should naturally include: ${mustKeywords.join(
-            ", "
-          )} (only if it fits).`
-        : `- If vision is unclear, keep caption generic and simple.`;
+    const draftKeywords = draftHasText ? extractDraftKeywords(draftText, 2) : [];
+    const draftKeywordsLine =
+      draftKeywords.length > 0
+        ? `- MUST keep the topic aligned with these draft keywords: ${draftKeywords.join(", ")}.`
+        : `- If draft is empty, rely on vision description only.`;
 
-    const intent = detectUserIntent(captionDraft);
-
-    // 2) TEXT MODEL prompt (grounded + human + no-person pronouns)
+    // 2) TEXT model prompt
+    // ✅ Key change: if draft exists, treat it as PRIMARY truth.
     const systemInstruction = `
 You write SHORT, human-style captions for a memory app.
 
@@ -835,24 +756,29 @@ Return ONLY valid JSON:
   "friendTags": ["name1","name2"]
 }
 
-GROUNDING RULES (MUST FOLLOW):
-- Use ONLY the vision description + user draft. Do NOT invent stories.
-- This is a carousel post (multiple photos). Caption should describe the overall moment/vibe,
-  NOT list objects from each photo.
-- Do NOT merge details incorrectly (e.g., "phone in hand" if only one photo shows it).
-- Do NOT mention rivers, lucky charms, magical events, childhood, seasons unless supported by vision/draft.
-${mustLine}
+PRIORITY RULES:
+- If user draft/keywords is NOT empty, it is the PRIMARY source of truth.
+  Caption + hashtags must follow what user typed.
+- Vision description is SECONDARY: only used to support tone or add safe detail.
+- Never override user draft with a different place/event (no hallucinated countries/cities).
+${draftKeywordsLine}
 
-CAPTION STYLE (MUST FOLLOW):
+GROUNDING RULES:
+- Do NOT invent stories.
+- This is a carousel post: caption should describe the overall moment/vibe, not list everything.
+- Avoid fantasy concepts (magical/childhood/seasons) unless written in the draft.
+
+CAPTION STYLE:
 - Do NOT use 1st/2nd/3rd person pronouns (no I / we / you / he / she / they).
 - Sound like a real social post: short, confident, not essay-like.
-- Prefer punchy phrases, reactions, or “announcement/flex” tone if the user draft implies it.
-- 6–14 words, 0–1 emoji.
+- 8–20 words, 0–1 emoji.
 - No hashtags inside the caption.
 - Avoid generic “Today...” openings.
 
 HASHTAGS:
-- 1–5 tags, lowercase, derived from visible objects only (no fantasy tags).
+- 1–5 tags, lowercase.
+- If draft exists, hashtags should be derived from draft first (places/keywords), then vision.
+- No fantasy tags.
 
 FRIEND TAGS:
 - Do NOT invent names; return [] unless user typed names in draft.
@@ -863,8 +789,8 @@ FRIEND TAGS:
 User intent hint:
 "${intent}" (FLEX means: show off / confident / new look vibe)
 
-User draft (may be empty):
-"${captionDraft || "(empty)"}"
+User draft/keywords (may be empty):
+"${draftText || "(empty)"}"
 
 Vision description (may be empty):
 "${visionDescription || "(no description)"}"
@@ -876,7 +802,7 @@ Vision description (may be empty):
     } catch (err) {
       console.error("⚠️ Text model error:", err?.message || err);
       rawContent = JSON.stringify({
-        caption: captionDraft || "",
+        caption: draftText || "",
         hashtags: [],
         friendTags: [],
       });
@@ -884,81 +810,98 @@ Vision description (may be empty):
 
     console.log("[TEXT] Raw:", rawContent);
 
-    // Parse JSON safely
     let parsed = safeJsonParse(rawContent, null);
-    if (!parsed) {
-      parsed = { caption: captionDraft, hashtags: [], friendTags: [] };
-    }
+    if (!parsed) parsed = { caption: draftText, hashtags: [], friendTags: [] };
 
-    // Retry once if ungrounded / too weird
-    let captionTry = String(parsed.caption || captionDraft || "").trim();
+    // Retry once if ungrounded OR violates draft alignment
+    let captionTry = String(parsed.caption || draftText || "").trim();
+    const violatesDraft =
+      draftHasText && draftKeywords.length
+        ? !draftKeywords.some((k) =>
+            captionTry.toLowerCase().includes(String(k).toLowerCase())
+          )
+        : false;
+
     if (
       captionLooksUngrounded(
         captionTry,
         visionDescription,
-        captionDraft,
+        draftText,
         mustKeywords
-      )
+      ) ||
+      violatesDraft
     ) {
       const retryPrompt =
         combinedPrompt +
         `
 
-Your previous answer was NOT grounded / too weird.
-Rewrite again using ONLY vision + draft. Return ONLY JSON.
+Your previous answer was NOT acceptable.
+- If draft exists, rewrite to follow draft topic strongly.
+- Keep it grounded; do NOT invent places/events.
+Return ONLY JSON.
 `.trim();
 
       try {
         const retryRaw = await callOllamaChatText(retryPrompt);
         const retryParsed = safeJsonParse(retryRaw, null);
         if (retryParsed) parsed = retryParsed;
-      } catch {
-        // keep original
-      }
+      } catch {}
     }
 
-    // Normalize model output
-    let caption = String(parsed.caption || captionDraft || "").trim();
+    // Normalize output
+    let caption = String(parsed.caption || draftText || "").trim();
     let hashtags = Array.isArray(parsed.hashtags)
       ? parsed.hashtags.map((h) => String(h).trim()).filter(Boolean)
       : [];
 
-    // Cleanup caption (NO person enforcement)
+    // Cleanup caption
     caption = removeBannedWords(caption);
-    caption = removeBannedActivities(caption, captionDraft);
-    caption = removeBrandTextIfNotInDraft(caption, captionDraft);
-    caption = fixPlushAnimalHallucination(caption, captionDraft);
+    caption = removeBannedActivities(caption, draftText);
+    caption = removeBrandTextIfNotInDraft(caption, draftText);
+    caption = fixPlushAnimalHallucination(caption, draftText);
 
     caption = stripGenericIntros(caption);
     caption = removePronouns(caption);
-    caption = normalizeCaptionLength(caption, captionDraft);
 
-    // If still ungrounded, hard fallback from vision (neutral, no pronouns)
-    if (
-      !caption ||
-      captionLooksUngrounded(
-        caption,
-        visionDescription,
-        captionDraft,
-        mustKeywords
-      )
-    ) {
-      caption = buildNeutralCaptionFromVision(visionDescription);
+    // ✅ If user typed draft keywords, ensure caption mentions them
+    if (draftHasText && draftKeywords.length) {
+      caption = ensureCaptionMentionsDraft(caption, draftKeywords);
     }
 
-    // Cleanup hashtags
-    hashtags = adjustHashtags(hashtags, captionDraft);
-    if (hashtags.length === 0) {
-      const fallback = fallbackTagsFromDraft(captionDraft, 3);
-      if (fallback.length > 0) hashtags = fallback;
+    caption = normalizeCaptionLength(caption, draftText);
+
+    // If caption still empty or ungrounded, fallback
+    if (!caption || captionLooksUngrounded(caption, visionDescription, draftText, mustKeywords)) {
+      if (draftHasText) {
+        // if draft exists, fallback should still follow draft
+        const safePrefix = draftKeywords.length ? draftKeywords.join(" ") : draftText.split(/\s+/).slice(0, 4).join(" ");
+        caption = `${safePrefix} vibes.`.replace(/\s+/g, " ").trim();
+      } else {
+        caption = buildNeutralCaptionFromVision(visionDescription);
+      }
     }
 
-    // Face recognition for friendTags
+    // Hashtags: draft-first
+    const draftTags = draftHasText ? fallbackTagsFromDraft(draftText, 5) : [];
+    hashtags = adjustHashtags(hashtags);
+
+    if (draftHasText) {
+      // Merge: draft tags first, then AI tags
+      const merged = Array.from(new Set([...draftTags, ...hashtags]));
+      hashtags = merged.slice(0, 5);
+    } else {
+      if (hashtags.length === 0) hashtags = draftTags.slice(0, 3);
+    }
+
+    // Face recognition for friendTags (python)
     const FACE_THRESHOLD = 0.37;
     const MIN_GAP = 0.06;
     const MAX_TAGS = 5;
 
     let friendTagsMerged = [];
+
+    // ✅ FIX: track REAL face existence from Python
+    let hasRealHumanFace = false; // Python truth
 
     const pickNamesFromFaceResp = (faceResp) => {
       const faces = Array.isArray(faceResp?.faces) ? faceResp.faces : [];
@@ -984,10 +927,7 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
         const top = candidates[0];
         const next = candidates[1];
 
-        // If top two are too close, skip to avoid wrong tag
-        if (next && Math.abs(next.distance - top.distance) < MIN_GAP) {
-          continue;
-        }
+        if (next && Math.abs(next.distance - top.distance) < MIN_GAP) continue;
 
         pickedNames.push(top.name);
         if (pickedNames.length >= MAX_TAGS) break;
@@ -1008,6 +948,12 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
           util.inspect(batch, { depth: null, colors: true })
         );
 
+        // ✅ Determine real face existence (any faces detected by Python)
+        hasRealHumanFace = (batch?.results || []).some((r) => {
+          const faces = Array.isArray(r?.faces) ? r.faces : [];
+          return faces.length > 0;
+        });
+
         const allPicked = [];
         for (const item of batch.results || []) {
           const faceRespLike = { faces: item.faces || [] };
@@ -1019,55 +965,64 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
         friendTagsMerged = Array.from(new Set(allPicked)).slice(0, MAX_TAGS);
       } catch (err) {
         console.log("Face recognition failed:", err?.message || err);
+        hasRealHumanFace = false;
       }
     }
 
-    // -------------------------
-    // Mood detection (face + caption) -> return emoji
-    // -------------------------
-    let moodLabel = "neutral";
-    let moodSource = "unknown";
-    let emoji = "😐";
+    // ✅ Mood detection
+    // RULE: if NO HUMAN FACE (Python says none) => happy
+    let moodLabel = "happy";
+    let moodSource = "rule";
+    let emoji = "😊";
 
     try {
-      const firstImage = images.length ? images[0] : null;
+      if (!hasRealHumanFace) {
+        moodLabel = "happy";
+        moodSource = "rule";
+        emoji = "😊";
+        console.log("[MOOD] python says no face => force rule happy");
+      } else {
+        const firstImage = images.length ? images[0] : null;
 
-      const [faceMood, captionMood] = await Promise.all([
-        detectMoodFromVisionFirstImage(firstImage),
-        detectMoodFromCaptionText(caption),
-      ]);
+        // only now call vision mood (because Python says a face exists)
+        const visionMood = await detectMoodFromVisionFirstImage(firstImage);
 
-      const combined = combineMood(faceMood, captionMood);
+        // require BOTH python face + vision face to trust emotion
+        const visionSaysFace = !!visionMood?.hasHumanFace;
 
-      moodLabel = combined.moodLabel;
-      moodSource = combined.moodSource;
-      emoji = emojiFromMoodLabel(moodLabel);
+        if (visionSaysFace && Number(visionMood?.confidence || 0) >= 0.35) {
+          const lbl = MOOD_LABELS.includes(String(visionMood.moodLabel).toLowerCase())
+            ? String(visionMood.moodLabel).toLowerCase()
+            : "neutral";
 
-      console.log(
-        "[MOOD] face:",
-        faceMood,
-        "caption:",
-        captionMood,
-        "=>",
-        combined,
-        "emoji:",
-        emoji
-      );
+          moodLabel = lbl;
+          moodSource = "face";
+          emoji = emojiFromMoodLabel(moodLabel);
+
+          console.log("[MOOD] python face + vision face:", visionMood, "=>", {
+            moodLabel,
+            moodSource,
+            emoji,
+          });
+        } else {
+          moodLabel = "neutral";
+          moodSource = "face";
+          emoji = emojiFromMoodLabel(moodLabel);
+          console.log("[MOOD] python face but vision unsure => neutral", visionMood);
+        }
+      }
     } catch (e) {
-      emoji = "😐";
-      moodLabel = "neutral";
-      moodSource = "unknown";
+      moodLabel = "happy";
+      moodSource = "rule";
+      emoji = "😊";
+      console.log("[MOOD] error => fallback happy:", e?.message || e);
     }
 
     const cleaned = {
       caption,
       hashtags,
       friendTags: friendTagsMerged,
-
-      // ✅ what your client should save per post
       emoji,
-
-      // (optional debug fields)
       moodLabel,
       moodSource,
     };
@@ -1086,7 +1041,8 @@ Rewrite again using ONLY vision + draft. Return ONLY JSON.
 app.post("/faces/detect", async (req, res) => {
   const { imageBase64List } = req.body || {};
   try {
-    const result = await detectFacesInList(imageBase64List || []);
+    const normalized = normalizeBase64List(imageBase64List || []);
+    const result = await detectFacesInList(normalized);
     res.json(result);
   } catch (err) {
     console.error("❌ /faces/detect error:", err);
@@ -1099,12 +1055,16 @@ app.post("/faces/detect", async (req, res) => {
 // -------------------------
 app.post("/faces/register", async (req, res) => {
   const { personId, name, imageBase64 } = req.body || {};
-  if (!name || !imageBase64) {
-    return res.status(400).json({ error: "name and imageBase64 are required." });
+  const img = normalizeBase64Image(imageBase64);
+
+  if (!name || !img) {
+    return res
+      .status(400)
+      .json({ error: "name and imageBase64 are required." });
   }
 
   try {
-    const pyResp = await registerFace(name, imageBase64);
+    const pyResp = await registerFace(name, img);
     console.log("✅ /faces/register -> Python:", pyResp);
 
     res.json({
@@ -1124,12 +1084,14 @@ app.post("/faces/register", async (req, res) => {
 // -------------------------
 app.post("/faces/recognize", async (req, res) => {
   const { imageBase64, threshold } = req.body || {};
-  if (!imageBase64) {
+  const img = normalizeBase64Image(imageBase64);
+
+  if (!img) {
     return res.status(400).json({ error: "imageBase64 is required." });
   }
 
   try {
-    const pyResp = await recognizeFace(imageBase64, threshold);
+    const pyResp = await recognizeFace(img, threshold);
     console.log(
       "✅ /faces/recognize -> Python:",
       util.inspect(pyResp, { depth: null, colors: true })
@@ -1157,22 +1119,13 @@ app.post("/faces/recognize_batch", async (req, res) => {
   }
 
   try {
-    const batch = await recognizeFaceBatch(imageBase64List, threshold);
+    const normalized = normalizeBase64List(imageBase64List);
+    const batch = await recognizeFaceBatch(normalized, threshold);
     res.json(batch);
   } catch (err) {
     console.error("❌ /faces/recognize_batch proxy error:", err);
     res.status(500).json({ error: "Face recognize batch failed" });
   }
-});
-
-// -------------------------
-// Start server
-// -------------------------
-const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "0.0.0.0"; // ✅ important for phone access
-
-app.listen(PORT, HOST, () => {
-  console.log(`Local AI server running at http://${HOST}:${PORT}`);
 });
 
 // -------------------------
@@ -1182,9 +1135,7 @@ app.post("/ollama/generate", async (req, res) => {
   try {
     const { model, prompt, stream = false, options = {} } = req.body || {};
     if (!model || !prompt) {
-      return res
-        .status(400)
-        .json({ error: "model and prompt are required." });
+      return res.status(400).json({ error: "model and prompt are required." });
     }
 
     const body = {
@@ -1208,4 +1159,14 @@ app.post("/ollama/generate", async (req, res) => {
     console.error("Proxy /ollama/generate error:", err?.message || err);
     res.status(500).json({ error: "Failed to call Ollama generate" });
   }
+});
+
+// -------------------------
+// Start server
+// -------------------------
+const PORT = process.env.PORT || 3000;
+const HOST = process.env.HOST || "0.0.0.0"; // ✅ important for phone access
+
+app.listen(PORT, HOST, () => {
+  console.log(`Local AI server running at http://${HOST}:${PORT}`);
 });

@@ -1,5 +1,5 @@
 // src/screens/MemoryBook/MemoryAlbum.tsx
-import React, { useEffect, useState, useRef } from "react";
+import React, { useEffect, useState, useRef, useMemo } from "react";
 import {
   View,
   ScrollView,
@@ -8,6 +8,9 @@ import {
   Animated,
   Easing,
   FlatList,
+  Modal,
+  Alert,
+  Dimensions,
 } from "react-native";
 import {
   Layout,
@@ -15,8 +18,10 @@ import {
   Text,
   useTheme,
   themeColor,
+  Button,
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
+import * as ImagePicker from "expo-image-picker";
 
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -29,13 +34,17 @@ import {
   where,
   orderBy,
   onSnapshot,
+  doc,
+  setDoc,
 } from "firebase/firestore";
+
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
 import { PostType } from "./B2PostCard";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryAlbum">;
 
 interface PersonAlbum {
+  key: string; // lowercase key
   name: string;
   postIds: string[];
   coverPost: PostType | null;
@@ -49,11 +58,13 @@ interface MemoryGroup {
   coverPost: PostType | null;
 }
 
-interface MomentItem {
-  id: string; // key
-  title: string;
+interface LocationAlbum {
+  id: string; // normalized location key
+  placeTitle: string; // e.g. "Cameron Highlands"
+  rangeLabel: string; // e.g. "9 May 2025 – 15 Dec 2025"
   postIds: string[];
   coverPost: PostType | null;
+  rawLabel: string; // original label string
 }
 
 const monthNames = [
@@ -85,7 +96,7 @@ function getPostThumb(post: any): string | undefined {
   return undefined;
 }
 
-// --- iOS Photos feel: treat videos same thumbnail, just show play icon in grid later.
+// --- treat videos same thumbnail, show play icon in grid
 function isVideoPost(post: any): boolean {
   const mt = String(post?.mediaType || "").toLowerCase();
   const mts = Array.isArray(post?.mediaTypes) ? post.mediaTypes : [];
@@ -102,9 +113,7 @@ function buildMemoryTitle(groupPosts: PostType[], dateLabel: string): string {
     .toLowerCase();
 
   const allHashtags = groupPosts
-    .map((p: any) =>
-      Array.isArray(p.hashtags) ? p.hashtags.join(" ") : ""
-    )
+    .map((p: any) => (Array.isArray(p.hashtags) ? p.hashtags.join(" ") : ""))
     .join(" ")
     .toLowerCase()
     .replace(/#/g, "");
@@ -125,8 +134,8 @@ function buildMemoryTitle(groupPosts: PostType[], dateLabel: string): string {
 
   if (/birthday|bday|🎂|cake/.test(text)) return "Birthday memories";
   if (/graduation|convocation/.test(text)) return "Graduation day";
-  if (/trip|travel|vacation|holiday/.test(text)) return "Trip memories";
-  if (/study|exam|assignment|library|revision/.test(text)) return "Study moments";
+  if (/study|exam|assignment|library|revision/.test(text))
+    return "Study moments";
   if (/family/.test(text)) return "Family time";
 
   if (hasFriends) {
@@ -142,35 +151,40 @@ function buildMemoryTitle(groupPosts: PostType[], dateLabel: string): string {
   return `Moments of ${dateLabel}`;
 }
 
-// -------- Trip hashtag grouping helpers --------
-function normalizeTag(t: string) {
-  return String(t || "")
+// -------------------- Location grouping helpers --------------------
+function extractLocationRaw(p: any): string {
+  return String(p?.locationLabel || p?.locationName || p?.placeName || "").trim();
+}
+
+function normalizeLocationKey(raw: string) {
+  return String(raw || "")
     .trim()
-    .replace(/^#/, "")
-    .replace(/\s+/g, "")
-    .toLowerCase();
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[()]/g, "")
+    .replace(/\s*,\s*/g, ",")
+    .slice(0, 140);
 }
 
-// Accept: TripGenting, trip_kl, trip-penang, tripcameronhighlands
-function isTripTag(raw: string) {
-  const t = normalizeTag(raw);
-  return t.startsWith("trip");
+function prettyPlaceTitle(raw: string) {
+  const s = String(raw || "").trim();
+  if (!s) return "Unknown place";
+  const first = s.split(",")[0]?.trim();
+  return first || s;
 }
 
-function prettyTripTitleFromKey(key: string) {
-  // key example: "tripgenting" / "trip_kl" / "trip-penang"
-  const raw = key.replace(/^trip[-_]?/i, "");
-  if (!raw) return "Trip";
-  const words = raw
-    .replace(/[-_]+/g, " ")
-    .replace(/([a-z])([0-9])/gi, "$1 $2")
-    .trim();
-  const titled = words
-    .split(" ")
-    .filter(Boolean)
-    .map((w) => w.charAt(0).toUpperCase() + w.slice(1))
-    .join(" ");
-  return `Trip: ${titled}`;
+function fmtDayMonthYear(d: Date) {
+  return `${d.getDate()} ${monthNames[d.getMonth()]} ${d.getFullYear()}`;
+}
+function fmtRange(minD: Date, maxD: Date) {
+  if (
+    minD.getFullYear() === maxD.getFullYear() &&
+    minD.getMonth() === maxD.getMonth() &&
+    minD.getDate() === maxD.getDate()
+  ) {
+    return fmtDayMonthYear(minD);
+  }
+  return `${fmtDayMonthYear(minD)} – ${fmtDayMonthYear(maxD)}`;
 }
 
 export default function MemoryAlbum({ navigation }: Props) {
@@ -184,9 +198,20 @@ export default function MemoryAlbum({ navigation }: Props) {
   const [personAlbums, setPersonAlbums] = useState<PersonAlbum[]>([]);
   const [memoryGroups, setMemoryGroups] = useState<MemoryGroup[]>([]);
   const [randomMemory, setRandomMemory] = useState<MemoryGroup | null>(null);
-  const [moments, setMoments] = useState<MomentItem[]>([]);
   const [onThisDayPosts, setOnThisDayPosts] = useState<PostType[]>([]);
-  const [tripAlbums, setTripAlbums] = useState<MomentItem[]>([]);
+  const [locationAlbums, setLocationAlbums] = useState<LocationAlbum[]>([]);
+  const [customCoverMap, setCustomCoverMap] = useState<Record<string, string>>(
+    {}
+  ); // local-only uri overrides
+
+  // saved custom people covers (users/{uid}.peopleCoverPostIds)
+  const [peopleCoverMap, setPeopleCoverMap] = useState<Record<string, string>>(
+    {}
+  );
+
+  // cover picker modal
+  const [coverModalOpen, setCoverModalOpen] = useState(false);
+  const [coverTarget, setCoverTarget] = useState<PersonAlbum | null>(null);
 
   const primaryTextColor = isDarkmode ? themeColor.white100 : themeColor.dark;
   const subTextColor = isDarkmode ? "#cbd5e1" : "#64748b";
@@ -205,10 +230,6 @@ export default function MemoryAlbum({ navigation }: Props) {
       useNativeDriver: true,
     }).start();
   }, [posts.length]);
-
-  // ✅ CHANGE THIS to your laptop LAN IP when testing on phone
-  // If you run app on same laptop emulator, 127.0.0.1 is ok.
-  const AI_BASE_URL = "http://192.168.1.74:3000";
 
   // 1) LOAD POSTS
   useEffect(() => {
@@ -232,7 +253,28 @@ export default function MemoryAlbum({ navigation }: Props) {
     return () => unsub();
   }, [uid, firestore]);
 
-  // 2) PEOPLE ALBUMS
+  // 1.5) LOAD people cover map from user doc
+  useEffect(() => {
+    if (!uid) return;
+
+    const userRef = doc(firestore, "users", uid);
+    const unsub = onSnapshot(
+      userRef,
+      (snap) => {
+        const data: any = snap.data() || {};
+        const map = data?.peopleCoverPostIds;
+        if (map && typeof map === "object") setPeopleCoverMap(map);
+        else setPeopleCoverMap({});
+      },
+      () => {
+        setPeopleCoverMap({});
+      }
+    );
+
+    return () => unsub();
+  }, [uid, firestore]);
+
+  // 2) PEOPLE ALBUMS (with saved cover override)
   useEffect(() => {
     if (!posts.length) {
       setPersonAlbums([]);
@@ -255,7 +297,7 @@ export default function MemoryAlbum({ navigation }: Props) {
       });
     });
 
-    // always include "Me" (like iOS Photos people)
+    // always include "Me"
     const meName = currentUser?.displayName?.trim() || "Me";
     const meKey = meName.toLowerCase();
 
@@ -268,18 +310,29 @@ export default function MemoryAlbum({ navigation }: Props) {
       });
     }
 
-    const albums: PersonAlbum[] = Object.values(buckets)
-      .map((b) => ({
-        name: b.displayName,
-        postIds: b.posts.map((p) => p.id),
-        coverPost: b.posts[0] || null,
-      }))
+    const albums: PersonAlbum[] = Object.entries(buckets)
+      .map(([key, b]) => {
+        const sorted = [...b.posts].sort(
+          (a, c) => getPostDate(c).getTime() - getPostDate(a).getTime()
+        );
+
+        const overridePostId = peopleCoverMap?.[key];
+        const override =
+          overridePostId ? sorted.find((p) => p.id === overridePostId) : null;
+
+        return {
+          key,
+          name: b.displayName,
+          postIds: sorted.map((p) => p.id),
+          coverPost: override || sorted[0] || null,
+        };
+      })
       .sort((a, b) => b.postIds.length - a.postIds.length);
 
     setPersonAlbums(albums);
-  }, [posts, currentUser]);
+  }, [posts, currentUser, peopleCoverMap]);
 
-  // 3) DAILY GROUPS (yyyy-mm-dd)
+  // 3) DAILY GROUPS (keep for Random today only)
   useEffect(() => {
     if (!posts.length) {
       setMemoryGroups([]);
@@ -326,102 +379,67 @@ export default function MemoryAlbum({ navigation }: Props) {
     setMemoryGroups(groups);
   }, [posts]);
 
-  // ✅ 4) AI RANDOM MEMORY (ONLY THIS PART IS AI)
+  // 4) RANDOM TODAY
   useEffect(() => {
-    const pickAiRandom = async () => {
-      if (!memoryGroups.length) {
-        setRandomMemory(null);
-        return;
-      }
+    if (!memoryGroups.length) {
+      setRandomMemory(null);
+      return;
+    }
+    setRandomMemory(
+      memoryGroups[Math.floor(Math.random() * memoryGroups.length)]
+    );
+  }, [memoryGroups]);
 
-      try {
-        const payloadGroups = memoryGroups.slice(0, 80).map((g) => {
-          const samplePost = posts.find((p) => p.id === g.postIds[0]);
-          const sampleCaption = String((samplePost as any)?.caption || "");
-          const hashtags = Array.isArray((samplePost as any)?.hashtags)
-            ? (samplePost as any).hashtags
-            : [];
-          const friendTags = Array.isArray((samplePost as any)?.friendTags)
-            ? (samplePost as any).friendTags
-            : [];
-
-          return {
-            id: g.id,
-            postCount: g.postIds.length,
-            sampleCaption,
-            hashtags,
-            friendTags,
-          };
-        });
-
-        const resp = await fetch(`${AI_BASE_URL}/ai/random-memory`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ groups: payloadGroups }),
-        });
-
-        const data = await resp.json();
-        const selectedId = String(data?.selectedGroupId || "");
-
-        const found = memoryGroups.find((g) => g.id === selectedId);
-        if (found) {
-          setRandomMemory(found);
-          return;
-        }
-
-        setRandomMemory(
-          memoryGroups[Math.floor(Math.random() * memoryGroups.length)]
-        );
-      } catch (e) {
-        setRandomMemory(
-          memoryGroups[Math.floor(Math.random() * memoryGroups.length)]
-        );
-      }
-    };
-
-    pickAiRandom();
-  }, [memoryGroups, posts]);
-
-  // ✅ NEW: 4.5) TRIPS (group by hashtags like #TripGenting, #trip_kl)
+  // 4.2) LOCATION ALBUMS (Places)
   useEffect(() => {
     if (!posts.length) {
-      setTripAlbums([]);
+      setLocationAlbums([]);
       return;
     }
 
-    const map: Record<string, PostType[]> = {};
+    const map: Record<string, { raw: string; posts: PostType[] }> = {};
 
     posts.forEach((p: any) => {
-      const tags: string[] = Array.isArray(p.hashtags) ? p.hashtags : [];
-      tags.forEach((raw) => {
-        if (!isTripTag(raw)) return;
-        const key = normalizeTag(raw); // "tripgenting"
-        if (!map[key]) map[key] = [];
-        map[key].push(p);
-      });
+      const raw = extractLocationRaw(p);
+      if (!raw) return;
+      const key = normalizeLocationKey(raw);
+      if (!key) return;
+
+      if (!map[key]) map[key] = { raw, posts: [] };
+      map[key].posts.push(p);
     });
 
-    const albums: MomentItem[] = Object.entries(map)
-      .map(([key, arr]) => {
-        const sorted = [...arr].sort(
+    const albums: LocationAlbum[] = Object.entries(map)
+      .map(([key, v]) => {
+        const sorted = [...v.posts].sort(
           (a, b) => getPostDate(b).getTime() - getPostDate(a).getTime()
         );
+
+        const newest = sorted[0] || null;
+        const times = sorted
+          .map((p) => getPostDate(p).getTime())
+          .sort((a, b) => a - b);
+
+        const minD = new Date(times[0]);
+        const maxD = new Date(times[times.length - 1]);
+
         return {
-          id: `trip-${key}`,
-          title: prettyTripTitleFromKey(key),
+          id: key,
+          rawLabel: v.raw,
+          placeTitle: prettyPlaceTitle(v.raw),
+          rangeLabel: fmtRange(minD, maxD),
           postIds: sorted.map((p) => p.id),
-          coverPost: sorted[0] || null,
+          coverPost: newest,
         };
       })
       .sort((a, b) => b.postIds.length - a.postIds.length);
 
-    setTripAlbums(albums);
+    setLocationAlbums(albums);
   }, [posts]);
 
-  // 5) MOMENTS + ON THIS DAY
+  // 5) ON THIS DAY
   useEffect(() => {
     if (!posts.length) {
-      setMoments([]);
       setOnThisDayPosts([]);
       return;
     }
@@ -431,11 +449,9 @@ export default function MemoryAlbum({ navigation }: Props) {
     const tDate = today.getDate();
 
     const onThisDay: PostType[] = [];
-    const monthMap: Record<string, PostType[]> = {};
 
     posts.forEach((p) => {
       const d = getPostDate(p);
-
       if (
         d.getMonth() === tMonth &&
         d.getDate() === tDate &&
@@ -443,81 +459,56 @@ export default function MemoryAlbum({ navigation }: Props) {
       ) {
         onThisDay.push(p);
       }
-
-      const monthKey = `${d.getFullYear()}-${d.getMonth()}`;
-      if (!monthMap[monthKey]) monthMap[monthKey] = [];
-      monthMap[monthKey].push(p);
     });
 
     onThisDay.sort(
       (a, b) => getPostDate(b).getTime() - getPostDate(a).getTime()
     );
     setOnThisDayPosts(onThisDay);
+  }, [posts]);
 
-    const momentItems: MomentItem[] = [];
-    const cityTitles: { key: string; title: string }[] = [
-      { key: "kuala lumpur", title: "Trip to Kuala Lumpur" },
-      { key: " kl ", title: "Trip to KL" },
-      { key: "penang", title: "Penang memories" },
-      { key: "ipoh", title: "Ipoh day" },
-      { key: "cameron", title: "Cameron Highlands trip" },
-      { key: "genting", title: "Genting trip" },
-      { key: "melaka", title: "Melaka trip" },
-      { key: "langkawi", title: "Langkawi escape" },
-    ];
-
-    Object.entries(monthMap).forEach(([key, arr]) => {
-      if (arr.length < 5) return;
-
-      const [yearStr, monthIndexStr] = key.split("-");
-      const year = parseInt(yearStr, 10);
-      const mIndex = parseInt(monthIndexStr, 10);
-
-      const baseTitle = `${monthNames[mIndex]} ${year}`;
-
-      const allText = arr
-        .map((p) => {
-          const data: any = p;
-          const caption = (data.caption || "").toLowerCase();
-          const hashtags = Array.isArray(data.hashtags)
-            ? data.hashtags.join(" ").toLowerCase()
-            : "";
-          const loc = (data.locationName || data.placeName || "").toLowerCase();
-          return `${caption} ${hashtags} ${loc}`;
-        })
-        .join(" ");
-
-      let title = `${baseTitle} memories`;
-
-      for (const c of cityTitles) {
-        if (allText.includes(c.key)) {
-          title = c.title;
-          break;
-        }
-      }
-
-      if (
-        /trip|travel|vacation|holiday/.test(allText) &&
-        title === `${baseTitle} memories`
-      ) {
-        title = `${monthNames[mIndex]} ${year} trip`;
-      }
-
-      const sortedArr = [...arr].sort(
-        (a, b) => getPostDate(b).getTime() - getPostDate(a).getTime()
+  // Save new people cover
+  const savePeopleCover = async (personKey: string, postId: string) => {
+    if (!uid) return;
+    try {
+      const userRef = doc(firestore, "users", uid);
+      await setDoc(
+        userRef,
+        { peopleCoverPostIds: { [personKey]: postId } },
+        { merge: true }
       );
+    } catch (e) {
+      console.log("savePeopleCover error:", e);
+      Alert.alert(
+        "Save failed",
+        "Could not save people cover. Please check Firestore rules."
+      );
+    }
+  };
 
-      momentItems.push({
-        id: key,
-        title,
-        coverPost: sortedArr[0] || null,
-        postIds: sortedArr.map((p) => p.id),
-      });
+  // Local-only cover from gallery (web/phone)
+  const pickCoverFromGallery = async (personKey: string) => {
+    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert(
+        "Permission needed",
+        "Please allow photo access to choose a cover."
+      );
+      return;
+    }
+
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      allowsMultipleSelection: false,
+      quality: 0.9,
     });
 
-    momentItems.sort((a, b) => (a.id < b.id ? 1 : -1));
-    setMoments(momentItems);
-  }, [posts]);
+    if (result.canceled || !result.assets?.length) return;
+    const uri = result.assets[0].uri;
+    if (!uri) return;
+
+    setCustomCoverMap((prev) => ({ ...prev, [personKey]: uri }));
+  };
 
   if (!currentUser) {
     return (
@@ -525,14 +516,14 @@ export default function MemoryAlbum({ navigation }: Props) {
         <TopNav
           middleContent={<Text>Memory Album</Text>}
           leftContent={
-            <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
+            <Ionicons name="chevron-back" size={20} color={themeColor.white100} />
           }
           leftAction={() => navigation.popToTop()}
           rightContent={
             <Ionicons
               name={isDarkmode ? "sunny" : "moon"}
               size={20}
-              color={primaryTextColor}
+              color={themeColor.white100}
             />
           }
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
@@ -553,11 +544,14 @@ export default function MemoryAlbum({ navigation }: Props) {
     outputRange: [20, 0],
   });
 
-  // ✅ NEW: iOS-like "All Photos" grid (3 columns)
+  // ✅ All Photos grid: CENTER + BIGGER (iOS-like)
   const gridData = sortedPosts.filter((p) => !!getPostThumb(p));
   const numColumns = 3;
-  const gap = 4;
-  const thumbSize = 110; // simple fixed size (works fine for most phones)
+  const screenW = Dimensions.get("window").width;
+  const gridSidePadding = 14; // more centered
+  const gridGap = 6; // nicer spacing
+  const thumbSize =
+    (screenW - gridSidePadding * 2 - gridGap * (numColumns - 1)) / numColumns;
 
   const GridItem = ({ item }: { item: PostType }) => {
     const thumb = getPostThumb(item);
@@ -571,11 +565,12 @@ export default function MemoryAlbum({ navigation }: Props) {
         style={{
           width: thumbSize,
           height: thumbSize,
-          margin: gap,
           borderRadius: 10,
           overflow: "hidden",
           backgroundColor: cardBg,
+          marginBottom: gridGap,
         }}
+        activeOpacity={0.9}
       >
         <Image
           source={{ uri: thumb }}
@@ -604,6 +599,16 @@ export default function MemoryAlbum({ navigation }: Props) {
     );
   };
 
+  // cover picker modal grid
+  const coverPickerPosts: PostType[] = useMemo(() => {
+    if (!coverTarget) return [];
+    const setIds = new Set(coverTarget.postIds);
+    return posts
+      .filter((p) => setIds.has(p.id))
+      .filter((p) => !!getPostThumb(p))
+      .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
+  }, [coverTarget, posts]);
+
   return (
     <Layout>
       <TopNav
@@ -628,8 +633,11 @@ export default function MemoryAlbum({ navigation }: Props) {
           backgroundColor: isDarkmode ? "#050608" : themeColor.white100,
         }}
       >
-        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 110 }}>
-          {/* 0) RANDOM TODAY (big card like iOS Memories) */}
+        <ScrollView
+          style={{ flex: 1 }}
+          contentContainerStyle={{ padding: 16, paddingBottom: 110 }}
+        >
+          {/* 0) RANDOM TODAY */}
           {randomMemory?.coverPost && (
             <TouchableOpacity
               onPress={() =>
@@ -651,9 +659,16 @@ export default function MemoryAlbum({ navigation }: Props) {
               />
               <View style={{ padding: 12 }}>
                 <Text style={{ fontSize: 12, color: subTextColor, marginBottom: 4 }}>
-                  Random today • {randomMemory.postIds.length} media
+                  Random today
                 </Text>
-                <Text style={{ fontSize: 16, fontWeight: "800", color: primaryTextColor }} numberOfLines={1}>
+                <Text
+                  style={{
+                    fontSize: 16,
+                    fontWeight: "800",
+                    color: primaryTextColor,
+                  }}
+                  numberOfLines={1}
+                >
                   {randomMemory.title || "Memory"}
                 </Text>
                 <Text style={{ fontSize: 12, color: subTextColor, marginTop: 2 }} numberOfLines={1}>
@@ -666,9 +681,17 @@ export default function MemoryAlbum({ navigation }: Props) {
           {/* 1) ON THIS DAY */}
           {onThisDayPosts.length > 0 && (
             <View style={{ marginBottom: 22 }}>
-              <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
+              <Text
+                style={{
+                  fontSize: 18,
+                  fontWeight: "bold",
+                  color: primaryTextColor,
+                  marginBottom: 12,
+                }}
+              >
                 On this day
               </Text>
+
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {onThisDayPosts.map((p) => {
                   const d = getPostDate(p);
@@ -683,7 +706,10 @@ export default function MemoryAlbum({ navigation }: Props) {
                         backgroundColor: cardBg,
                         width: 200,
                       }}
-                      onPress={() => navigation.navigate("MemoryPostView", { postId: p.id })}
+                      onPress={() =>
+                        navigation.navigate("MemoryPostView", { postId: p.id })
+                      }
+                      activeOpacity={0.9}
                     >
                       {thumb && (
                         <Image
@@ -696,7 +722,14 @@ export default function MemoryAlbum({ navigation }: Props) {
                         <Text style={{ fontSize: 12, color: subTextColor, marginBottom: 2 }}>
                           {d.getDate()} {monthNames[d.getMonth()]} {d.getFullYear()}
                         </Text>
-                        <Text style={{ fontSize: 14, fontWeight: "600", color: primaryTextColor }} numberOfLines={2}>
+                        <Text
+                          style={{
+                            fontSize: 14,
+                            fontWeight: "600",
+                            color: primaryTextColor,
+                          }}
+                          numberOfLines={2}
+                        >
                           {(p as any).caption || "Memory from past years"}
                         </Text>
                       </View>
@@ -707,41 +740,95 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
           )}
 
-          {/* 2) TRIPS (hashtag albums like #TripGenting) */}
-          {tripAlbums.length > 0 && (
+          {/* ✅ 2) PLACES — iOS card: big image + bottom overlay (Place + Date) */}
+          {locationAlbums.length > 0 && (
             <View style={{ marginBottom: 22 }}>
-              <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
-                Trips
+              <Text
+                style={{
+                  fontSize: 18,
+                  fontWeight: "bold",
+                  color: primaryTextColor,
+                  marginBottom: 12,
+                }}
+              >
+                Places
               </Text>
+
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {tripAlbums.map((t) => {
-                  const coverUrl = t.coverPost ? getPostThumb(t.coverPost) : undefined;
+                {locationAlbums.map((a) => {
+                  const coverUrl = a.coverPost ? getPostThumb(a.coverPost) : undefined;
+
                   return (
                     <TouchableOpacity
-                      key={t.id}
+                      key={a.id}
                       style={{
                         marginRight: 16,
-                        borderRadius: 16,
+                        borderRadius: 18,
                         overflow: "hidden",
                         backgroundColor: cardBg,
-                        width: 220,
+                        width: 260,
+                        height: 320,
                       }}
+                      // NOTE: you said open album; if you already have a screen, change this navigation target.
+                      // For now keep opening cover post (safe, won't crash).
                       onPress={() => {
-                        if (t.coverPost) navigation.navigate("MemoryPostView", { postId: t.coverPost.id });
+                        if (a.coverPost) {
+                          navigation.navigate("MemoryPostView", { postId: a.coverPost.id });
+                        }
                       }}
+                      activeOpacity={0.9}
                     >
                       {coverUrl ? (
-                        <Image source={{ uri: coverUrl }} style={{ width: "100%", height: 130 }} resizeMode="cover" />
+                        <Image
+                          source={{ uri: coverUrl }}
+                          style={{ width: "100%", height: "100%" }}
+                          resizeMode="cover"
+                        />
                       ) : (
-                        <View style={{ width: "100%", height: 130, alignItems: "center", justifyContent: "center" }}>
-                          <Ionicons name="airplane" size={28} color={subTextColor} />
+                        <View
+                          style={{
+                            flex: 1,
+                            alignItems: "center",
+                            justifyContent: "center",
+                          }}
+                        >
+                          <Ionicons name="location" size={30} color={subTextColor} />
                         </View>
                       )}
-                      <View style={{ padding: 10 }}>
-                        <Text style={{ fontSize: 14, fontWeight: "800", color: primaryTextColor }} numberOfLines={1}>
-                          {t.title}
+
+                      {/* bottom overlay like iOS */}
+                      <View
+                        style={{
+                          position: "absolute",
+                          left: 0,
+                          right: 0,
+                          bottom: 0,
+                          paddingHorizontal: 12,
+                          paddingVertical: 10,
+                          backgroundColor: "rgba(0,0,0,0.45)",
+                        }}
+                      >
+                        <Text
+                          style={{
+                            fontSize: 14,
+                            fontWeight: "800",
+                            color: "#fff",
+                          }}
+                          numberOfLines={1}
+                        >
+                          {a.placeTitle}
                         </Text>
-                        <Text style={{ fontSize: 12, color: subTextColor }}>{t.postIds.length} media</Text>
+
+                        <Text
+                          style={{
+                            fontSize: 12,
+                            color: "rgba(255,255,255,0.85)",
+                            marginTop: 2,
+                          }}
+                          numberOfLines={1}
+                        >
+                          {a.rangeLabel}
+                        </Text>
                       </View>
                     </TouchableOpacity>
                   );
@@ -750,31 +837,64 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
           )}
 
-          {/* 3) PEOPLE (iOS-like row) */}
+          {/* ✅ 3) PEOPLE — only picture + name, NO media count; long press to change cover */}
           <View style={{ marginBottom: 22 }}>
-            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "bold",
+                color: primaryTextColor,
+                marginBottom: 12,
+              }}
+            >
               People
             </Text>
 
             {personAlbums.length === 0 ? (
-              <Text style={{ color: subTextColor }}>No people tags yet. Try tagging friends.</Text>
+              <Text style={{ color: subTextColor }}>
+                No people tags yet. Try tagging friends.
+              </Text>
             ) : (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {personAlbums.map((pa) => {
-                  const coverUrl = pa.coverPost ? getPostThumb(pa.coverPost) : undefined;
+                  const coverUrl =
+                    customCoverMap[pa.key] ||
+                    (pa.coverPost ? getPostThumb(pa.coverPost) : undefined);
+
                   return (
                     <TouchableOpacity
-                      key={pa.name.toLowerCase()}
+                      key={pa.key}
                       style={{ marginRight: 16, alignItems: "center" }}
+                      // NOTE: You said open person album; if you have a screen, change target here.
+                      // For now keep opening cover post (safe).
                       onPress={() => {
-                        if (pa.coverPost) navigation.navigate("MemoryPostView", { postId: pa.coverPost.id });
+                        if (pa.coverPost)
+                          navigation.navigate("MemoryPostView", { postId: pa.coverPost.id });
                       }}
+                      onLongPress={() => {
+                        Alert.alert("Change cover", `Choose cover for ${pa.name}`, [
+                          {
+                            text: "Pick from gallery",
+                            onPress: () => pickCoverFromGallery(pa.key),
+                          },
+                          {
+                            text: "Choose from posts",
+                            onPress: () => {
+                              setCoverTarget(pa);
+                              setCoverModalOpen(true);
+                            },
+                          },
+                          { text: "Cancel", style: "cancel" },
+                        ]);
+                      }}
+                      delayLongPress={320}
+                      activeOpacity={0.9}
                     >
                       <View
                         style={{
-                          width: 80,
-                          height: 80,
-                          borderRadius: 40,
+                          width: 82,
+                          height: 82,
+                          borderRadius: 41,
                           overflow: "hidden",
                           backgroundColor: cardBg,
                           alignItems: "center",
@@ -788,87 +908,88 @@ export default function MemoryAlbum({ navigation }: Props) {
                             resizeMode="cover"
                           />
                         ) : (
-                          <Ionicons name="person" size={32} color={subTextColor} />
+                          <Ionicons name="person" size={34} color={subTextColor} />
                         )}
                       </View>
-                      <Text style={{ marginTop: 6, fontSize: 14, fontWeight: "700", color: primaryTextColor }} numberOfLines={1}>
+
+                      <Text
+                        style={{
+                          marginTop: 8,
+                          fontSize: 14,
+                          fontWeight: "700",
+                          color: primaryTextColor,
+                          maxWidth: 92,
+                          textAlign: "center",
+                        }}
+                        numberOfLines={1}
+                      >
                         {pa.name}
                       </Text>
-                      <Text style={{ fontSize: 12, color: subTextColor }}>{pa.postIds.length} media</Text>
                     </TouchableOpacity>
                   );
                 })}
               </ScrollView>
             )}
+
+            {personAlbums.length > 0 && (
+              <Text style={{ marginTop: 8, fontSize: 12, color: subTextColor }}>
+                Long press a person to change cover.
+              </Text>
+            )}
           </View>
 
-          {/* 4) MOMENTS (monthly smart groups) */}
-          {moments.length > 0 && (
-            <View style={{ marginBottom: 22 }}>
-              <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
-                Moments
-              </Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false}>
-                {moments.map((m) => {
-                  const coverUrl = m.coverPost ? getPostThumb(m.coverPost) : undefined;
-                  return (
-                    <TouchableOpacity
-                      key={m.id}
-                      style={{
-                        marginRight: 16,
-                        borderRadius: 16,
-                        overflow: "hidden",
-                        backgroundColor: cardBg,
-                        width: 220,
-                      }}
-                      onPress={() => {
-                        if (m.coverPost) navigation.navigate("MemoryPostView", { postId: m.coverPost.id });
-                      }}
-                    >
-                      {coverUrl && (
-                        <Image source={{ uri: coverUrl }} style={{ width: "100%", height: 130 }} resizeMode="cover" />
-                      )}
-                      <View style={{ padding: 10 }}>
-                        <Text style={{ fontSize: 14, fontWeight: "800", color: primaryTextColor, marginBottom: 4 }} numberOfLines={2}>
-                          {m.title}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: subTextColor }}>{m.postIds.length} media</Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-              </ScrollView>
-            </View>
-          )}
-
-          {/* 5) ALL PHOTOS (iOS grid) */}
+          {/* ✅ 4) ALL PHOTOS — centered + bigger */}
           <View style={{ marginBottom: 22 }}>
-            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "bold",
+                color: primaryTextColor,
+                marginBottom: 12,
+              }}
+            >
               All Photos
             </Text>
 
             {!gridData.length ? (
-              <Text style={{ color: subTextColor }}>No memories yet. Try uploading a few photos first.</Text>
+              <Text style={{ color: subTextColor }}>
+                No memories yet. Try uploading a few photos first.
+              </Text>
             ) : (
               <FlatList
                 data={gridData}
                 keyExtractor={(item) => item.id}
                 numColumns={numColumns}
-                scrollEnabled={false} // IMPORTANT: keep it inside ScrollView
+                scrollEnabled={false}
                 renderItem={({ item }) => <GridItem item={item} />}
-                contentContainerStyle={{ paddingBottom: 6 }}
+                contentContainerStyle={{
+                  paddingHorizontal: gridSidePadding,
+                  paddingBottom: 6,
+                }}
+                columnWrapperStyle={{
+                  justifyContent: "space-between",
+                }}
               />
             )}
           </View>
 
-          {/* 6) TIMELINE (keep your existing timeline) */}
+          {/* 5) TIMELINE */}
           <View style={{ marginTop: 6 }}>
-            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
+            <Text
+              style={{
+                fontSize: 18,
+                fontWeight: "bold",
+                color: primaryTextColor,
+                marginBottom: 12,
+              }}
+            >
               Memories timeline
             </Text>
 
             {!sortedPosts.length ? (
-              <Text style={{ color: subTextColor }}>No memories yet. Try uploading a few photos first.</Text>
+              <Text style={{ color: subTextColor }}>
+                No memories yet. Try uploading a few photos first.
+              </Text>
             ) : (
               <View style={{ position: "relative", paddingLeft: 40 }}>
                 <View
@@ -910,13 +1031,27 @@ export default function MemoryAlbum({ navigation }: Props) {
                       return (
                         <View key={p.id} style={{ marginBottom: 26 }}>
                           {showYear && (
-                            <Text style={{ fontSize: 16, fontWeight: "700", color: primaryTextColor, marginBottom: 4 }}>
+                            <Text
+                              style={{
+                                fontSize: 16,
+                                fontWeight: "700",
+                                color: primaryTextColor,
+                                marginBottom: 4,
+                              }}
+                            >
                               {year}
                             </Text>
                           )}
 
                           {showMonth && (
-                            <Text style={{ marginBottom: 6, fontSize: 14, fontWeight: "600", color: primaryTextColor }}>
+                            <Text
+                              style={{
+                                marginBottom: 6,
+                                fontSize: 14,
+                                fontWeight: "600",
+                                color: primaryTextColor,
+                              }}
+                            >
                               {monthLabel}
                             </Text>
                           )}
@@ -936,17 +1071,24 @@ export default function MemoryAlbum({ navigation }: Props) {
                             </View>
 
                             <TouchableOpacity
-                              onPress={() => navigation.navigate("MemoryPostView", { postId: p.id })}
+                              onPress={() =>
+                                navigation.navigate("MemoryPostView", { postId: p.id })
+                              }
                               style={{
                                 flex: 1,
                                 borderRadius: 18,
                                 overflow: "hidden",
                                 backgroundColor: cardBg,
                               }}
+                              activeOpacity={0.9}
                             >
                               <View style={{ position: "relative" }}>
                                 {thumb && (
-                                  <Image source={{ uri: thumb }} style={{ width: "100%", height: 190 }} resizeMode="cover" />
+                                  <Image
+                                    source={{ uri: thumb }}
+                                    style={{ width: "100%", height: 190 }}
+                                    resizeMode="cover"
+                                  />
                                 )}
 
                                 <View
@@ -963,7 +1105,10 @@ export default function MemoryAlbum({ navigation }: Props) {
                                   <Text style={{ fontSize: 11, color: "#e5e7eb", marginBottom: 2 }}>
                                     {d.getDate()} {monthNames[d.getMonth()]} {d.getFullYear()}
                                   </Text>
-                                  <Text style={{ fontSize: 14, fontWeight: "700", color: "#f9fafb" }} numberOfLines={1}>
+                                  <Text
+                                    style={{ fontSize: 14, fontWeight: "700", color: "#f9fafb" }}
+                                    numberOfLines={1}
+                                  >
                                     {(p as any).caption || "Memory"}
                                   </Text>
                                 </View>
@@ -980,6 +1125,89 @@ export default function MemoryAlbum({ navigation }: Props) {
           </View>
         </ScrollView>
       </View>
+
+      {/* People cover picker modal */}
+      <Modal
+        visible={coverModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setCoverModalOpen(false)}
+      >
+        <View
+          style={{
+            flex: 1,
+            backgroundColor: "rgba(0,0,0,0.6)",
+            padding: 16,
+            justifyContent: "center",
+          }}
+        >
+          <View
+            style={{
+              borderRadius: 16,
+              backgroundColor: isDarkmode ? "#0b1220" : "#fff",
+              padding: 12,
+              maxHeight: "80%",
+            }}
+          >
+            <Text style={{ fontSize: 16, fontWeight: "800", color: isDarkmode ? "#fff" : "#111" }}>
+              Change cover
+            </Text>
+            <Text style={{ fontSize: 12, marginTop: 6, color: isDarkmode ? "#cbd5e1" : "#64748b" }}>
+              {coverTarget?.name || "Person"} • Tap a photo to set as cover
+            </Text>
+
+            <View style={{ marginTop: 12, flex: 1 }}>
+              {coverPickerPosts.length === 0 ? (
+                <Text style={{ color: subTextColor }}>No photos available for cover.</Text>
+              ) : (
+                <FlatList
+                  data={coverPickerPosts}
+                  keyExtractor={(it) => it.id}
+                  numColumns={3}
+                  renderItem={({ item }) => {
+                    const thumb = getPostThumb(item);
+                    if (!thumb) return null;
+
+                    return (
+                      <TouchableOpacity
+                        onPress={async () => {
+                          if (!coverTarget) return;
+                          await savePeopleCover(coverTarget.key, item.id);
+                          setCoverModalOpen(false);
+                        }}
+                        style={{
+                          width: "32%",
+                          aspectRatio: 1,
+                          margin: "1%",
+                          borderRadius: 10,
+                          overflow: "hidden",
+                          backgroundColor: cardBg,
+                        }}
+                        activeOpacity={0.9}
+                      >
+                        <Image
+                          source={{ uri: thumb }}
+                          style={{ width: "100%", height: "100%" }}
+                          resizeMode="cover"
+                        />
+                      </TouchableOpacity>
+                    );
+                  }}
+                />
+              )}
+            </View>
+
+            <View style={{ flexDirection: "row", marginTop: 10 }}>
+              <Button
+                text="Close"
+                status="info"
+                style={{ flex: 1 }}
+                onPress={() => setCoverModalOpen(false)}
+              />
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <MemoryFloatingMenu navigation={navigation as any} />
     </Layout>

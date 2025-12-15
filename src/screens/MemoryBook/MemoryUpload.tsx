@@ -26,7 +26,6 @@ import * as Location from "expo-location";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 import MemoryFloatingMenu from "./MemoryFloatingMenu";
-import { TextInput as RNTextInput } from "react-native";
 import { getAuth } from "firebase/auth";
 import {
   getFirestore,
@@ -42,16 +41,18 @@ import { getStorage, ref, uploadBytes, getDownloadURL } from "firebase/storage";
 // ✅ expo-video (new API)
 import { useVideoPlayer, VideoView } from "expo-video";
 
+// ✅ video thumbnail -> base64
+import * as VideoThumbnails from "expo-video-thumbnails";
+import * as FileSystem from "expo-file-system";
+
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryUpload">;
 
-// For multiple selection
 type SelectedMedia = {
   uri: string;
   type: "image" | "video";
-  base64?: string | null;
+  base64?: string | null; // image base64; ALSO used to cache video thumbnail base64
 };
 
-// For place search (IG-style location search)
 type PlaceOption = {
   id: string;
   label: string;
@@ -60,41 +61,21 @@ type PlaceOption = {
 };
 
 // ----- Face-recognition types -----
-type FaceMatch = {
-  name: string;
-  distance: number;
-};
-
-type FaceMatchesPerFace = {
-  faceIndex: number;
-  matches: FaceMatch[];
-};
-
-type FaceRecognizeResponse = {
-  ok?: boolean;
-  faces: FaceMatchesPerFace[];
-};
-
+type FaceMatch = { name: string; distance: number };
+type FaceMatchesPerFace = { faceIndex: number; matches: FaceMatch[] };
+type FaceRecognizeResponse = { ok?: boolean; faces: FaceMatchesPerFace[] };
 type FaceBatchItem = {
   index: number;
   ok?: boolean;
   faces: FaceMatchesPerFace[];
   error?: string;
 };
-
-type FaceBatchResponse = {
-  ok: boolean;
-  count: number;
-  results: FaceBatchItem[];
-};
+type FaceBatchResponse = { ok: boolean; count: number; results: FaceBatchItem[] };
 
 // ✅ Album info stored under posts
-type AlbumInfo = {
-  id: string;
-  name: string;
-};
+type AlbumInfo = { id: string; name: string };
 
-// ✅ Mood fields (still optional)
+// ✅ Mood fields
 type MoodLabel = "happy" | "neutral" | "tired" | "sad" | "angry";
 type MoodSource =
   | "ai"
@@ -127,7 +108,7 @@ function VideoPreview({ uri }: { uri: string }) {
       <VideoView
         player={player}
         style={{ width: "100%", height: "100%" }}
-        allowsFullscreen
+        fullscreenOptions={{ enable: true }}
       />
       <View
         style={{
@@ -151,7 +132,7 @@ function VideoPreview({ uri }: { uri: string }) {
   );
 }
 
-// ✅ Small reusable "AI pill" (no image file needed)
+// ✅ Small reusable "AI pill"
 function AIPill({ compact }: { compact?: boolean }) {
   return (
     <View
@@ -171,7 +152,6 @@ function AIPill({ compact }: { compact?: boolean }) {
   );
 }
 
-// ✅ Label row with AI pill at right
 function LabelWithAIPill({ label }: { label: string }) {
   return (
     <View style={styles.labelRow}>
@@ -226,7 +206,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : ""
     : "";
 
-  // ✅ initial albums if editing
   const initialAlbumIds: string[] = editMode
     ? Array.isArray(postData.albumIds)
       ? postData.albumIds
@@ -238,7 +217,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
       : []
     : [];
 
-  // ✅ mood initial values (optional)
+  // ✅ mood initial values
   const initialMoodLabel: MoodLabel = editMode
     ? (String(postData.moodLabel || "neutral").toLowerCase() as MoodLabel)
     : "neutral";
@@ -246,30 +225,31 @@ export default function MemoryUpload({ navigation, route }: Props) {
     ? (String(postData.moodSource || "unknown") as MoodSource)
     : "unknown";
 
-  // ✅ IMPORTANT: emoji is now stored at TOP-LEVEL: postData.emoji
+  // ✅ emoji stored at TOP-LEVEL: postData.emoji
   const initialPostEmoji = editMode
     ? String(postData?.emoji || emojiFromMoodLabel(initialMoodLabel) || "😐")
     : emojiFromMoodLabel(initialMoodLabel);
 
   const [postEmoji, setPostEmoji] = useState<string>(initialPostEmoji);
-  const [emojiEdited, setEmojiEdited] = useState<boolean>(editMode);
 
-  // emoji picker modal
-const [emojiPickerVisible, setEmojiPickerVisible] = useState(false);
+  // ✅ only treat as edited if editMode already has emoji
+  const [emojiEdited, setEmojiEdited] = useState<boolean>(
+    editMode && !!postData?.emoji
+  );
 
-const emojiOptions = useMemo(
-  () => [
-    { emoji: "😊", label: "Happy" },
-    { emoji: "😐", label: "Neutral" },
-    { emoji: "😴", label: "Tired" },
-    { emoji: "😢", label: "Sad" },
-    { emoji: "😡", label: "Angry" },
-  ],
-  []
-);
+  const [emojiPickerVisible, setEmojiPickerVisible] = useState(false);
 
+  const emojiOptions = useMemo(
+    () => [
+      { emoji: "😊", label: "Happy" },
+      { emoji: "😐", label: "Neutral" },
+      { emoji: "😴", label: "Tired" },
+      { emoji: "😢", label: "Sad" },
+      { emoji: "😡", label: "Angry" },
+    ],
+    []
+  );
 
-  // store ALL selected media here
   const [mediaItems, setMediaItems] = useState<SelectedMedia[]>(() =>
     initialMediaUrls.length
       ? initialMediaUrls.map((uri: string, idx: number) => ({
@@ -288,11 +268,9 @@ const emojiOptions = useMemo(
   const [isUploading, setIsUploading] = useState(false);
   const [isGeneratingAI, setIsGeneratingAI] = useState(false);
 
-  // ✅ mood state (optional)
   const [moodLabel, setMoodLabel] = useState<MoodLabel>(initialMoodLabel);
   const [moodSource, setMoodSource] = useState<MoodSource>(initialMoodSource);
 
-  // ✅ albums state
   const [albumIds, setAlbumIds] = useState<string[]>(
     selectedAlbums.length ? selectedAlbums.map((a) => a.id) : initialAlbumIds
   );
@@ -300,7 +278,6 @@ const emojiOptions = useMemo(
     selectedAlbums.length ? selectedAlbums : initialAlbums
   );
 
-  // face-learning UI state
   const [faceName, setFaceName] = useState("");
   const [isSavingFace, setIsSavingFace] = useState(false);
 
@@ -322,6 +299,56 @@ const emojiOptions = useMemo(
     ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
     ((process as any)?.env?.AI_SERVER_URL as string) ||
     "http://192.168.1.74:3000";
+
+  // -------------------------------------------------------
+  // ✅ Android content:// -> file:// helper (important for video thumbnails)
+  // -------------------------------------------------------
+  const ensureFileUri = async (uri: string): Promise<string> => {
+    try {
+      if (!uri) return uri;
+
+      // already file://
+      if (!uri.startsWith("content://")) return uri;
+
+      const FS = FileSystem as any;
+      const cacheDir = FS.cacheDirectory || FS.documentDirectory;
+      if (!cacheDir) return uri;
+
+      const target = `${cacheDir}mb_video_${Date.now()}.mp4`;
+
+      await FileSystem.copyAsync({ from: uri, to: target });
+      return target;
+    } catch (e) {
+      console.log("ensureFileUri error:", e);
+      return uri;
+    }
+  };
+
+  // -------------------------------------------------------
+  // ✅ Create thumbnail base64 for video (robust)
+  // -------------------------------------------------------
+  const getVideoThumbBase64 = async (
+    videoUri: string
+  ): Promise<string | null> => {
+    try {
+      const safeUri = await ensureFileUri(videoUri);
+
+      const { uri: thumbUri } = await VideoThumbnails.getThumbnailAsync(
+        safeUri,
+        { time: 1000, quality: 0.8 }
+      );
+
+      // ✅ TS-safe: use string literal "base64"
+      const b64 = await FileSystem.readAsStringAsync(thumbUri, {
+        encoding: "base64" as any,
+      } as any);
+
+      return b64 || null;
+    } catch (e) {
+      console.log("getVideoThumbBase64 error:", e);
+      return null;
+    }
+  };
 
   // -------------------------------------------------------
   // Location: auto-detect
@@ -362,6 +389,7 @@ const emojiOptions = useMemo(
             data.display_name ||
             null;
           setLocationLabel(label);
+          setLocationQuery(label || "");
           setLocationError(null);
           return;
         }
@@ -385,6 +413,7 @@ const emojiOptions = useMemo(
           ].filter(Boolean);
           const label = parts.slice(0, 3).join(", ");
           setLocationLabel(label || null);
+          setLocationQuery(label || "");
           setLocationError(null);
         }
       } catch (e) {
@@ -397,13 +426,36 @@ const emojiOptions = useMemo(
     }
   };
 
+  // ✅ IMPORTANT: do not override saved location in edit mode
   useEffect(() => {
+    if (editMode) {
+      const savedLabel = postData?.locationLabel ?? null;
+      const savedCoords = postData?.locationCoords ?? null;
+
+      if (savedLabel) {
+        setLocationLabel(savedLabel);
+        setLocationQuery(savedLabel);
+        setLocationError(null);
+      }
+      if (savedCoords?.latitude && savedCoords?.longitude) {
+        setLocationCoords({
+          latitude: Number(savedCoords.latitude),
+          longitude: Number(savedCoords.longitude),
+        });
+      }
+
+      if (!savedLabel && !savedCoords) {
+        autoDetectLocation();
+      }
+      return;
+    }
+
     autoDetectLocation();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // -------------------------------------------------------
-  // Search address
+  // Search address (Nominatim)
   // -------------------------------------------------------
   const searchAddress = async () => {
     const q = locationQuery.trim();
@@ -431,6 +483,7 @@ const emojiOptions = useMemo(
       }));
 
       setPlaceOptions(options);
+      setLocationError(null);
     } catch (e) {
       console.log("searchAddress error:", e);
       setLocationError("Failed to search address");
@@ -444,6 +497,15 @@ const emojiOptions = useMemo(
     setLocationCoords({ latitude: place.latitude, longitude: place.longitude });
     setLocationQuery(place.label);
     setPlaceOptions([]);
+    setLocationError(null);
+  };
+
+  const clearLocation = () => {
+    setLocationLabel(null);
+    setLocationCoords(null);
+    setLocationQuery("");
+    setPlaceOptions([]);
+    setLocationError(null);
   };
 
   // -------------------------------------------------------
@@ -479,10 +541,9 @@ const emojiOptions = useMemo(
       caption: string;
       hashtags: string[];
       friendTags: string[];
+      emoji?: string;
       moodLabel?: MoodLabel | string;
       moodSource?: MoodSource | string;
-      // (your server also returns moodScore but we don't need it anymore)
-      moodScore?: number;
     };
   };
 
@@ -505,34 +566,9 @@ const emojiOptions = useMemo(
         return null;
       }
 
-      const data = (await resp.json()) as FaceRecognizeResponse;
-      return data;
+      return (await resp.json()) as FaceRecognizeResponse;
     } catch (err) {
       console.log("Face recognize error:", err);
-      return null;
-    }
-  };
-
-  const callFaceRecognizeBatch = async (
-    imageBase64List: string[],
-    threshold?: number
-  ): Promise<FaceBatchResponse | null> => {
-    try {
-      const resp = await fetch(`${LOCAL_AI_SERVER}/faces/recognize_batch`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ imageBase64List, threshold }),
-      });
-
-      if (!resp.ok) {
-        console.log("Face batch HTTP error:", resp.status);
-        return null;
-      }
-
-      const data = (await resp.json()) as FaceBatchResponse;
-      return data;
-    } catch (err) {
-      console.log("Face batch error:", err);
       return null;
     }
   };
@@ -581,10 +617,7 @@ const emojiOptions = useMemo(
     }
 
     const FACE_THRESHOLD = 0.37;
-    const recognize = await callFaceRecognize(
-      firstImage.base64,
-      FACE_THRESHOLD
-    );
+    const recognize = await callFaceRecognize(firstImage.base64, FACE_THRESHOLD);
     const faces = Array.isArray(recognize?.faces) ? recognize.faces : [];
 
     if (faces.length === 0) {
@@ -673,6 +706,7 @@ const emojiOptions = useMemo(
     setMediaItems((prev) => [...prev, ...selected]);
   };
 
+  // ✅ UPDATED: generate + cache video thumbnail base64 immediately
   const pickVideoFromLibrary = async () => {
     if (Platform.OS !== "web") {
       const { status } =
@@ -696,10 +730,27 @@ const emojiOptions = useMemo(
     if (result.canceled) return;
 
     const asset = result.assets[0];
-    setMediaItems((prev) => [
-      ...prev,
-      { uri: asset.uri, type: "video", base64: null },
-    ]);
+
+    // Add first (so user sees preview)
+    setMediaItems((prev) => [...prev, { uri: asset.uri, type: "video", base64: null }]);
+
+    // Generate thumbnail base64
+    const thumbB64 = await getVideoThumbBase64(asset.uri);
+    if (!thumbB64) {
+      Alert.alert(
+        "Video thumbnail failed",
+        "Could not create a thumbnail for AI. Try another video or record with camera."
+      );
+      return;
+    }
+
+    // Cache into the added item (match by uri)
+    setMediaItems((prev) => {
+      const next = [...prev];
+      const idx = next.findIndex((x) => x.uri === asset.uri && x.type === "video");
+      if (idx !== -1) next[idx] = { ...next[idx], base64: thumbB64 };
+      return next;
+    });
   };
 
   const captureWithCamera = async () => {
@@ -715,20 +766,31 @@ const emojiOptions = useMemo(
     const result = await ImagePicker.launchCameraAsync({
       mediaTypes: ImagePicker.MediaTypeOptions.All,
       quality: 0.85,
-      base64: true,
+      base64: true, // image will have base64; video will not
     });
 
     if (result.canceled || !result.assets?.length) return;
 
     const asset = result.assets[0];
-    setMediaItems((prev) => [
-      ...prev,
-      {
-        uri: asset.uri,
-        type: asset.type === "video" ? "video" : "image",
-        base64: asset.type === "video" ? null : asset.base64 ?? null,
-      },
-    ]);
+
+    if (asset.type === "video") {
+      setMediaItems((prev) => [...prev, { uri: asset.uri, type: "video", base64: null }]);
+
+      const thumbB64 = await getVideoThumbBase64(asset.uri);
+      if (thumbB64) {
+        setMediaItems((prev) => {
+          const next = [...prev];
+          const idx = next.findIndex((x) => x.uri === asset.uri && x.type === "video");
+          if (idx !== -1) next[idx] = { ...next[idx], base64: thumbB64 };
+          return next;
+        });
+      }
+    } else {
+      setMediaItems((prev) => [
+        ...prev,
+        { uri: asset.uri, type: "image", base64: asset.base64 ?? null },
+      ]);
+    }
   };
 
   const pickMedia = async () => {
@@ -737,6 +799,11 @@ const emojiOptions = useMemo(
         "Edit mode",
         "Right now you can only edit the caption and story setting, not the media."
       );
+      return;
+    }
+
+    if (Platform.OS === "web") {
+      await pickPhotosFromLibrary();
       return;
     }
 
@@ -749,7 +816,7 @@ const emojiOptions = useMemo(
   };
 
   // -------------------------------------------------------
-  // AI generate
+  // ✅ AI generate
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -766,20 +833,43 @@ const emojiOptions = useMemo(
     try {
       setIsGeneratingAI(true);
 
-      const imageBase64List = mediaItems
-        .filter((m) => m.type === "image" && m.base64)
-        .map((m) => m.base64 as string);
+      const aiBase64List: string[] = [];
+      const nextMedia = [...mediaItems];
 
-      if (!imageBase64List.length) {
+      // photos
+      for (const m of nextMedia) {
+        if (m.type === "image" && m.base64) aiBase64List.push(m.base64);
+      }
+
+      // video thumbs
+      for (let i = 0; i < nextMedia.length; i++) {
+        const m = nextMedia[i];
+        if (m.type !== "video") continue;
+
+        if (m.base64) {
+          aiBase64List.push(m.base64);
+          continue;
+        }
+
+        const thumbB64 = await getVideoThumbBase64(m.uri);
+        if (thumbB64) {
+          aiBase64List.push(thumbB64);
+          nextMedia[i] = { ...m, base64: thumbB64 };
+        }
+      }
+
+      setMediaItems(nextMedia);
+
+      if (!aiBase64List.length) {
         Alert.alert(
-          "Need photo data",
-          "To use AI + face recognition, please select at least 1 photo (not only video)."
+          "Need media data",
+          "AI needs at least 1 photo OR a video (thumbnail). Please try again.\n\nTip: Try another video, or record using camera."
         );
         return;
       }
 
       const captionDraft = options?.useDraft ? draft || "" : caption || "";
-      const aiResult = await callAiForPostMeta(captionDraft, imageBase64List);
+      const aiResult = await callAiForPostMeta(captionDraft, aiBase64List);
 
       const stripHashtags = (text: string) =>
         (text || "")
@@ -801,61 +891,18 @@ const emojiOptions = useMemo(
         setFriendTagsText(aiResult.friendTags.join(", "));
       }
 
-      // ✅ moodLabel -> emoji
+      if (aiResult.emoji && !emojiEdited) {
+        setPostEmoji(String(aiResult.emoji));
+      }
+
+      // ✅ ONLY trust moodLabel from server (face-based)
       if (aiResult.moodLabel) {
         const lbl = String(aiResult.moodLabel).toLowerCase();
-        const allowed: MoodLabel[] = [
-          "happy",
-          "neutral",
-          "tired",
-          "sad",
-          "angry",
-        ];
+        const allowed: MoodLabel[] = ["happy", "neutral", "tired", "sad", "angry"];
         if (allowed.includes(lbl as MoodLabel)) {
           setMoodLabel(lbl as MoodLabel);
-
-          // ✅ set emoji from AI only if user hasn't edited emoji
-          if (!emojiEdited) {
-            setPostEmoji(emojiFromMoodLabel(lbl));
-          }
-        }
-      }
-
-      if (aiResult.moodSource) {
-        setMoodSource(String(aiResult.moodSource) as MoodSource);
-      } else {
-        // AI ran -> mark as ai
-        setMoodSource("ai");
-      }
-
-      // Face recognition batch
-      const FACE_THRESHOLD = 0.37;
-      const scanImages = imageBase64List.slice(0, 3);
-      const batch = await callFaceRecognizeBatch(scanImages, FACE_THRESHOLD);
-
-      if (batch && Array.isArray(batch.results)) {
-        const names: string[] = [];
-
-        for (const item of batch.results) {
-          const faces = Array.isArray(item.faces) ? item.faces : [];
-          for (const f of faces) {
-            const matches = Array.isArray(f.matches) ? f.matches : [];
-            for (const m of matches) {
-              const n = String(m.name || "").trim();
-              if (n) names.push(n);
-            }
-          }
-        }
-
-        if (names.length) {
-          setFriendTagsText((prev: string) => {
-            const existing = prev
-              .split(/[,@\s]+/)
-              .map((t) => t.trim())
-              .filter(Boolean);
-            const merged = new Set([...existing, ...names]);
-            return Array.from(merged).join(", ");
-          });
+          setMoodSource("face");
+          if (!emojiEdited && !aiResult.emoji) setPostEmoji(emojiFromMoodLabel(lbl));
         }
       }
     } catch (e: any) {
@@ -915,15 +962,16 @@ const emojiOptions = useMemo(
           hashtags: hashtagList,
           friendTags: friendTagList,
 
-          // ✅ IMPORTANT: top-level emoji (MoodCalendar uses this)
           emoji: finalEmoji,
-
-          // optional: keep mood info
           moodLabel: postData?.moodLabel ?? moodLabel,
           moodSource: postData?.moodSource ?? moodSource,
 
           albums: safeAlbums,
           albumIds: safeAlbumIds,
+
+          // ✅ FIX: save location when editing
+          locationLabel: locationLabel || null,
+          locationCoords: locationCoords || null,
         });
 
         Alert.alert("Updated", "Your memory has been updated.");
@@ -991,13 +1039,11 @@ const emojiOptions = useMemo(
         locationLabel: locationLabel || null,
         locationCoords: locationCoords || null,
 
-        // ✅ IMPORTANT: top-level emoji (MoodCalendar uses this)
         emoji: finalEmoji,
-
-        // optional: keep mood info
         moodLabel,
         moodSource: moodSource || "unknown",
 
+        // ✅ SAVE ALBUMS + IDS
         albums: safeAlbums,
         albumIds: safeAlbumIds,
       });
@@ -1015,18 +1061,15 @@ const emojiOptions = useMemo(
   const arrowColor = isDarkmode ? themeColor.white : "#999";
 
   const canUseAI = useMemo(() => {
-    return (
-      mediaItems.some((m) => m.type === "image" && !!m.base64) &&
-      !isGeneratingAI
-    );
+    const hasImageB64 = mediaItems.some((m) => m.type === "image" && !!m.base64);
+    const hasVideo = mediaItems.some((m) => m.type === "video");
+    return (hasImageB64 || hasVideo) && !isGeneratingAI;
   }, [mediaItems, isGeneratingAI]);
 
   return (
     <Layout>
       <TopNav
-        middleContent={
-          <Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>
-        }
+        middleContent={<Text>{editMode ? "Edit Memory" : "Upload Memory"}</Text>}
         leftAction={() => navigation.goBack()}
         leftContent={
           <Ionicons
@@ -1049,6 +1092,7 @@ const emojiOptions = useMemo(
           }
           onPress={pickMedia}
         />
+
         {/* Preview selected media */}
         {mediaItems.length > 0 && (
           <View style={{ marginTop: 20 }}>
@@ -1119,6 +1163,7 @@ const emojiOptions = useMemo(
             )}
           </View>
         )}
+
         {/* 📍 Location */}
         <View style={{ marginTop: 16 }}>
           <View
@@ -1128,9 +1173,7 @@ const emojiOptions = useMemo(
               justifyContent: "space-between",
             }}
           >
-            <View
-              style={{ flexDirection: "row", alignItems: "center", flex: 1 }}
-            >
+            <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
               <Ionicons
                 name="location-outline"
                 size={18}
@@ -1151,18 +1194,22 @@ const emojiOptions = useMemo(
               </Text>
             </View>
 
-            <TouchableOpacity onPress={autoDetectLocation}>
-              <Text
-                style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}
-              >
-                Detect again
-              </Text>
-            </TouchableOpacity>
+            <View style={{ flexDirection: "row", alignItems: "center" }}>
+              <TouchableOpacity onPress={autoDetectLocation}>
+                <Text style={{ fontSize: 11, color: themeColor.info, marginLeft: 8 }}>
+                  Detect again
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity onPress={clearLocation}>
+                <Text style={{ fontSize: 11, color: "#ef4444", marginLeft: 12 }}>
+                  Clear
+                </Text>
+              </TouchableOpacity>
+            </View>
           </View>
 
-          <View
-            style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}
-          >
+          <View style={{ marginTop: 8, flexDirection: "row", alignItems: "center" }}>
             <View style={{ flex: 1, marginRight: 8 }}>
               <TextInput
                 placeholder="Search for a place (optional)"
@@ -1229,6 +1276,7 @@ const emojiOptions = useMemo(
             </View>
           )}
         </View>
+
         {/* Draft / Keywords */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>
           Draft / Keywords (optional)
@@ -1259,6 +1307,7 @@ const emojiOptions = useMemo(
             <Ionicons name="arrow-forward" size={20} color={arrowColor} />
           </TouchableOpacity>
         </View>
+
         {/* Caption */}
         <Text style={{ marginTop: 20, marginBottom: 10 }}>Caption</Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
@@ -1289,13 +1338,12 @@ const emojiOptions = useMemo(
               <Ionicons name="sparkles" size={20} color={arrowColor} />
             </TouchableOpacity>
 
-            {/* keep it INSIDE screen, not sticking out */}
             <View
               pointerEvents="none"
               style={{
                 position: "absolute",
                 top: -24,
-                right: -4, // ✅ move left a bit (no negative)
+                right: -4,
                 zIndex: 50,
                 elevation: 50,
               }}
@@ -1304,30 +1352,25 @@ const emojiOptions = useMemo(
             </View>
           </View>
         </View>
-        {/* Hashtags label with AI pill (no button) */}
+
+        {/* Hashtags label with AI pill */}
         <LabelWithAIPill label="Hashtags (AI / manual)" />
         <TextInput
           placeholder="#friends #holiday #2025"
           value={hashtagsText}
           onChangeText={setHashtagsText}
         />
-        {/* Friend tags label with AI pill (no button) */}
+
+        {/* Friend tags label with AI pill */}
         <LabelWithAIPill label="Friend tags (comma separated)" />
         <TextInput
-          placeholder="Angelina, Jamie, Alex"
+          placeholder="Angelina, Alex"
           value={friendTagsText}
           onChangeText={setFriendTagsText}
         />
-        {/* Mood display (optional) */}
-        <View style={{ marginTop: 12 }}>
-          <Text style={{ fontSize: 12, color: isDarkmode ? "#aaa" : "#666" }}>
-            Mood (AI): {moodLabel} • {moodSource}
-          </Text>
-        </View>
+
         {/* Remember this face */}
-        <Text style={{ marginTop: 24, marginBottom: 8 }}>
-          Remember this face
-        </Text>
+        <Text style={{ marginTop: 24, marginBottom: 8 }}>Remember this face</Text>
         <View style={{ flexDirection: "row", alignItems: "center" }}>
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
@@ -1351,7 +1394,6 @@ const emojiOptions = useMemo(
         </Text>
 
         <View style={{ flexDirection: "row", alignItems: "center" }}>
-          {/* Emoji preview / picker */}
           <TouchableOpacity
             onPress={() => setEmojiPickerVisible(true)}
             activeOpacity={0.85}
@@ -1370,12 +1412,11 @@ const emojiOptions = useMemo(
             <Text style={{ fontSize: 22 }}>{postEmoji || "😐"}</Text>
           </TouchableOpacity>
 
-          {/* Manual emoji typing (NO placeholder) */}
           <View style={{ flex: 1, marginRight: 10 }}>
             <TextInput
               value={postEmoji}
-              placeholder="" // ✅ force empty
-              placeholderTextColor="transparent" // ✅ hide placeholder
+              placeholder=""
+              placeholderTextColor="transparent"
               onChangeText={(t) => {
                 setEmojiEdited(true);
                 const emoji = Array.from(String(t || ""))[0] || "";
@@ -1387,7 +1428,6 @@ const emojiOptions = useMemo(
             />
           </View>
 
-          {/* Reset to AI */}
           <TouchableOpacity
             onPress={() => {
               setEmojiEdited(false);
@@ -1404,6 +1444,9 @@ const emojiOptions = useMemo(
             <Text style={{ fontSize: 12, color: isDarkmode ? "#fff" : "#333" }}>
               Reset AI
             </Text>
+            <View style={{ position: "absolute", top: -25, right: 4 }}>
+              <AIPill compact />
+            </View>
           </TouchableOpacity>
         </View>
 
@@ -1458,16 +1501,10 @@ const emojiOptions = useMemo(
                   color: isDarkmode ? "#bbb" : "#666",
                 }}
               >
-                This emoji will be saved into the post and shown in Mood
-                Calendar.
+                This emoji will be saved into the post and shown in Mood Calendar.
               </Text>
 
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                }}
-              >
+              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
                 {emojiOptions.map((item) => (
                   <TouchableOpacity
                     key={item.emoji}
@@ -1476,10 +1513,7 @@ const emojiOptions = useMemo(
                       setPostEmoji(item.emoji);
                       setEmojiPickerVisible(false);
                     }}
-                    style={{
-                      width: 48,
-                      alignItems: "center",
-                    }}
+                    style={{ width: 48, alignItems: "center" }}
                   >
                     <Text style={{ fontSize: 26 }}>{item.emoji}</Text>
                     <Text
@@ -1507,6 +1541,7 @@ const emojiOptions = useMemo(
             </View>
           </View>
         </Modal>
+
         {/* Story toggle */}
         <View style={{ marginTop: 24 }}>
           <TouchableOpacity
@@ -1519,9 +1554,7 @@ const emojiOptions = useMemo(
               color={isDarkmode ? themeColor.white : "#444"}
               style={{ marginRight: 8 }}
             />
-            <Text
-              style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}
-            >
+            <Text style={{ color: isDarkmode ? themeColor.white : themeColor.dark }}>
               Post as 24-hour Story
             </Text>
           </TouchableOpacity>
@@ -1532,12 +1565,12 @@ const emojiOptions = useMemo(
               color: isDarkmode ? "#aaa" : "#777",
             }}
           >
-            When enabled, this memory will appear as a story and disappear after
-            24 hours.
+            When enabled, this memory will appear as a story and disappear after 24 hours.
           </Text>
         </View>
+
         {/* Upload button */}
-        <View style={{ marginTop: 30, marginBottom: 20 }}>
+        <View style={{ marginTop: 30, marginBottom: 60 }}>
           <Button
             text={
               isUploading
