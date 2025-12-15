@@ -158,7 +158,6 @@ const estimateRestSec = (difficulty?: string) => {
 
 const wait = (ms: number) => new Promise<void>((res) => setTimeout(res, ms));
 
-/** Option B: one-line coaching tips */
 const EXERCISE_TIPS: Record<string, string> = {
   "Warm Up": "Move gently. Breathe steadily and loosen your joints.",
   "Cool Down": "Slow down your breathing and stretch lightly.",
@@ -207,11 +206,6 @@ const EXERCISE_TIPS: Record<string, string> = {
   "Shoulder Taps": "Feet wider for stability, keep hips still.",
 };
 
-/**
- * Option C media:
- * - Use `gif` ONLY if it's a DIRECT image URL (ends with .gif/.png/.jpg/.webp).
- * - For now you gave page links, so we store them in `link` and open browser.
- */
 const EXERCISE_MEDIA: Record<string, { gif?: string; link?: string }> = {
   "March in Place": {
     link: "https://www.pinterest.com/pin/march-in-place--75716837473618705/",
@@ -332,8 +326,8 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
 
   const exitingRef = useRef(false);
 
-  // decides countdown intro speech: "next" or "resume"
-  const countdownIntroRef = useRef<"next" | "resume">("next");
+  // ✅ start vs resume vs next
+  const countdownIntroRef = useRef<"start" | "next" | "resume">("next");
 
   const current = steps[idx];
   const next = steps[idx + 1];
@@ -352,7 +346,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     return Math.min(effective / totalPlannedSec, 1);
   }, [totalPlannedSec, creditedPlannedSec, current?.durationSec, secLeft]);
 
-  // ring
   const radius = 100;
   const circumference = 2 * Math.PI * radius;
   const stepDur = current?.durationSec || 1;
@@ -388,10 +381,9 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     return isDirectImageUrl(u) ? u : undefined;
   }, [media?.gif]);
 
-  // ✅ show demo ONLY for WORK steps (no warmup/rest/cooldown demo)
+  // ✅ show demo ONLY for WORK
   const showDemo = useMemo(() => current?.type === "work", [current?.type]);
 
-  // ---------- Plan Generation ----------
   const generatePlan = useCallback(async (pref: PrefDoc | undefined) => {
     const goal = pref?.goal || "Stay Active";
     const difficulty = pref?.difficulty || "easy";
@@ -488,7 +480,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     return out;
   }, []);
 
-  // ---------- Load / Restore ----------
   const loadSession = useCallback(
     async (refresh = false) => {
       if (refresh) setRefreshing(true);
@@ -563,7 +554,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     };
   }, [loadSession]);
 
-  // ---------- Auto-save ----------
   useEffect(() => {
     const saveState = async () => {
       const user = auth.currentUser;
@@ -615,9 +605,10 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     auth.currentUser,
   ]);
 
-  // ---------- Countdown ----------
-  // - If transitioning from pause -> "Resuming" then 3..2..1
-  // - Else (normal start/step change) -> "Next: <name>" then 3..2..1
+  // ✅ Countdown voice logic:
+  // - start: "Starting workout" then 3..2..1
+  // - resume: "Resuming" then 3..2..1
+  // - next: "Next, <name>" then 3..2..1
   useEffect(() => {
     if (phase !== "countdown") return;
     if (!current) return;
@@ -627,7 +618,13 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     const run = async () => {
       const mode = countdownIntroRef.current;
 
-      if (mode === "resume") {
+      if (mode === "start") {
+        setBanner("Starting workout");
+        if (voiceOn) {
+          speak("Starting workout");
+          await wait(900);
+        }
+      } else if (mode === "resume") {
         setBanner("Resuming");
         if (voiceOn) {
           speak("Resuming");
@@ -637,7 +634,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
         setBanner(`Next: ${current.title}`);
         if (voiceOn) {
           speak(`Next, ${current.title}`);
-          await wait(800);
+          await wait(900);
         }
       }
 
@@ -659,7 +656,7 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
           setPhase("running");
           countdownIntroRef.current = "next"; // reset default
         }
-      }, 900);
+      }, 1000); // ✅ smoother spacing to avoid overlap
     };
 
     void run();
@@ -669,7 +666,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     };
   }, [phase, current?.title, voiceOn, speak]);
 
-  // ---------- Running tick ----------
   useEffect(() => {
     if (phase !== "running") return;
     if (!current) return;
@@ -682,7 +678,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     return () => clearInterval(interval);
   }, [phase, current?.id]);
 
-  // ---------- Step end ----------
   useEffect(() => {
     if (phase !== "running") return;
     if (secLeft !== 0) return;
@@ -690,12 +685,14 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     void completeStep({ skipped: false });
   }, [phase, secLeft, current?.id]);
 
-  // ---------- Actions ----------
   const beginOrResume = useCallback(async () => {
     if (!current) return;
     if (!startedAtClient) setStartedAtClient(new Date());
 
-    countdownIntroRef.current = phase === "paused" ? "resume" : "next";
+    if (phase === "ready") countdownIntroRef.current = "start";
+    else if (phase === "paused") countdownIntroRef.current = "resume";
+    else countdownIntroRef.current = "next";
+
     setPhase("countdown");
   }, [current, startedAtClient, phase]);
 
@@ -710,7 +707,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
 
       setCreditedPlannedSec((p) => p + (current.durationSec || 0));
 
-      // skipping credits remaining time instantly
       if (skipped && secLeft > 0) {
         setElapsedSec((p) => p + secLeft);
       }
@@ -815,7 +811,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
     await saveToHistory("cancelled");
   }, [auth.currentUser, saveToHistory]);
 
-  // ---------- UI helpers ----------
   const Card = ({
     children,
     style,
@@ -924,7 +919,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
         </View>
       ) : (
         <View style={{ flex: 1, backgroundColor: bg }}>
-          {/* ===== PLAN ===== */}
           {phase === "ready" && (
             <>
               <FlatList
@@ -995,7 +989,9 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
                         <Text
                           style={{ fontSize: 12, color: dimText, marginTop: 2 }}
                         >
-                          {voiceOn ? "On (Next/Resuming + 3..2..1)" : "Off"}
+                          {voiceOn
+                            ? "On (Start/Resuming/Next + 3..2..1)"
+                            : "Off"}
                         </Text>
                       </View>
 
@@ -1045,7 +1041,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
             </>
           )}
 
-          {/* ===== ACTIVE ===== */}
           {phase !== "ready" && phase !== "finished" && current && (
             <>
               <ScrollView
@@ -1240,7 +1235,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
                       {coachTip}
                     </Text>
 
-                    {/* Demo only for WORK steps */}
                     {showDemo && (
                       <View
                         style={[
@@ -1434,7 +1428,6 @@ export default function WorkoutSessionScreen({ navigation }: Props) {
             </>
           )}
 
-          {/* ===== FINISHED ===== */}
           {phase === "finished" && (
             <ScrollView
               contentContainerStyle={{ padding: 14, paddingBottom: 30 }}

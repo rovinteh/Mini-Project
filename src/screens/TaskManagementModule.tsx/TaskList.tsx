@@ -941,7 +941,10 @@ export default function TaskList(props: TaskListProps) {
   const handleDelete = (item: any) => {
     const performDelete = async () => {
       try {
-        await TaskService.deleteTask(item.key, item.attachments);
+        // Pass projectId and teamId so it deletes from the correct Firestore path
+        const projectId = item.projectId || DEFAULT_PROJECT_ID;
+        const teamId = item.teamId || DEFAULT_TEAM_ID;
+        await TaskService.deleteTask(item.key, item.attachments, projectId, teamId);
         
         // Remove from local state immediately for responsiveness
         const newData = taskArray.filter((i) => i.key !== item.key);
