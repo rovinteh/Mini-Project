@@ -227,7 +227,8 @@ export default function ExpensesChart({ navigation }: Props) {
   const prevTotal = useMemo(() => sum(expensesPrevMonth), [expensesPrevMonth]);
 
   const delta = thisTotal - prevTotal;
-  const deltaPct = prevTotal <= 0 ? null : Math.round((delta / prevTotal) * 100);
+  const deltaPct =
+    prevTotal <= 0 ? null : Math.round((delta / prevTotal) * 100);
 
   // ✅ Peak month safe
   const peakIndex = useMemo(() => {
@@ -301,7 +302,14 @@ export default function ExpensesChart({ navigation }: Props) {
 
       const prompt = `
 You are a personal finance assistant.
-Write a short "AI Insight Summary" in 3-6 bullet points.
+
+IMPORTANT:
+- The currency used is Malaysian Ringgit.
+- Use "RM" or "MYR" for all monetary values.
+- Do NOT use "$".
+
+Write a short "AI Insight Summary" in 3–6 bullet points.
+
 Rules:
 - Use simple student-friendly English.
 - Mention overall trend (up/down), top categories, and one practical suggestion.
@@ -310,7 +318,7 @@ Rules:
 
 DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
-      `.trim();
+`.trim();
 
       const res = await fetch(API_HOST + "/ollama/generate", {
         method: "POST",
@@ -379,7 +387,9 @@ ${JSON.stringify(summaryJson, null, 2)}
       const found = detectAnomalies();
 
       if (found.length === 0) {
-        setAiAnomalyText("No unusual spending spikes detected for this month ✅");
+        setAiAnomalyText(
+          "No unusual spending spikes detected for this month ✅"
+        );
         return;
       }
 
@@ -418,7 +428,9 @@ ${JSON.stringify(payload, null, 2)}
       const data = await res.json();
       setAiAnomalyText(data.response || "");
     } catch (e: any) {
-      setAiAnomalyText("Error explaining anomalies: " + (e?.message || String(e)));
+      setAiAnomalyText(
+        "Error explaining anomalies: " + (e?.message || String(e))
+      );
     } finally {
       setAiAnomalyLoading(false);
     }
@@ -439,7 +451,9 @@ ${JSON.stringify(payload, null, 2)}
           }
           leftAction={() => navigation.goBack()}
         />
-        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
+        <View
+          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
+        >
           <ActivityIndicator size="large" />
         </View>
       </Layout>
@@ -459,8 +473,10 @@ ${JSON.stringify(payload, null, 2)}
   const lastMonthValue = `RM ${prevTotal.toFixed(2)}`;
   const changeValue = `${delta >= 0 ? "+" : ""}RM ${delta.toFixed(2)}`;
   const changeSub =
-    deltaPct === null ? "No last-month baseline" : `${deltaPct >= 0 ? "+" : ""}${deltaPct}%`;
-  const peakValue = `RM ${(Number(chartData[peakIndex] ?? 0)).toFixed(2)}`;
+    deltaPct === null
+      ? "No last-month baseline"
+      : `${deltaPct >= 0 ? "+" : ""}${deltaPct}%`;
+  const peakValue = `RM ${Number(chartData[peakIndex] ?? 0).toFixed(2)}`;
   const peakSub = `${MONTH_SHORT[peakIndex]}`;
 
   const StatCard = ({
@@ -495,17 +511,28 @@ ${JSON.stringify(payload, null, 2)}
         {icon} {title}
       </Text>
 
-      <Text fontWeight="bold" style={{ color: color, fontSize: 18, marginTop: 6 }}>
+      <Text
+        fontWeight="bold"
+        style={{ color: color, fontSize: 18, marginTop: 6 }}
+      >
         {value}
       </Text>
 
       {sub ? (
-        <Text style={{ color: subText, fontSize: 12, marginTop: 4 }}>{sub}</Text>
+        <Text style={{ color: subText, fontSize: 12, marginTop: 4 }}>
+          {sub}
+        </Text>
       ) : null}
     </View>
   );
 
-  const Card = ({ title, children }: { title: string; children: React.ReactNode }) => (
+  const Card = ({
+    title,
+    children,
+  }: {
+    title: string;
+    children: React.ReactNode;
+  }) => (
     <View
       style={{
         width: screenW - 32,
@@ -585,7 +612,9 @@ ${JSON.stringify(payload, null, 2)}
         </Text>
 
         {/* ✅ Stats row */}
-        <View style={{ flexDirection: "row", width: screenW - 32, marginBottom: 6 }}>
+        <View
+          style={{ flexDirection: "row", width: screenW - 32, marginBottom: 6 }}
+        >
           <StatCard
             title="This Month"
             icon="📅"
@@ -602,7 +631,13 @@ ${JSON.stringify(payload, null, 2)}
           />
         </View>
 
-        <View style={{ flexDirection: "row", width: screenW - 32, marginBottom: 10 }}>
+        <View
+          style={{
+            flexDirection: "row",
+            width: screenW - 32,
+            marginBottom: 10,
+          }}
+        >
           <StatCard
             title="Change"
             icon={delta >= 0 ? "📈" : "📉"}
@@ -635,7 +670,10 @@ ${JSON.stringify(payload, null, 2)}
           }}
         >
           <View style={{ paddingHorizontal: 14, marginBottom: 8 }}>
-            <Text fontWeight="bold" style={{ color: textColor, marginBottom: 4 }}>
+            <Text
+              fontWeight="bold"
+              style={{ color: textColor, marginBottom: 4 }}
+            >
               Monthly Total Expense
             </Text>
             <Text style={{ color: subText, fontSize: 12 }}>
@@ -695,7 +733,9 @@ ${JSON.stringify(payload, null, 2)}
 
           <View style={{ marginTop: 10 }}>
             <Text style={{ color: textColor, opacity: 0.9 }}>
-              {aiSummary ? aiSummary : "Tap “Generate Summary” to get insights for this month."}
+              {aiSummary
+                ? aiSummary
+                : "Tap “Generate Summary” to get insights for this month."}
             </Text>
           </View>
         </Card>
@@ -703,7 +743,9 @@ ${JSON.stringify(payload, null, 2)}
         {/* ✅ Anomaly Detection */}
         <Card title="Anomaly Detection (Spending Spikes)">
           <Button
-            text={aiAnomalyLoading ? "Analyzing..." : "Detect & Explain Anomalies"}
+            text={
+              aiAnomalyLoading ? "Analyzing..." : "Detect & Explain Anomalies"
+            }
             onPress={explainAnomaliesWithAi}
             disabled={aiAnomalyLoading}
             style={{ width: "100%" }}
@@ -726,7 +768,9 @@ ${JSON.stringify(payload, null, 2)}
 
           {aiAnomalyText ? (
             <View style={{ marginTop: 10 }}>
-              <Text style={{ color: textColor, opacity: 0.9 }}>{aiAnomalyText}</Text>
+              <Text style={{ color: textColor, opacity: 0.9 }}>
+                {aiAnomalyText}
+              </Text>
             </View>
           ) : null}
         </Card>
