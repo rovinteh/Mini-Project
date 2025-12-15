@@ -183,7 +183,6 @@ function buildMediaFromPosts(posts: PostType[]): MediaItem[] {
 
 // ---------------- Thumbnail helpers ----------------
 async function safeGetVideoThumbnail(videoUrl: string) {
-  // try multiple timestamps because some videos have black first frame
   const times = [200, 800, 1500];
   for (const t of times) {
     try {
@@ -210,16 +209,6 @@ export default function MemoryAlbum({ navigation }: Props) {
   const [peopleCoverCustom, setPeopleCoverCustom] = useState<Record<string, string>>({});
   const [peopleCoverMap, setPeopleCoverMap] = useState<Record<string, string>>({});
 
-  // ensure video covers have thumbs when no custom cover
-  useEffect(() => {
-    personAlbums.forEach((pa) => {
-      if (!peopleCoverCustom[pa.key] && pa.coverPost && isVideoPost(pa.coverPost)) {
-        ensureThumbForPost(pa.coverPost);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personAlbums, peopleCoverCustom]);
-
   const [coverModalOpen, setCoverModalOpen] = useState(false);
   const [coverTarget, setCoverTarget] = useState<PersonAlbum | null>(null);
 
@@ -244,6 +233,16 @@ export default function MemoryAlbum({ navigation }: Props) {
       useNativeDriver: true,
     }).start();
   }, [posts.length]);
+
+  // ✅ ensure video covers have thumbs when no custom cover
+  useEffect(() => {
+    personAlbums.forEach((pa) => {
+      if (!peopleCoverCustom[pa.key] && pa.coverPost && isVideoPost(pa.coverPost)) {
+        ensureThumbForPost(pa.coverPost);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personAlbums, peopleCoverCustom]);
 
   // ✅ ensure thumb for a post (only first media)
   const ensureThumbForPost = async (p: any) => {
@@ -352,14 +351,11 @@ export default function MemoryAlbum({ navigation }: Props) {
     return () => unsub();
   }, [uid, firestore]);
 
-  // ✅ Pre-generate thumbnails for visible sections (so no more grey)
+  // ✅ Pre-generate thumbnails
   useEffect(() => {
     if (!posts.length) return;
     const videos = posts.filter((p: any) => isVideoPost(p));
-    // limit to avoid heavy work
-    videos.slice(0, 35).forEach((p: any) => {
-      ensureThumbForPost(p);
-    });
+    videos.slice(0, 35).forEach((p: any) => ensureThumbForPost(p));
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [posts.length]);
 
@@ -479,7 +475,11 @@ export default function MemoryAlbum({ navigation }: Props) {
 
     posts.forEach((p) => {
       const d = getPostDate(p);
-      if (d.getMonth() === tMonth && d.getDate() === tDate && d.getFullYear() !== today.getFullYear()) {
+      if (
+        d.getMonth() === tMonth &&
+        d.getDate() === tDate &&
+        d.getFullYear() !== today.getFullYear()
+      ) {
         onThisDay.push(p);
       }
     });
@@ -493,7 +493,11 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(userRef, { peopleCoverPostIds: { [personKey]: postId } }, { merge: true });
+      await setDoc(
+        userRef,
+        { peopleCoverPostIds: { [personKey]: postId } },
+        { merge: true }
+      );
     } catch (e) {
       console.log("savePeopleCover error:", e);
       Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
@@ -504,7 +508,11 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(userRef, { peopleCoverCustomUrls: { [personKey]: url } }, { merge: true });
+      await setDoc(
+        userRef,
+        { peopleCoverCustomUrls: { [personKey]: url } },
+        { merge: true }
+      );
     } catch (e) {
       console.log("savePeopleCoverCustom error:", e);
       Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
@@ -548,7 +556,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     return (
       <Layout>
         <TopNav
-          middleContent={<Text>Memory Album</Text>}
+          middleContent="Memory Album"
           leftContent={<Ionicons name="chevron-back" size={20} color={themeColor.white100} />}
           leftAction={() => navigation.popToTop()}
           rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={themeColor.white100} />}
@@ -561,7 +569,9 @@ export default function MemoryAlbum({ navigation }: Props) {
     );
   }
 
-  const sortedPosts = posts.slice().sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
+  const sortedPosts = posts
+    .slice()
+    .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
 
   const timelineTranslateY = timelineAnim.interpolate({
     inputRange: [0, 1],
@@ -574,6 +584,8 @@ export default function MemoryAlbum({ navigation }: Props) {
   const screenW = Dimensions.get("window").width;
   const gridSidePadding = 14;
   const gridGap = 6;
+
+  // ✅ IMPORTANT: thumbSize calculated using gap, so we can use flex-start rows
   const thumbSize =
     (screenW - gridSidePadding * 2 - gridGap * (numColumns - 1)) / numColumns;
 
@@ -614,18 +626,13 @@ export default function MemoryAlbum({ navigation }: Props) {
   }, [mediaList]);
 
   const openInViewer = (postId: string, title?: string) => {
-    const startIndex = mediaStartIndexByPost[postId] !== undefined ? mediaStartIndexByPost[postId] : 0;
+    const startIndex =
+      mediaStartIndexByPost[postId] !== undefined ? mediaStartIndexByPost[postId] : 0;
     navigation.navigate("MemoryMediaViewer", { media: mediaList, startIndex, title } as any);
   };
 
   // ---------- Reusable card thumb ----------
-  const MediaCover = ({
-    post,
-    style,
-  }: {
-    post: any;
-    style: any;
-  }) => {
+  const MediaCover = ({ post, style }: { post: any; style: any }) => {
     const isVideo = isVideoPost(post);
     const coverUri = getCoverUriForPost(post);
 
@@ -640,11 +647,7 @@ export default function MemoryAlbum({ navigation }: Props) {
           <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-            {isVideo ? (
-              <ActivityIndicator />
-            ) : (
-              <Ionicons name="image" size={26} color={subTextColor} />
-            )}
+            {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={26} color={subTextColor} />}
           </View>
         )}
 
@@ -669,7 +672,10 @@ export default function MemoryAlbum({ navigation }: Props) {
     );
   };
 
-  const GridItem = ({ item }: { item: PostType }) => {
+  // ✅ FIX: grid item spacing (so last row with 2 items becomes left + center)
+  const GridItem = ({ item, index }: { item: PostType; index: number }) => {
+    const isLastInRow = (index + 1) % numColumns === 0;
+
     return (
       <TouchableOpacity
         style={{
@@ -677,6 +683,7 @@ export default function MemoryAlbum({ navigation }: Props) {
           height: thumbSize,
           borderRadius: 10,
           marginBottom: gridGap,
+          marginRight: isLastInRow ? 0 : gridGap,
         }}
         activeOpacity={0.9}
         onPress={() => openInViewer(item.id, "All Photos")}
@@ -696,10 +703,69 @@ export default function MemoryAlbum({ navigation }: Props) {
       .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
   }, [coverTarget, posts]);
 
+  // ✅ FIX: no hooks inside renderItem
+  const CoverPickerItem = ({
+    item,
+    onPick,
+  }: {
+    item: PostType;
+    onPick: () => void;
+  }) => {
+    const isVideo = isVideoPost(item);
+
+    useEffect(() => {
+      if (isVideo) ensureThumbForPost(item);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [item.id]);
+
+    const coverUri = getCoverUriForPost(item);
+
+    return (
+      <TouchableOpacity
+        onPress={onPick}
+        style={{
+          width: "32%",
+          aspectRatio: 1,
+          margin: "1%",
+          borderRadius: 10,
+          overflow: "hidden",
+          backgroundColor: cardBg,
+        }}
+        activeOpacity={0.9}
+      >
+        {coverUri ? (
+          <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+        ) : (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={22} color={subTextColor} />}
+          </View>
+        )}
+
+        {isVideo && (
+          <View
+            style={{
+              position: "absolute",
+              right: 6,
+              bottom: 6,
+              width: 22,
+              height: 22,
+              borderRadius: 11,
+              backgroundColor: "rgba(0,0,0,0.55)",
+              alignItems: "center",
+              justifyContent: "center",
+            }}
+          >
+            <Ionicons name="play" size={12} color="#fff" />
+          </View>
+        )}
+      </TouchableOpacity>
+    );
+  };
+
   return (
     <Layout>
       <TopNav
-        middleContent={<Text>Memory Album</Text>}
+        middleContent="Memory Album"
         leftContent={<Ionicons name="chevron-back" size={20} color={primaryTextColor} />}
         leftAction={() => navigation.popToTop()}
         rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={primaryTextColor} />}
@@ -831,10 +897,10 @@ export default function MemoryAlbum({ navigation }: Props) {
                     .filter((p) => idSet.has(p.id))
                     .sort((x, y) => getPostDate(y).getTime() - getPostDate(x).getTime());
 
-                    return (
-                      <TouchableOpacity
-                        key={pa.key}
-                        style={{ marginRight: 16, alignItems: "center" }}
+                  return (
+                    <TouchableOpacity
+                      key={pa.key}
+                      style={{ marginRight: 16, alignItems: "center" }}
                       onPress={() => openSwipeViewer(personPosts, pa.coverPost?.id, pa.name)}
                       onLongPress={() => {
                         Alert.alert("Change cover", `Choose cover for ${pa.name}`, [
@@ -910,9 +976,15 @@ export default function MemoryAlbum({ navigation }: Props) {
                 keyExtractor={(item) => item.id}
                 numColumns={numColumns}
                 scrollEnabled={false}
-                renderItem={({ item }) => <GridItem item={item} />}
-                contentContainerStyle={{ paddingHorizontal: gridSidePadding, paddingBottom: 6 }}
-                columnWrapperStyle={{ justifyContent: "space-between" }}
+                renderItem={({ item, index }) => <GridItem item={item} index={index} />}
+                contentContainerStyle={{
+                  paddingHorizontal: gridSidePadding,
+                  paddingBottom: 6,
+                }}
+                // ✅ FIX: don't "space-between" (it pushes 2 items to left + right)
+                columnWrapperStyle={{
+                  justifyContent: "flex-start",
+                }}
               />
             )}
           </View>
@@ -1060,61 +1132,16 @@ export default function MemoryAlbum({ navigation }: Props) {
                   data={coverPickerPosts}
                   keyExtractor={(it) => it.id}
                   numColumns={3}
-                  renderItem={({ item }) => {
-                    const isVideo = isVideoPost(item);
-
-                    useEffect(() => {
-                      if (isVideo) ensureThumbForPost(item);
-                      // eslint-disable-next-line react-hooks/exhaustive-deps
-                    }, [item.id]);
-
-                    const coverUri = getCoverUriForPost(item);
-
-                    return (
-                      <TouchableOpacity
-                        onPress={async () => {
-                          if (!coverTarget) return;
-                          await savePeopleCover(coverTarget.key, item.id);
-                          setCoverModalOpen(false);
-                        }}
-                        style={{
-                          width: "32%",
-                          aspectRatio: 1,
-                          margin: "1%",
-                          borderRadius: 10,
-                          overflow: "hidden",
-                          backgroundColor: cardBg,
-                        }}
-                        activeOpacity={0.9}
-                      >
-                        {coverUri ? (
-                          <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
-                        ) : (
-                          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                            {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={22} color={subTextColor} />}
-                          </View>
-                        )}
-
-                        {isVideo && (
-                          <View
-                            style={{
-                              position: "absolute",
-                              right: 6,
-                              bottom: 6,
-                              width: 22,
-                              height: 22,
-                              borderRadius: 11,
-                              backgroundColor: "rgba(0,0,0,0.55)",
-                              alignItems: "center",
-                              justifyContent: "center",
-                            }}
-                          >
-                            <Ionicons name="play" size={12} color="#fff" />
-                          </View>
-                        )}
-                      </TouchableOpacity>
-                    );
-                  }}
+                  renderItem={({ item }) => (
+                    <CoverPickerItem
+                      item={item}
+                      onPick={async () => {
+                        if (!coverTarget) return;
+                        await savePeopleCover(coverTarget.key, item.id);
+                        setCoverModalOpen(false);
+                      }}
+                    />
+                  )}
                 />
               )}
             </View>
