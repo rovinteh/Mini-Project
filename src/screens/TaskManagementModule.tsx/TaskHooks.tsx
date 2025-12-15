@@ -1289,7 +1289,7 @@ Extract ONLY relevant details. Output a JSON object.
 
 Instructions:
 - Ignore the messages of greetings, pleasantries, funny interations "Testing", one-word messages Like "HAHAHA","Hello","Hello hahaha","Welcome".
-- Categorize content into "Update", "Action", "Blocker".
+- Must Categorize content into "Update", "Action", "Blocker".
 - **CRITICAL**: Every item MUST start with "Sender Name (DD-MMM-YYYY HH:MM AM/PM) - ".
 - Example: "Rovin (11-Dec-2025 05:00 PM) - Task completed"
 - Do NOT output empty categories.

@@ -127,25 +127,25 @@ const ReasonBadge = ({ task, isDarkmode }: any) => {
   return (
     <TouchableOpacity 
       onPress={() => setShowTooltip(!showTooltip)}
-      style={{ position: "relative", marginLeft: 6 }}
+      style={{ position: "relative", marginLeft: 6, zIndex: showTooltip ? 9999 : 1 }}
     >
       <Ionicons name="help-circle" size={16} color={COLORS.primary} />
       {showTooltip && (
         <View style={{
           position: "absolute",
           top: 24,
-          right: 0,
+          left: -8,
           backgroundColor: theme.card,
-          padding: 12,
+          padding: 10,
           borderRadius: 8,
           shadowColor: "#000",
-          shadowOffset: { width: 0, height: 2 },
-          shadowOpacity: 0.25,
-          shadowRadius: 4,
-          elevation: 5,
-          minWidth: 200,
-          maxWidth: 280,
-          zIndex: 1000,
+          shadowOffset: { width: 0, height: 4 },
+          shadowOpacity: 0.3,
+          shadowRadius: 8,
+          elevation: 10,
+          minWidth: 180,
+          maxWidth: SCREEN_WIDTH - 60,
+          zIndex: 9999,
           borderWidth: 1,
           borderColor: isDarkmode ? "#334155" : "#e2e8f0",
         }}>
