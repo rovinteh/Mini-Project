@@ -66,7 +66,6 @@ const API_HOST =
     : "http://192.168.68.118:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
-
 type Tx = {
   amount: number;
   type: "income" | "expense";
