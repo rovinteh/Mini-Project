@@ -1,9 +1,10 @@
 // index.js - Local AI + Face proxy server for MemoryBook
-// ✅ Updated:
-// - Prevent "comma list" captions copied from vision
-// - Remove unwanted appearance/background details unless user typed them
-// - If caption still looks like a list -> auto-rewrite using Ollama (plain text)
-// - Keep no pronouns + no gender words
+// ✅ Updated (your requests):
+// - NEVER start caption with "lowkey", "friend/friends", "person/people"
+// - If user sends draft/keywords, caption MUST contain user keyword/draft (enforced)
+// - If draft exists: use (draft + vision) to write caption (draft is PRIMARY)
+// - Remove "glasses" mentions unless user typed it in draft
+// - Safer, less-weird fallback captions (no "lowkey moment, captured.")
 // - Keep: /generatePostMeta + face proxy endpoints + ollama proxy
 
 const express = require("express");
@@ -13,7 +14,11 @@ const axios = require("axios");
 const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
-const { detectFacesInList, registerFace, recognizeFace } = require("./face-service");
+const {
+  detectFacesInList,
+  registerFace,
+  recognizeFace,
+} = require("./face-service");
 
 const app = express();
 app.use(cors());
@@ -25,8 +30,14 @@ app.get("/health", (req, res) => {
 
 // ---- Ollama config ----
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
-const OLLAMA_TEXT_MODEL = process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
-const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
+
+// ✅ Better default text model for instruction-following
+const OLLAMA_TEXT_MODEL =
+  process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
+
+// Vision model
+const OLLAMA_VISION_MODEL =
+  process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
 // ✅ base64 normalizer
@@ -43,6 +54,7 @@ function normalizeBase64Image(input) {
   if (s.length < 64) return "";
   return s;
 }
+
 function normalizeBase64List(list) {
   const arr = Array.isArray(list) ? list : [];
   return arr.map(normalizeBase64Image).filter(Boolean);
@@ -56,9 +68,14 @@ function clamp(n, min, max) {
   if (!Number.isFinite(x)) return min;
   return Math.max(min, Math.min(max, x));
 }
+
 function countWords(str) {
-  return String(str || "").trim().split(/\s+/).filter(Boolean).length;
+  return String(str || "")
+    .trim()
+    .split(/\s+/)
+    .filter(Boolean).length;
 }
+
 function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
@@ -94,10 +111,12 @@ function extractJsonBlock(raw) {
 
   const first = cleaned.indexOf("{");
   const last = cleaned.lastIndexOf("}");
-  if (first !== -1 && last !== -1 && last > first) cleaned = cleaned.slice(first, last + 1);
+  if (first !== -1 && last !== -1 && last > first)
+    cleaned = cleaned.slice(first, last + 1);
 
   return cleaned.trim();
 }
+
 function safeJsonParse(raw, fallback = null) {
   try {
     const block = extractJsonBlock(raw);
@@ -123,9 +142,19 @@ function emojiFromMoodLabel(label) {
 // Cleanup helpers
 // -------------------------
 const BANNED_BACKGROUND_WORDS = [
-  "matches", "matchbox", "box of matches",
-  "pencil", "pencils", "pen", "pens", "marker", "markers",
-  "notebook", "notebooks", "remote control", "remote",
+  "matches",
+  "matchbox",
+  "box of matches",
+  "pencil",
+  "pencils",
+  "pen",
+  "pens",
+  "marker",
+  "markers",
+  "notebook",
+  "notebooks",
+  "remote control",
+  "remote",
 ];
 
 function removeBannedWords(text) {
@@ -138,9 +167,20 @@ function removeBannedWords(text) {
 }
 
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes","take notes","doing homework","do homework","studying","study session",
-  "working on my notes","working on notes","working on homework","working on assignments",
-  "doing my assignment","doing assignments","preparing for exams","studying for exams",
+  "taking notes",
+  "take notes",
+  "doing homework",
+  "do homework",
+  "studying",
+  "study session",
+  "working on my notes",
+  "working on notes",
+  "working on homework",
+  "working on assignments",
+  "doing my assignment",
+  "doing assignments",
+  "preparing for exams",
+  "studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
@@ -167,9 +207,22 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog","dogs","puppy","puppies","cat","cats","kitten","kittens",
-  "bear","bears","bunny","bunnies","rabbit","rabbits",
+  "dog",
+  "dogs",
+  "puppy",
+  "puppies",
+  "cat",
+  "cats",
+  "kitten",
+  "kittens",
+  "bear",
+  "bears",
+  "bunny",
+  "bunnies",
+  "rabbit",
+  "rabbits",
 ];
+
 function fixPlushAnimalHallucination(caption, captionDraft) {
   const draftLower = String(captionDraft || "").toLowerCase();
   if (!draftLower.includes("plush")) return caption;
@@ -188,8 +241,14 @@ function neutralizePersonWords(text, captionDraft = "") {
   const d = String(captionDraft || "").toLowerCase();
 
   const allowGenderWords =
-    d.includes("man") || d.includes("woman") || d.includes("boy") || d.includes("girl") ||
-    d.includes("male") || d.includes("female") || d.includes("guy") || d.includes("lady");
+    d.includes("man") ||
+    d.includes("woman") ||
+    d.includes("boy") ||
+    d.includes("girl") ||
+    d.includes("male") ||
+    d.includes("female") ||
+    d.includes("guy") ||
+    d.includes("lady");
 
   if (allowGenderWords) return s.replace(/\s+/g, " ").trim();
 
@@ -207,45 +266,75 @@ function neutralizePersonWords(text, captionDraft = "") {
   ];
 
   for (const [re, rep] of replacements) s = s.replace(re, rep);
+  s = s.replace(/\bposes?\s+with\b/gi, "photo moment with");
+
   return s.replace(/\s+/g, " ").trim();
 }
 
-// ---------------------------------------------------------
-// Pronoun blockers
-// ---------------------------------------------------------
-const PRONOUN_BLOCKLIST = [
-  "i","i'm","im","me","my","mine",
-  "we","we're","were","our","ours","us",
-  "you","you're","youre","your","yours",
-  "he","she","him","her","his","hers",
-  "they","them","their","theirs",
-];
+// ✅ remove accessory/clothing mentions unless user typed it
+const ACCESSORY_WORDS = ["glasses", "spectacles", "eyeglasses", "sunglasses"];
 
-function removePronouns(text) {
+function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
+  const draftLower = String(captionDraft || "").toLowerCase();
   let s = String(text || "");
-  for (const p of PRONOUN_BLOCKLIST) {
-    const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
-    s = s.replace(re, "");
-  }
-  return s.replace(/\s+/g, " ").trim();
+
+  const allow = ACCESSORY_WORDS.some((w) => draftLower.includes(w));
+  if (allow) return s.replace(/\s+/g, " ").trim();
+
+  const patterns = [
+    /\bglasses\s+on\b/gi,
+    /\bwith\s+glasses\b/gi,
+    /\bwearing\s+glasses\b/gi,
+    /\b(glasses|spectacles|eyeglasses|sunglasses)\b/gi,
+  ];
+
+  for (const re of patterns) s = s.replace(re, "");
+
+  s = s
+    .replace(/\s+/g, " ")
+    .replace(/\s+,/g, ",")
+    .replace(/,\s*,/g, ",")
+    .replace(/\s+\./g, ".")
+    .replace(/\.\s*\./g, ".")
+    .trim();
+
+  s = s.replace(/^[-–—,:]+\s*/g, "").trim();
+
+  return s;
 }
 
-function stripGenericIntros(text) {
-  let s = String(text || "").trim();
-  const patterns = [
-    /^today\b[,:]?\s*/i,
-    /^this\s+(is|was)\b[,:]?\s*/i,
-    /^currently\b[,:]?\s*/i,
-    /^just\b[,:]?\s*/i,
-    /^here\s+(is|was)\b[,:]?\s*/i,
-  ];
-  for (const re of patterns) {
-    if (re.test(s)) {
-      s = s.replace(re, "");
-      break;
+// ✅ prevent caption starting with "person/people/friends" (and NEVER "lowkey")
+function avoidBadStarts(caption, visionDesc, captionDraft) {
+  let c = String(caption || "").trim();
+  if (!c) return c;
+
+  const badStartRe = /^(lowkey\b|low-key\b|friend\b|friends\b|a\s+friend\b|person\b|a\s+person\b|people\b)/i;
+  if (!badStartRe.test(c)) return c;
+
+  const v = String(visionDesc || "").toLowerCase();
+  const d = String(captionDraft || "").trim();
+
+  // If draft exists and is short, lead with draft instead of generic starter
+  if (d) {
+    const shortDraft = d.replace(/\s+/g, " ").trim();
+    if (shortDraft.length <= 45) {
+      c = `${shortDraft} — ${c.replace(badStartRe, "").trim()}`.trim();
+      c = c.replace(/^[—–-]+\s*/g, "").trim();
+      if (!badStartRe.test(c)) return c;
     }
   }
-  return s.trim();
+
+  // Otherwise choose safe starter by vision
+  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
+  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
+  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
+  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
+  if (v.includes("table")) return "Simple table vibes, clean and calm.";
+  if (v.includes("laptop")) return "Locked in, focus vibes.";
+  if (v.includes("phone")) return "Phone out, keep it simple.";
+
+  // No "lowkey moment, captured." anymore:
+  return "Clean moment, good vibes.";
 }
 
 // -------------------------
@@ -284,14 +373,55 @@ function fallbackTagsFromDraft(captionDraft, max = 3) {
 }
 
 function extractDraftKeywords(draft, max = 2) {
-  const d = String(draft || "").toLowerCase();
-  if (!d.trim()) return [];
+  const raw = String(draft || "").trim();
+  const d = raw.toLowerCase();
+  if (!d) return [];
+
+  // keep hashtags as keywords too
+  const hash = raw
+    .split(/\s+/)
+    .map((t) => t.trim())
+    .filter(Boolean)
+    .filter((t) => t.startsWith("#"))
+    .map((t) => t.replace(/^#+/, "").replace(/[^a-z0-9_-]/gi, ""))
+    .filter(Boolean);
 
   const stop = new Set([
-    "a","an","the","and","or","but","to","for","of","in","on","at","with",
-    "this","that","these","those","is","are","was","were","be","been","being",
-    "today","yesterday","tomorrow","very","so","just","really","pls","please",
-    "trip","travel",
+    "a",
+    "an",
+    "the",
+    "and",
+    "or",
+    "but",
+    "to",
+    "for",
+    "of",
+    "in",
+    "on",
+    "at",
+    "with",
+    "this",
+    "that",
+    "these",
+    "those",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "today",
+    "yesterday",
+    "tomorrow",
+    "very",
+    "so",
+    "just",
+    "really",
+    "pls",
+    "please",
+    "trip",
+    "travel",
   ]);
 
   const tokens = d
@@ -304,83 +434,126 @@ function extractDraftKeywords(draft, max = 2) {
     .filter((t) => !stop.has(t));
 
   const uniq = [];
-  for (const t of tokens) {
+  for (const t of [...hash, ...tokens]) {
     if (!uniq.includes(t)) uniq.push(t);
     if (uniq.length >= max) break;
   }
   return uniq;
 }
 
-function ensureCaptionMentionsDraft(caption, draftKeywords) {
+// ✅ HARD ENFORCE: caption must contain user keyword/draft (when draft exists)
+function enforceCaptionContainsUserInput(caption, draftText, draftKeywords) {
   let c = String(caption || "").trim();
-  if (!draftKeywords || draftKeywords.length === 0) return c;
+  const d = String(draftText || "").trim();
+  if (!d) return c;
 
   const lc = c.toLowerCase();
-  const hasAny = draftKeywords.some((k) => lc.includes(k.toLowerCase()));
-  if (hasAny) return c;
+  const hasKeyword =
+    Array.isArray(draftKeywords) && draftKeywords.length
+      ? draftKeywords.some((k) => lc.includes(String(k).toLowerCase()))
+      : false;
 
-  const prefix = draftKeywords.join(" ");
-  return `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
-}
+  // If user draft is short, require the EXACT draft string (as substring)
+  const shortDraft = d.replace(/\s+/g, " ").trim();
+  const requireExact = shortDraft.length <= 45;
 
-// -------------------------
-// ✅ NEW: remove “appearance/background” details unless user typed them
-// -------------------------
-const OPTIONAL_DETAILS = [
-  "glasses",
-  "hair",
-  "black hair",
-  "brown hair",
-  "curtain",
-  "chair",
-  "background",
-  "wall",
-  "plain background",
-  "blue chair",
-  "gray curtain",
-];
-
-function removeOptionalDetailsUnlessInDraft(caption, draft) {
-  const d = String(draft || "").toLowerCase();
-  let c = String(caption || "");
-
-  for (const w of OPTIONAL_DETAILS) {
-    if (!d.includes(w)) {
-      const re = new RegExp(`\\b${w.replace(/\s+/g, "\\s+")}\\b`, "ig");
-      c = c.replace(re, "");
+  if (requireExact) {
+    if (!c.includes(shortDraft)) {
+      c = `${shortDraft} — ${c}`.replace(/\s+/g, " ").trim();
     }
+    return c;
   }
 
-  // clean commas/spaces after removal
-  c = c.replace(/\s*,\s*/g, ", ").replace(/,\s*,/g, ", ");
-  c = c.replace(/(^,\s*)|(\s*,\s*$)/g, "");
-  c = c.replace(/\s+/g, " ").trim();
+  // Otherwise require at least one extracted keyword
+  if (draftKeywords && draftKeywords.length && !hasKeyword) {
+    const prefix = draftKeywords.join(" ");
+    c = `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
+  }
 
-  // if it becomes only commas or too short
   return c;
 }
 
-// ✅ detect banned start
-function startsWithBannedPersonWord(caption) {
-  const c = String(caption || "").trim();
-  return /^(a\s+)?(person|people|friends)\b/i.test(c);
+// ---------------------------------------------------------
+// Pronoun blockers
+// ---------------------------------------------------------
+const PRONOUN_BLOCKLIST = [
+  "i",
+  "i'm",
+  "im",
+  "me",
+  "my",
+  "mine",
+  "we",
+  "we're",
+  "were",
+  "our",
+  "ours",
+  "us",
+  "you",
+  "you're",
+  "youre",
+  "your",
+  "yours",
+  "he",
+  "she",
+  "him",
+  "her",
+  "his",
+  "hers",
+  "they",
+  "them",
+  "their",
+  "theirs",
+];
+
+function removePronouns(text) {
+  let s = String(text || "");
+  for (const p of PRONOUN_BLOCKLIST) {
+    const re = new RegExp(
+      `\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
+      "gi"
+    );
+    s = s.replace(re, "");
+  }
+  return s.replace(/\s+/g, " ").trim();
 }
 
-// ✅ detect “listy caption”
-function looksLikeCommaList(caption) {
-  const c = String(caption || "").trim();
-  if (!c) return false;
+function stripGenericIntros(text) {
+  let s = String(text || "").trim();
+  const patterns = [
+    /^today\b[,:]?\s*/i,
+    /^this\s+(is|was)\b[,:]?\s*/i,
+    /^currently\b[,:]?\s*/i,
+    /^just\b[,:]?\s*/i,
+    /^here\s+(is|was)\b[,:]?\s*/i,
+  ];
+  for (const re of patterns) {
+    if (re.test(s)) {
+      s = s.replace(re, "");
+      break;
+    }
+  }
+  return s.trim();
+}
 
-  const commaCount = (c.match(/,/g) || []).length;
-  const wordCount = countWords(c);
+// ✅ No more "Lowkey moment, captured."
+function buildNeutralCaptionFromVision(visionCombined) {
+  const v = String(visionCombined || "").toLowerCase();
+  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
+  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
+  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
+  if (v.includes("table")) return "Simple table vibes, clean and calm.";
+  if (v.includes("laptop")) return "Locked in, focus vibes.";
+  if (v.includes("phone")) return "Phone out, keep it simple.";
+  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
+  return "Simple scene, good vibes.";
+}
 
-  // common bad pattern: many commas + no punctuation ending + reads like tags
-  if (commaCount >= 3 && wordCount <= 18) return true;
-
-  // also: starts with lowercase + many commas
-  if (/^[a-z]/.test(c) && commaCount >= 2) return true;
-
-  return false;
+function detectUserIntent(draft) {
+  const d = String(draft || "").toLowerCase();
+  const flex = ["flex", "new look", "new style", "hair", "hairstyle", "outfit", "ootd", "slay", "glow up"];
+  if (flex.some((k) => d.includes(k))) return "FLEX";
+  return "NORMAL";
 }
 
 // -------------------------
@@ -404,60 +577,6 @@ async function callOllamaChatText(prompt, modelOverride, temperatureOverride) {
   return resp.data?.message?.content || "";
 }
 
-// ✅ plain-text rewrite helper (NO JSON)
-async function callOllamaRewriteCaptionPlain(prompt, modelOverride) {
-  const model = modelOverride || OLLAMA_TEXT_MODEL;
-
-  const resp = await axios.post(`${OLLAMA_URL}/api/chat`, {
-    model,
-    messages: [{ role: "user", content: prompt }],
-    stream: false,
-    options: {
-      temperature: 0.55,
-      top_p: 0.9,
-      num_predict: 90,
-    },
-  });
-
-  return String(resp.data?.message?.content || "").trim();
-}
-
-async function rewriteCaptionToSocial({ caption, visionDescription, draftText }) {
-  const c = String(caption || "").trim();
-
-  const prompt = `
-Rewrite into ONE short social caption (not a list).
-
-RULES:
-- 8–18 words.
-- Natural sentence, NOT comma-separated item list.
-- No 1st/2nd/3rd person pronouns (no I/we/you/he/she/they).
-- No gender words (man/woman/boy/girl/male/female/guy/lady).
-- Do NOT start with person/people/friends.
-- Avoid background details (curtain/chair/wall) unless user typed them.
-- No hashtags inside caption. 0–1 emoji.
-
-User draft (may be empty):
-"${String(draftText || "").trim() || "(empty)"}"
-
-Vision description:
-"${String(visionDescription || "").trim() || "(empty)"}"
-
-Caption to rewrite:
-"${c}"
-
-Return ONLY caption text.
-`.trim();
-
-  try {
-    let out = await callOllamaRewriteCaptionPlain(prompt);
-    out = String(out || "").replace(/\s+/g, " ").trim();
-    return out;
-  } catch {
-    return c;
-  }
-}
-
 // -------------------------
 // Vision – single image describe
 // -------------------------
@@ -477,7 +596,8 @@ CRITICAL RULES:
 - Use ONLY neutral words: "person", "people", "friends".
 - NEVER say: man/woman/boy/girl/male/female/guy/lady.
 - Do NOT guess age, identity, relationship, or emotions.
-- Keep background brief (1 short phrase max).
+- Ignore tiny/unclear background items.
+- If you see "BOH" anywhere, IGNORE it and do NOT mention it.
 
 Style: 1–2 short sentences, simple English.
 `.trim(),
@@ -619,7 +739,7 @@ function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKe
     if (!ok) return true;
   }
 
-  const fantasy = ["childhood","nostalgia","cherished","magical","lucky charm","river","stream","summer","winter","sun touched","fish"];
+  const fantasy = ["childhood", "nostalgia", "cherished", "magical", "lucky charm", "river", "stream", "summer", "winter", "sun touched", "fish"];
   for (const w of fantasy) {
     if (c.includes(w) && !v.includes(w) && !d.includes(w)) return true;
   }
@@ -658,13 +778,15 @@ app.post("/generatePostMeta", async (req, res) => {
     }
 
     const mustKeywords = buildMustKeywordsFromFirstPhoto(visionPerPhoto);
+    const intent = detectUserIntent(draftText);
+
     const draftKeywords = draftHasText ? extractDraftKeywords(draftText, 2) : [];
     const draftKeywordsLine =
       draftKeywords.length > 0
-        ? `- MUST keep the topic aligned with these draft keywords: ${draftKeywords.join(", ")}.`
+        ? `- MUST include user keyword(s) in final caption: ${draftKeywords.join(", ")}.`
         : `- If draft is empty, rely on vision description only.`;
 
-    // 2) TEXT model prompt (✅ stronger anti-list rule)
+    // 2) TEXT model prompt
     const systemInstruction = `
 You write SHORT, human-style captions for a memory app.
 
@@ -676,44 +798,54 @@ Return ONLY valid JSON:
 }
 
 PRIORITY RULES:
-- If user draft is NOT empty, it is the PRIMARY truth.
-- Vision description is SECONDARY.
+- If user draft is NOT empty, it is the PRIMARY source of truth.
+  The final caption MUST contain the user's draft (or user's keywords) — do not drop it.
+- Vision description is SECONDARY: only used to support tone or add safe detail.
+- Never override user draft with a different place/event.
 ${draftKeywordsLine}
 
-GROUNDING:
+GROUNDING RULES:
 - Do NOT invent stories.
-- Do NOT add emotions unless clearly visible.
+- Avoid fantasy concepts unless written in the draft.
 
 CAPTION STYLE:
-- 8–18 words.
-- Natural social caption (ONE sentence).
-- ❌ Do NOT output a comma-separated list of items.
-- ❌ Avoid background items like curtains/chairs/walls unless user typed them.
-- Do NOT use 1st/2nd/3rd person pronouns.
-- No gender words.
-- Do NOT start with: person / people / friends.
-- No hashtags inside caption.
-- 0–1 emoji.
+- Do NOT use 1st/2nd/3rd person pronouns (no I / we / you / he / she / they).
+- IMPORTANT: Do NOT say "a man" / "a woman" / boy / girl / male / female / guy / lady.
+  Use "friends", "people", or "person" only (but NOT as the opening word).
+- ✅ Do NOT start the caption with any of these:
+  "lowkey", "low-key", "friend", "friends", "person", "people".
+  Start with a vibe/scene/action words instead.
+- 8–20 words, 0–1 emoji.
+- No hashtags inside the caption.
+- Avoid generic “Today...” openings.
+
+IMPORTANT DETAIL RULE:
+- Do NOT mention clothing/accessories/body features (e.g., glasses, hair, shirt color)
+  UNLESS the user wrote them in the draft.
 
 HASHTAGS:
-- 1–5, lowercase.
+- 1–5 tags, lowercase.
+- If draft exists, hashtags derived from draft first, then vision.
 
 FRIEND TAGS:
-- Do NOT invent names.
+- Do NOT invent names; return [] unless user typed names in draft.
 `.trim();
 
     const combinedPrompt = `${systemInstruction}
 
-User draft:
+User intent hint:
+"${intent}" (FLEX means: confident / show-off vibe)
+
+User draft/keywords (may be empty):
 "${draftText || "(empty)"}"
 
-Vision description:
+Vision description (may be empty):
 "${visionDescription || "(no description)"}"
 `.trim();
 
     let rawContent = "";
     try {
-      rawContent = await callOllamaChatText(combinedPrompt, null, 0.35);
+      rawContent = await callOllamaChatText(combinedPrompt);
     } catch (err) {
       console.error("⚠️ Text model error:", err?.message || err);
       rawContent = JSON.stringify({ caption: draftText || "", hashtags: [], friendTags: [] });
@@ -724,30 +856,33 @@ Vision description:
     let parsed = safeJsonParse(rawContent, null);
     if (!parsed) parsed = { caption: draftText, hashtags: [], friendTags: [] };
 
-    // Retry once if ungrounded or still listy or bad start
+    // Retry once if ungrounded OR violates draft alignment OR starts badly
     let captionTry = String(parsed.caption || draftText || "").trim();
+
     const violatesDraft =
       draftHasText && draftKeywords.length
         ? !draftKeywords.some((k) => captionTry.toLowerCase().includes(String(k).toLowerCase()))
         : false;
 
-    const badStart = startsWithBannedPersonWord(captionTry);
-    const listy = looksLikeCommaList(captionTry);
+    const startsBad = /^(lowkey\b|low-key\b|friend\b|friends\b|person\b|people\b|a\s+person\b|a\s+friend\b)/i.test(
+      captionTry
+    );
 
-    if (captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) || violatesDraft || badStart || listy) {
+    if (captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) || violatesDraft || startsBad) {
       const retryPrompt =
         combinedPrompt +
         `
 
 Previous answer not acceptable.
-- Must be one natural sentence, not a list.
-- Must NOT start with person/people/friends.
-- Avoid background details (curtain/chair/wall).
+- MUST keep user draft/keyword in caption (do not omit).
+- Keep grounded; do NOT invent places/events.
+- Do NOT mention clothes/accessories unless user typed it.
+- Do NOT start with "lowkey/low-key/friend(s)/person/people".
 Return ONLY JSON.
 `.trim();
 
       try {
-        const retryRaw = await callOllamaChatText(retryPrompt, null, 0.45);
+        const retryRaw = await callOllamaChatText(retryPrompt);
         const retryParsed = safeJsonParse(retryRaw, null);
         if (retryParsed) parsed = retryParsed;
       } catch {}
@@ -769,38 +904,28 @@ Return ONLY JSON.
     caption = removePronouns(caption);
     caption = neutralizePersonWords(caption, draftText);
 
-    // ✅ remove glasses/hair/curtain/chair unless user typed them
-    caption = removeOptionalDetailsUnlessInDraft(caption, draftText);
+    // ✅ remove "glasses" mentions unless in draft
+    caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
 
-    if (draftHasText && draftKeywords.length) caption = ensureCaptionMentionsDraft(caption, draftKeywords);
+    // ✅ HARD enforce: must include user keyword/draft if provided
+    caption = enforceCaptionContainsUserInput(caption, draftText, draftKeywords);
 
     caption = normalizeCaptionLength(caption, draftText);
 
-    // ✅ If still looks like a list -> rewrite to social sentence
-    if (looksLikeCommaList(caption) || startsWithBannedPersonWord(caption)) {
-      caption = await rewriteCaptionToSocial({ caption, visionDescription, draftText });
-      caption = removePronouns(caption);
-      caption = neutralizePersonWords(caption, draftText);
-      caption = removeOptionalDetailsUnlessInDraft(caption, draftText);
-      caption = normalizeCaptionLength(caption, draftText);
-    }
+    // ✅ final: remove bad starts like "lowkey" / "friend" / "person"
+    caption = avoidBadStarts(caption, visionDescription, draftText);
 
-    // If still empty, last resort: ask AI to write from vision
+    // Fallback only if empty
     if (!caption) {
-      const fallbackPrompt = `
-Write ONE short social caption using the vision description.
-Rules: 8–18 words, one sentence, no pronouns, no gender words, not a list, avoid background.
-Vision:
-"${visionDescription || "(empty)"}"
-Return ONLY caption text.
-`.trim();
+      caption = draftHasText
+        ? `${draftText.split(/\s+/).slice(0, 6).join(" ")} — keep it chill.`
+        : buildNeutralCaptionFromVision(visionDescription);
 
-      try {
-        caption = await callOllamaRewriteCaptionPlain(fallbackPrompt);
-        caption = String(caption || "").replace(/\s+/g, " ").trim();
-      } catch {
-        caption = "";
-      }
+      caption = neutralizePersonWords(caption, draftText);
+      caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
+      caption = enforceCaptionContainsUserInput(caption, draftText, draftKeywords);
+      caption = avoidBadStarts(caption, visionDescription, draftText);
+      caption = normalizeCaptionLength(caption, draftText);
     }
 
     // Hashtags: draft-first
