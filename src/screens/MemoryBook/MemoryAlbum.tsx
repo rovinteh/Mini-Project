@@ -12,6 +12,7 @@ import {
   Alert,
   Dimensions,
   ActivityIndicator,
+  Platform,
 } from "react-native";
 import {
   Layout,
@@ -234,16 +235,6 @@ export default function MemoryAlbum({ navigation }: Props) {
     }).start();
   }, [posts.length]);
 
-  // ✅ ensure video covers have thumbs when no custom cover
-  useEffect(() => {
-    personAlbums.forEach((pa) => {
-      if (!peopleCoverCustom[pa.key] && pa.coverPost && isVideoPost(pa.coverPost)) {
-        ensureThumbForPost(pa.coverPost);
-      }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [personAlbums, peopleCoverCustom]);
-
   // ✅ ensure thumb for a post (only first media)
   const ensureThumbForPost = async (p: any) => {
     const postId = String(p?.id || "");
@@ -351,11 +342,13 @@ export default function MemoryAlbum({ navigation }: Props) {
     return () => unsub();
   }, [uid, firestore]);
 
-  // ✅ Pre-generate thumbnails
+  // ✅ Pre-generate thumbnails for some videos (reduce grey covers)
   useEffect(() => {
     if (!posts.length) return;
     const videos = posts.filter((p: any) => isVideoPost(p));
-    videos.slice(0, 35).forEach((p: any) => ensureThumbForPost(p));
+    videos.slice(0, 35).forEach((p: any) => {
+      ensureThumbForPost(p);
+    });
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [posts.length]);
 
@@ -475,11 +468,7 @@ export default function MemoryAlbum({ navigation }: Props) {
 
     posts.forEach((p) => {
       const d = getPostDate(p);
-      if (
-        d.getMonth() === tMonth &&
-        d.getDate() === tDate &&
-        d.getFullYear() !== today.getFullYear()
-      ) {
+      if (d.getMonth() === tMonth && d.getDate() === tDate && d.getFullYear() !== today.getFullYear()) {
         onThisDay.push(p);
       }
     });
@@ -493,11 +482,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(
-        userRef,
-        { peopleCoverPostIds: { [personKey]: postId } },
-        { merge: true }
-      );
+      await setDoc(userRef, { peopleCoverPostIds: { [personKey]: postId } }, { merge: true });
     } catch (e) {
       console.log("savePeopleCover error:", e);
       Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
@@ -508,11 +493,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(
-        userRef,
-        { peopleCoverCustomUrls: { [personKey]: url } },
-        { merge: true }
-      );
+      await setDoc(userRef, { peopleCoverCustomUrls: { [personKey]: url } }, { merge: true });
     } catch (e) {
       console.log("savePeopleCoverCustom error:", e);
       Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
@@ -556,7 +537,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     return (
       <Layout>
         <TopNav
-          middleContent="Memory Album"
+          middleContent={<Text>Memory Album</Text>}
           leftContent={<Ionicons name="chevron-back" size={20} color={themeColor.white100} />}
           leftAction={() => navigation.popToTop()}
           rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={themeColor.white100} />}
@@ -584,8 +565,6 @@ export default function MemoryAlbum({ navigation }: Props) {
   const screenW = Dimensions.get("window").width;
   const gridSidePadding = 14;
   const gridGap = 6;
-
-  // ✅ IMPORTANT: thumbSize calculated using gap, so we can use flex-start rows
   const thumbSize =
     (screenW - gridSidePadding * 2 - gridGap * (numColumns - 1)) / numColumns;
 
@@ -626,13 +605,18 @@ export default function MemoryAlbum({ navigation }: Props) {
   }, [mediaList]);
 
   const openInViewer = (postId: string, title?: string) => {
-    const startIndex =
-      mediaStartIndexByPost[postId] !== undefined ? mediaStartIndexByPost[postId] : 0;
+    const startIndex = mediaStartIndexByPost[postId] !== undefined ? mediaStartIndexByPost[postId] : 0;
     navigation.navigate("MemoryMediaViewer", { media: mediaList, startIndex, title } as any);
   };
 
   // ---------- Reusable card thumb ----------
-  const MediaCover = ({ post, style }: { post: any; style: any }) => {
+  const MediaCover = ({
+    post,
+    style,
+  }: {
+    post: any;
+    style: any;
+  }) => {
     const isVideo = isVideoPost(post);
     const coverUri = getCoverUriForPost(post);
 
@@ -644,7 +628,11 @@ export default function MemoryAlbum({ navigation }: Props) {
     return (
       <View style={[{ backgroundColor: cardBg, overflow: "hidden" }, style]}>
         {coverUri ? (
-          <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          <Image
+            source={{ uri: coverUri }}
+            style={{ width: "100%", height: "100%" }}
+            resizeMode="cover"
+          />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
             {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={26} color={subTextColor} />}
@@ -672,10 +660,168 @@ export default function MemoryAlbum({ navigation }: Props) {
     );
   };
 
-  // ✅ FIX: grid item spacing (so last row with 2 items becomes left + center)
-  const GridItem = ({ item, index }: { item: PostType; index: number }) => {
-    const isLastInRow = (index + 1) % numColumns === 0;
+  // ✅ iOS-style auto slideshow (shrink -> swap -> grow)
+  const PlaceSlideshowCard = ({
+    album,
+    placePosts,
+  }: {
+    album: LocationAlbum;
+    placePosts: PostType[];
+  }) => {
+    // pick a few latest posts with media (up to 6)
+    const slides = useMemo(() => {
+      const filtered = placePosts
+        .filter((p: any) => !!getFirstMediaUrl(p))
+        .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime())
+        .slice(0, 6);
 
+      // pre-ensure thumbs for videos
+      filtered.forEach((p: any) => {
+        if (isVideoPost(p)) ensureThumbForPost(p);
+      });
+
+      return filtered;
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [placePosts.map((p) => p.id).join("|"), isDarkmode]);
+
+    const [idx, setIdx] = useState(0);
+    const scale = useRef(new Animated.Value(1)).current;
+    const opacity = useRef(new Animated.Value(1)).current;
+    const timerRef = useRef<any>(null);
+
+    const hasSlides = slides.length > 0;
+    const activePost = hasSlides ? slides[Math.min(idx, slides.length - 1)] : null;
+
+    const animateNext = () => {
+      if (!hasSlides) return;
+
+      Animated.sequence([
+        Animated.parallel([
+          Animated.timing(scale, {
+            toValue: 0.92,
+            duration: 220,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 0.72,
+            duration: 220,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]),
+      ]).start(() => {
+        setIdx((prev) => (prev + 1) % slides.length);
+
+        // quick pop back
+        Animated.parallel([
+          Animated.timing(scale, {
+            toValue: 1,
+            duration: 260,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+          Animated.timing(opacity, {
+            toValue: 1,
+            duration: 260,
+            easing: Easing.out(Easing.quad),
+            useNativeDriver: true,
+          }),
+        ]).start();
+      });
+    };
+
+    useEffect(() => {
+      if (!hasSlides || slides.length <= 1) return;
+
+      timerRef.current = setInterval(() => {
+        animateNext();
+      }, 2200);
+
+      return () => {
+        if (timerRef.current) clearInterval(timerRef.current);
+        timerRef.current = null;
+      };
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [slides.length]);
+
+    const coverUri = activePost ? getCoverUriForPost(activePost) : undefined;
+    const isVideo = activePost ? isVideoPost(activePost) : false;
+
+    return (
+      <TouchableOpacity
+        key={album.id}
+        style={{
+          marginRight: 16,
+          borderRadius: 18,
+          overflow: "hidden",
+          backgroundColor: cardBg,
+          width: 260,
+          height: 320,
+        }}
+        onPress={() => openSwipeViewer(placePosts, album.coverPost?.id, album.placeTitle)}
+        activeOpacity={0.92}
+      >
+        <Animated.View
+          style={{
+            width: "100%",
+            height: "100%",
+            transform: [{ scale }],
+            opacity,
+          }}
+        >
+          {coverUri ? (
+            <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+          ) : (
+            <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+              <Ionicons name="location" size={30} color={subTextColor} />
+            </View>
+          )}
+
+          {isVideo && (
+            <View
+              style={{
+                position: "absolute",
+                right: 10,
+                top: 10,
+                width: 28,
+                height: 28,
+                borderRadius: 14,
+                backgroundColor: "rgba(0,0,0,0.45)",
+                alignItems: "center",
+                justifyContent: "center",
+              }}
+            >
+              <Ionicons name="videocam" size={14} color="#fff" />
+            </View>
+          )}
+        </Animated.View>
+
+        <View
+          style={{
+            position: "absolute",
+            left: 0,
+            right: 0,
+            bottom: 0,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            backgroundColor: "rgba(0,0,0,0.45)",
+          }}
+        >
+          <Text style={{ fontSize: 14, fontWeight: "800", color: "#fff" }} numberOfLines={1}>
+            {album.placeTitle}
+          </Text>
+          <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 2 }} numberOfLines={1}>
+            {album.rangeLabel}
+          </Text>
+        </View>
+      </TouchableOpacity>
+    );
+  };
+
+  // ✅ FIX: All Photos grid alignment (no "space-between")
+  const GridItem = ({ item, index }: { item: PostType; index: number }) => {
+    const isEndOfRow = (index + 1) % numColumns === 0;
     return (
       <TouchableOpacity
         style={{
@@ -683,7 +829,7 @@ export default function MemoryAlbum({ navigation }: Props) {
           height: thumbSize,
           borderRadius: 10,
           marginBottom: gridGap,
-          marginRight: isLastInRow ? 0 : gridGap,
+          marginRight: isEndOfRow ? 0 : gridGap,
         }}
         activeOpacity={0.9}
         onPress={() => openInViewer(item.id, "All Photos")}
@@ -703,7 +849,6 @@ export default function MemoryAlbum({ navigation }: Props) {
       .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
   }, [coverTarget, posts]);
 
-  // ✅ FIX: no hooks inside renderItem
   const CoverPickerItem = ({
     item,
     onPick,
@@ -711,10 +856,10 @@ export default function MemoryAlbum({ navigation }: Props) {
     item: PostType;
     onPick: () => void;
   }) => {
-    const isVideo = isVideoPost(item);
+    const v = isVideoPost(item);
 
     useEffect(() => {
-      if (isVideo) ensureThumbForPost(item);
+      if (v) ensureThumbForPost(item);
       // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [item.id]);
 
@@ -737,11 +882,11 @@ export default function MemoryAlbum({ navigation }: Props) {
           <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
         ) : (
           <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-            {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={22} color={subTextColor} />}
+            {v ? <ActivityIndicator /> : <Ionicons name="image" size={22} color={subTextColor} />}
           </View>
         )}
 
-        {isVideo && (
+        {v && (
           <View
             style={{
               position: "absolute",
@@ -765,7 +910,7 @@ export default function MemoryAlbum({ navigation }: Props) {
   return (
     <Layout>
       <TopNav
-        middleContent="Memory Album"
+        middleContent={<Text>Memory Album</Text>}
         leftContent={<Ionicons name="chevron-back" size={20} color={primaryTextColor} />}
         leftAction={() => navigation.popToTop()}
         rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={primaryTextColor} />}
@@ -814,7 +959,7 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
           )}
 
-          {/* 2) PLACES */}
+          {/* 2) PLACES (✅ iOS-like auto slideshow effect) */}
           {locationAlbums.length > 0 && (
             <View style={{ marginBottom: 22 }}>
               <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
@@ -828,50 +973,7 @@ export default function MemoryAlbum({ navigation }: Props) {
                     .filter((p) => placeSet.has(p.id))
                     .sort((x, y) => getPostDate(y).getTime() - getPostDate(x).getTime());
 
-                  const coverPost = a.coverPost;
-
-                  return (
-                    <TouchableOpacity
-                      key={a.id}
-                      style={{
-                        marginRight: 16,
-                        borderRadius: 18,
-                        overflow: "hidden",
-                        backgroundColor: cardBg,
-                        width: 260,
-                        height: 320,
-                      }}
-                      onPress={() => openSwipeViewer(placePosts, coverPost?.id, a.placeTitle)}
-                      activeOpacity={0.9}
-                    >
-                      {coverPost ? (
-                        <MediaCover post={coverPost} style={{ width: "100%", height: "100%" }} />
-                      ) : (
-                        <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
-                          <Ionicons name="location" size={30} color={subTextColor} />
-                        </View>
-                      )}
-
-                      <View
-                        style={{
-                          position: "absolute",
-                          left: 0,
-                          right: 0,
-                          bottom: 0,
-                          paddingHorizontal: 12,
-                          paddingVertical: 10,
-                          backgroundColor: "rgba(0,0,0,0.45)",
-                        }}
-                      >
-                        <Text style={{ fontSize: 14, fontWeight: "800", color: "#fff" }} numberOfLines={1}>
-                          {a.placeTitle}
-                        </Text>
-                        <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 2 }} numberOfLines={1}>
-                          {a.rangeLabel}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
+                  return <PlaceSlideshowCard key={a.id} album={a} placePosts={placePosts} />;
                 })}
               </ScrollView>
             </View>
@@ -962,7 +1064,7 @@ export default function MemoryAlbum({ navigation }: Props) {
             )}
           </View>
 
-          {/* 4) ALL PHOTOS */}
+          {/* 4) ALL PHOTOS (✅ grid alignment fixed) */}
           <View style={{ marginBottom: 22 }}>
             <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
               All Photos
@@ -977,11 +1079,7 @@ export default function MemoryAlbum({ navigation }: Props) {
                 numColumns={numColumns}
                 scrollEnabled={false}
                 renderItem={({ item, index }) => <GridItem item={item} index={index} />}
-                contentContainerStyle={{
-                  paddingHorizontal: gridSidePadding,
-                  paddingBottom: 6,
-                }}
-                // ✅ FIX: don't "space-between" (it pushes 2 items to left + right)
+                contentContainerStyle={{ paddingHorizontal: gridSidePadding, paddingBottom: 6 }}
                 columnWrapperStyle={{
                   justifyContent: "flex-start",
                 }}
