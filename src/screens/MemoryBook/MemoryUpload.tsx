@@ -61,9 +61,6 @@ type FaceMatch = { name: string; distance: number };
 type FaceMatchesPerFace = { faceIndex: number; matches: FaceMatch[] };
 type FaceRecognizeResponse = { ok?: boolean; faces: FaceMatchesPerFace[] };
 
-// ✅ Album info stored under posts
-type AlbumInfo = { id: string; name: string };
-
 // ✅ Mood fields
 type MoodLabel = "happy" | "neutral" | "tired" | "sad" | "angry";
 type MoodSource =
@@ -164,11 +161,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const editingPostId: string | undefined = params.postId;
   const postData: any = params.postData || {};
 
-  // ✅ albums passed in from Album screen (optional)
-  const selectedAlbums: AlbumInfo[] = Array.isArray(params.selectedAlbums)
-    ? params.selectedAlbums
-    : [];
-
   // draft/keywords
   const [draft, setDraft] = useState("");
 
@@ -194,17 +186,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
       ? postData.friendTags.join(", ")
       : ""
     : "";
-
-  const initialAlbumIds: string[] = editMode
-    ? Array.isArray(postData.albumIds)
-      ? postData.albumIds
-      : []
-    : [];
-  const initialAlbums: AlbumInfo[] = editMode
-    ? Array.isArray(postData.albums)
-      ? postData.albums
-      : []
-    : [];
 
   // ✅ mood initial values
   const initialMoodLabel: MoodLabel = editMode
@@ -259,13 +240,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
 
   const [moodLabel, setMoodLabel] = useState<MoodLabel>(initialMoodLabel);
   const [moodSource, setMoodSource] = useState<MoodSource>(initialMoodSource);
-
-  const [albumIds, setAlbumIds] = useState<string[]>(
-    selectedAlbums.length ? selectedAlbums.map((a) => a.id) : initialAlbumIds
-  );
-  const [albums, setAlbums] = useState<AlbumInfo[]>(
-    selectedAlbums.length ? selectedAlbums : initialAlbums
-  );
 
   const [faceName, setFaceName] = useState("");
   const [isSavingFace, setIsSavingFace] = useState(false);
@@ -645,7 +619,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
     setMediaItems((prev) => [...prev, ...selected]);
   };
 
-  // ✅ VIDEO: keep upload + preview, but NO AI processing for video anymore
+  // ✅ VIDEO: keep upload + preview, but NO AI processing for video
   const pickVideoFromLibrary = async () => {
     if (Platform.OS !== "web") {
       const { status } =
@@ -696,7 +670,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
     const asset = result.assets[0];
 
     if (asset.type === "video") {
-      // ✅ no thumbnail generation anymore
       setMediaItems((prev) => [
         ...prev,
         { uri: asset.uri, type: "video", base64: null },
@@ -732,7 +705,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   };
 
   // -------------------------------------------------------
-  // ✅ AI generate (IMAGES ONLY — video AI removed)
+  // ✅ AI generate (IMAGES ONLY)
   // -------------------------------------------------------
   const handleGenerateWithAI = async (options?: { useDraft?: boolean }) => {
     const user = auth.currentUser;
@@ -796,7 +769,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
         if (allowed.includes(lbl as MoodLabel)) {
           setMoodLabel(lbl as MoodLabel);
           setMoodSource("face");
-          if (!emojiEdited && !aiResult.emoji) setPostEmoji(emojiFromMoodLabel(lbl));
+          if (!emojiEdited && !aiResult.emoji)
+            setPostEmoji(emojiFromMoodLabel(lbl));
         }
       }
     } catch (e: any) {
@@ -828,15 +802,14 @@ export default function MemoryUpload({ navigation, route }: Props) {
         .map((t: string) => t.trim())
         .filter((t: string) => t.length > 0)
         .map((t: string) => (t.startsWith("#") ? t : `#${t}`)) || [];
+    const hashtagNorm =
+      hashtagList.map((t) => t.replace(/^#/, "").toLowerCase()).filter(Boolean) || [];
 
     const friendTagList =
       friendTagsText
         .split(/[,@\s]+/)
         .map((t: string) => t.trim())
         .filter((t: string) => t.length > 0) || [];
-
-    const safeAlbums: AlbumInfo[] = Array.isArray(albums) ? albums : [];
-    const safeAlbumIds: string[] = Array.isArray(albumIds) ? albumIds : [];
 
     const finalEmoji = postEmoji?.trim() ? postEmoji.trim() : "😐";
 
@@ -854,14 +827,12 @@ export default function MemoryUpload({ navigation, route }: Props) {
           isStory,
           storyExpiresAt: isStory ? expiry : null,
           hashtags: hashtagList,
+          hashtagsNorm: hashtagNorm,
           friendTags: friendTagList,
 
           emoji: finalEmoji,
           moodLabel: postData?.moodLabel ?? moodLabel,
           moodSource: postData?.moodSource ?? moodSource,
-
-          albums: safeAlbums,
-          albumIds: safeAlbumIds,
 
           // ✅ save location when editing
           locationLabel: locationLabel || null,
@@ -923,7 +894,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
         mediaUrls: uploadedUrls,
         mediaTypes: uploadedTypes,
         caption,
-        hashtags: hashtagList,
+        hashtags: hashtagList, // ✅ works for video + image
+        hashtagsNorm: hashtagNorm,
         friendTags: friendTagList,
         isStory,
         createdAt: serverTimestamp(),
@@ -936,10 +908,6 @@ export default function MemoryUpload({ navigation, route }: Props) {
         emoji: finalEmoji,
         moodLabel,
         moodSource: moodSource || "unknown",
-
-        // ✅ SAVE ALBUMS + IDS
-        albums: safeAlbums,
-        albumIds: safeAlbumIds,
       });
 
       Alert.alert("Posted", "Your memory has been uploaded.");
@@ -1400,7 +1368,9 @@ export default function MemoryUpload({ navigation, route }: Props) {
                 This emoji will be saved into the post and shown in Mood Calendar.
               </Text>
 
-              <View style={{ flexDirection: "row", justifyContent: "space-between" }}>
+              <View
+                style={{ flexDirection: "row", justifyContent: "space-between" }}
+              >
                 {emojiOptions.map((item) => (
                   <TouchableOpacity
                     key={item.emoji}
@@ -1461,7 +1431,8 @@ export default function MemoryUpload({ navigation, route }: Props) {
               color: isDarkmode ? "#aaa" : "#777",
             }}
           >
-            When enabled, this memory will appear as a story and disappear after 24 hours.
+            When enabled, this memory will appear as a story and disappear after 24
+            hours.
           </Text>
         </View>
 

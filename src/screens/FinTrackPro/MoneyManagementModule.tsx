@@ -20,7 +20,7 @@ type TabKey = "home" | "list" | "budget" | "insights" | "chart";
 
 export default function MoneyManagementModule({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
-  const [activeTab] = React.useState<TabKey>("home"); // widen type for comparisons
+  const [activeTab] = React.useState<TabKey>("home");
   const styles = useMemo(() => makeStyles(!!isDarkmode), [isDarkmode]);
 
   const iconColor = (active: boolean) => {
@@ -75,6 +75,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
 
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.bottomBar}>
+          {/* Home */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("home")}
@@ -88,6 +89,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
             <Text style={labelStyle("home")}>Home</Text>
           </TouchableOpacity>
 
+          {/* List */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("list")}
@@ -103,46 +105,39 @@ export default function MoneyManagementModule({ navigation }: Props) {
 
           <View style={{ width: 72 }} />
 
+          {/* Budget (with AI pill) */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("budget")}
             activeOpacity={0.85}
           >
-            <View style={{ position: "relative" }}>
+            <View style={{ position: "relative", alignItems: "center" }}>
               <Ionicons
                 name="wallet-outline"
                 size={22}
                 color={iconColor(activeTab === "budget")}
               />
-
-              {/* AI badge */}
-              <View style={styles.aiBadge}>
-                <Ionicons name="sparkles" size={10} color="#fff" />
-              </View>
             </View>
 
             <Text style={labelStyle("budget")}>Budget</Text>
           </TouchableOpacity>
 
+          {/* Chart */}
           <TouchableOpacity
             style={styles.navItem}
             onPress={() => go("chart")}
             activeOpacity={0.85}
           >
-            <View style={{ position: "relative" }}>
-              <Ionicons
-                name="stats-chart-outline"
-                size={22}
-                color={iconColor(activeTab === "chart")}
-              />
-              <View style={styles.aiBadge}>
-                <Ionicons name="sparkles" size={10} color="#fff" />
-              </View>
-            </View>
+            <Ionicons
+              name="stats-chart-outline"
+              size={22}
+              color={iconColor(activeTab === "chart")}
+            />
             <Text style={labelStyle("chart")}>Chart</Text>
           </TouchableOpacity>
         </View>
 
+        {/* FAB */}
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={() => navigation.navigate("TransactionAdd")}
@@ -151,7 +146,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Ionicons name="add" size={32} color="#fff" />
         </TouchableOpacity>
 
-        {/* AI Shortcut (no 'gap' used) */}
+        {/* Global AI Shortcut */}
         <TouchableOpacity
           activeOpacity={0.9}
           onPress={() => navigation.navigate("SpendingInsights")}
@@ -240,17 +235,9 @@ const makeStyles = (isDark: boolean) =>
       elevation: 14,
     },
 
-    fabLabel: {
-      marginTop: 48,
-      fontSize: 11,
-      fontWeight: "700",
-      opacity: isDark ? 0.75 : 0.65,
-      color: isDark ? "#fff" : "#000",
-    },
-
     aiPill: {
       position: "absolute",
-      right: 16, // ✅ FIX
+      right: 55,
       top: -12,
       flexDirection: "row",
       alignItems: "center",
@@ -264,4 +251,6 @@ const makeStyles = (isDark: boolean) =>
       fontWeight: "800",
       fontSize: 12,
     },
+
+    /* Budget AI pill */
   });

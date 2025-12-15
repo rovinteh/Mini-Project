@@ -1,5 +1,5 @@
 // src/screens/MemoryBook/MemorySearch.tsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
   TextInput,
@@ -47,6 +47,16 @@ interface UserType {
   photoURL?: string;
   followers?: string[];
   following?: string[];
+}
+
+function normalizeTagInput(input: string) {
+  const raw = (input || "").trim();
+  if (!raw) return { tagNoHashLower: "", tagWithHashLower: "" };
+
+  const noHash = raw.startsWith("#") ? raw.slice(1) : raw;
+  const tagNoHashLower = noHash.trim().toLowerCase();
+  const tagWithHashLower = tagNoHashLower ? `#${tagNoHashLower}` : "";
+  return { tagNoHashLower, tagWithHashLower };
 }
 
 export default function MemorySearch({ navigation }: Props) {
@@ -120,7 +130,6 @@ export default function MemorySearch({ navigation }: Props) {
   };
 
   // ---------- Toggle follow from selected profile ----------
-  // ✅ FIXED: also creates follow notification for the target user
   const handleFollowToggle = async () => {
     if (!selectedUser || !currentUser) return;
     if (selectedUser.id === currentUser.uid) return;
@@ -182,100 +191,79 @@ export default function MemorySearch({ navigation }: Props) {
     }
   };
 
-  // ---------- Toggle follow from user list ----------
-  // (Currently not used by UI because you removed heart button, but keeping it is ok.)
-  const toggleFollowUser = async (user: UserType) => {
-    if (!currentUser) return;
-    if (user.id === currentUser.uid) return;
-
-    const userRef = doc(firestore, "users", user.id);
-    const meRef = doc(firestore, "users", currentUser.uid);
-
-    const currentlyFollowing = (user.followers || []).includes(currentUser.uid);
-
-    const newFollowers = currentlyFollowing
-      ? (user.followers || []).filter((id) => id !== currentUser.uid)
-      : [...(user.followers || []), currentUser.uid];
-
-    try {
-      await Promise.all([
-        updateDoc(userRef, {
-          followers: currentlyFollowing
-            ? arrayRemove(currentUser.uid)
-            : arrayUnion(currentUser.uid),
-        }),
-        updateDoc(meRef, {
-          following: currentlyFollowing
-            ? arrayRemove(user.id)
-            : arrayUnion(user.id),
-        }),
-      ]);
-
-      // ✅ Only create notification when FOLLOW (not unfollow)
-      if (!currentlyFollowing) {
-        await addDoc(collection(firestore, "notifications", user.id, "items"), {
-          type: "follow",
-          text: `${
-            currentUser.displayName || currentUser.email || "Someone"
-          } started following you`,
-          fromUid: currentUser.uid,
-          read: false,
-          createdAt: serverTimestamp(),
-        });
-      }
-
-      setUsers((prev) =>
-        prev.map((u) =>
-          u.id === user.id ? { ...u, followers: newFollowers } : u
-        )
-      );
-
-      setSelectedUser((prev) =>
-        prev && prev.id === user.id
-          ? { ...prev, followers: newFollowers }
-          : prev
-      );
-
-      if (selectedUser && selectedUser.id === user.id) {
-        setIsFollowing(!currentlyFollowing);
-      }
-    } catch (e) {
-      console.log("Failed to toggle follow from list:", e);
-    }
-  };
-
-  // ---------- Hashtag search effect ----------
+  // ---------- Hashtag search effect (FIXED: support #tag, tag, and hashtagsNorm) ----------
   useEffect(() => {
-    const text = trimmed.toLowerCase();
+    const { tagNoHashLower, tagWithHashLower } = normalizeTagInput(trimmed);
 
-    if (!text) {
+    if (!tagNoHashLower) {
       setHashtagPosts([]);
       setActiveHashtag(null);
       return;
     }
 
-    let tag = text;
-    if (!tag.startsWith("#")) {
-      tag = "#" + tag;
-    }
+    // We run 3 queries and merge results by doc.id
+    const col = collection(firestore, "posts");
 
-    const qTag = query(
-      collection(firestore, "posts"),
-      where("hashtags", "array-contains", tag),
+    const qHash = query(
+      col,
+      where("hashtags", "array-contains", tagWithHashLower), // e.g. "#travel"
       where("isStory", "==", false),
       orderBy("createdAt", "desc")
     );
 
-    const unsub = onSnapshot(qTag, (snap) => {
-      const arr: PostType[] = snap.docs.map((d) => ({
-        id: d.id,
-        ...(d.data() as any),
-      }));
-      setHashtagPosts(arr);
-      setActiveHashtag(arr.length > 0 ? tag : null);
+    const qNoHash = query(
+      col,
+      where("hashtags", "array-contains", tagNoHashLower), // e.g. "travel"
+      where("isStory", "==", false),
+      orderBy("createdAt", "desc")
+    );
+
+    const qNorm = query(
+      col,
+      where("hashtagsNorm", "array-contains", tagNoHashLower), // recommended normalized field
+      where("isStory", "==", false),
+      orderBy("createdAt", "desc")
+    );
+
+    const mergeAndSet = (lists: PostType[][]) => {
+      const map = new Map<string, PostType>();
+
+      // preserve ordering somewhat: first lists earlier
+      for (const list of lists) {
+        for (const p of list) {
+          if (!map.has(p.id)) map.set(p.id, p);
+        }
+      }
+
+      const merged = Array.from(map.values());
+      setHashtagPosts(merged);
+      setActiveHashtag(merged.length > 0 ? tagWithHashLower : null);
+    };
+
+    let list1: PostType[] = [];
+    let list2: PostType[] = [];
+    let list3: PostType[] = [];
+
+    const unsub1 = onSnapshot(qHash, (snap) => {
+      list1 = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      mergeAndSet([list1, list2, list3]);
     });
 
-    return () => unsub();
+    const unsub2 = onSnapshot(qNoHash, (snap) => {
+      list2 = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      mergeAndSet([list1, list2, list3]);
+    });
+
+    const unsub3 = onSnapshot(qNorm, (snap) => {
+      list3 = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) }));
+      mergeAndSet([list1, list2, list3]);
+    });
+
+    return () => {
+      unsub1();
+      unsub2();
+      unsub3();
+    };
   }, [trimmed, firestore]);
 
   // ---------- User search filter ----------
@@ -291,6 +279,11 @@ export default function MemorySearch({ navigation }: Props) {
   const openPost = (post: PostType) => {
     navigation.navigate("MemoryPostView", { postId: post.id });
   };
+
+  const displayHashtagLabel = useMemo(() => {
+    const { tagNoHashLower } = normalizeTagInput(trimmed);
+    return tagNoHashLower ? `#${tagNoHashLower}` : trimmed;
+  }, [trimmed]);
 
   return (
     <Layout>
@@ -392,8 +385,7 @@ export default function MemorySearch({ navigation }: Props) {
 
               {hashtagPosts.length === 0 ? (
                 <Text style={{ fontSize: 12, color: secondaryTextColor }}>
-                  No posts found for{" "}
-                  {trimmed.startsWith("#") ? trimmed : `#${trimmed}`}
+                  No posts found for {displayHashtagLabel}
                 </Text>
               ) : (
                 <View

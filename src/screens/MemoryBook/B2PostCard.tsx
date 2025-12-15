@@ -23,6 +23,10 @@ export type PostType = {
   mediaUrl: string;
   mediaType?: "image" | "video";
   caption?: string;
+
+  // ✅ NEW: hashtags support (safe optional)
+  hashtags?: string[]; // e.g. ["travel", "friends", "sunset"] or ["#travel"]
+
   likes?: string[];
   comments?: any[];
   savedBy?: string[];
@@ -36,7 +40,7 @@ export type PostType = {
     longitude: number;
   } | null;
 
-  // ✅ NEW: MoodCalendar uses this
+  // ✅ Mood (top-level)
   emoji?: string | null;
 };
 
@@ -52,10 +56,20 @@ type NavProp = NativeStackNavigationProp<MainStackParamList>;
 // small helper: make emoji safe
 function safeEmoji(e: any) {
   const s = String(e || "").trim();
-  // allow empty (means: hide badge)
   if (!s) return "";
-  // keep it short so it doesn't break UI
   return s.slice(0, 2);
+}
+
+// ✅ helper: render hashtags in a compact, UI-safe way
+function renderHashtags(tags?: string[]) {
+  if (!tags || tags.length === 0) return "";
+  return tags
+    .filter(Boolean)
+    .map((t) => String(t).trim())
+    .filter((t) => t.length > 0)
+    .slice(0, 3) // keep card clean
+    .map((t) => (t.startsWith("#") ? t : `#${t}`))
+    .join(" ");
 }
 
 export default function B2PostCard({
@@ -132,6 +146,9 @@ export default function B2PostCard({
   // ✅ emoji badge (top-level emoji)
   const emoji = safeEmoji(post.emoji);
 
+  // ✅ hashtags text
+  const hashtagsText = renderHashtags(post.hashtags);
+
   return (
     <View style={{ width: "33.33%", padding: 4 }}>
       <View
@@ -147,7 +164,7 @@ export default function B2PostCard({
           shadowRadius: 3,
           elevation: 3,
           position: "relative",
-          height: 285,
+          height: 295,
         }}
       >
         {/* Whole card tap → open post */}
@@ -238,6 +255,20 @@ export default function B2PostCard({
           >
             {post.caption || ""}
           </Text>
+
+          {/* ✅ HASHTAGS (display under caption) */}
+          {!!hashtagsText && (
+            <Text
+              numberOfLines={1}
+              style={{
+                marginTop: 2,
+                fontSize: 11,
+                color: isDarkmode ? "#9db7ff" : "#3b5bdb",
+              }}
+            >
+              {hashtagsText}
+            </Text>
+          )}
         </TouchableOpacity>
 
         {/* ACTIONS: like, comment, save */}
