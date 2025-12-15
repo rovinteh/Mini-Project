@@ -15,6 +15,7 @@ import MemoryChatsList from "../screens/MemoryBook/MemoryChatsList";
 import MemoryMoodCalendar from "../screens/MemoryBook/MemoryMoodCalendar";
 import MemoryAlbum from "../screens/MemoryBook/MemoryAlbum";
 import MemoryFloatingMenu from "../screens/MemoryBook/MemoryFloatingMenu";
+import MemoryMediaViewer from "../screens/MemoryBook/MemoryMediaViewer";
 
 import FitnessMenu from "../screens/Health&Fitness/FitnessMenu";
 import LogMeal from "../screens/Health&Fitness/LogMeal";
@@ -66,7 +67,13 @@ function Main() {
         component={MemoryFloatingMenu}
       />
 
-
+      <MainStack.Screen
+        name="MemoryMediaViewer"
+        component={MemoryMediaViewer}
+        options={{
+          headerShown: false,
+        }}
+      />
       <MainStack.Screen name="FitnessMenu" component={FitnessMenu} />
       <MainStack.Screen name="LogMeal" component={LogMeal} />
       <MainStack.Screen name="WeeklySummary" component={WeeklySummary} />
@@ -97,6 +104,6 @@ function Main() {
       <MainStack.Screen name="BudgetHub" component={BudgetHub} />
     </MainStack.Navigator>
   );
-};
+}
 
 export default Main;
