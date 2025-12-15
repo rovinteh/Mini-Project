@@ -12,6 +12,19 @@ export type MainStackParamList = {
         postData?: any;
       }
     | undefined;
+    
+  MemoryMediaViewer: {
+    media: {
+      id: string;
+      postId: string;
+      uri: string;
+      type: "image" | "video";
+      createdAt?: any;
+      caption?: string;
+    }[];
+    startIndex?: number;
+    title?: string;
+  };
 
   MemoryComments: { postId: string };
   MemoryStoryView: { postId: string };
@@ -22,6 +35,7 @@ export type MainStackParamList = {
     postId: string;
     startIndex?: number;
   };
+
   MemoryChatsList: undefined;
   MemoryChat: {
     peerId: string;
