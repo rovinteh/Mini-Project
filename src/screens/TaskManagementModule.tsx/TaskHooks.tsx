@@ -1288,7 +1288,7 @@ Act as a strict data extraction engine. Analyze the following team conversation 
 Extract ONLY relevant details. Output a JSON object.
 
 Instructions:
-- Ignore the messages of greetings, pleasantries, "Testing", one-word messages Like "HAHAHA","Hello","Welcome".
+- Ignore the messages of greetings, pleasantries, funny interations "Testing", one-word messages Like "HAHAHA","Hello","Hello hahaha","Welcome".
 - Categorize content into "Update", "Action", "Blocker".
 - **CRITICAL**: Every item MUST start with "Sender Name (DD-MMM-YYYY HH:MM AM/PM) - ".
 - Example: "Rovin (11-Dec-2025 05:00 PM) - Task completed"
