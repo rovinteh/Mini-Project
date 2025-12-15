@@ -193,8 +193,8 @@ export default function MemoryFloatingMenu({ navigation }: Props) {
 
           <Text
             style={{
-              marginTop: 6,
-              fontSize: 10,
+              marginTop: 4,
+              fontSize: 11,
               color: isDarkmode ? "rgba(255,255,255,0.75)" : "rgba(0,0,0,0.6)",
               fontWeight: "700",
               textAlign: "center",
