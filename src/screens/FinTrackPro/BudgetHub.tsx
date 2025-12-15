@@ -964,96 +964,109 @@ ${JSON.stringify(facts, null, 2)}
                 padding: 18,
                 borderWidth: 1,
                 borderColor: border,
+                maxHeight: "85%", // ✅ keeps modal within screen
               }}
             >
-              <View
-                style={{
-                  flexDirection: "row",
-                  justifyContent: "space-between",
-                  alignItems: "center",
-                }}
+              {/* ✅ ONLY CHANGE: add ScrollView inside modal to allow long content scrolling */}
+              <ScrollView
+                showsVerticalScrollIndicator
+                keyboardShouldPersistTaps="handled"
               >
-                <Text size="h3" fontWeight="bold">
-                  AI Saving Planner (RM)
-                </Text>
-                <Ionicons
-                  name="sparkles"
-                  size={18}
-                  color={isDarkmode ? "#A78BFA" : "#7C3AED"}
-                />
-              </View>
-
-              <Text style={{ marginTop: 8, opacity: 0.85 }}>
-                Enter your goal and target date. The system will calculate the
-                correct time left and saving targets, then AI will provide tips.
-              </Text>
-
-              <Text style={{ marginTop: 12, opacity: 0.9 }}>Goal name</Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. Thailand trip / New laptop"
-                value={goalName}
-                onChangeText={setGoalName}
-              />
-
-              <Text style={{ marginTop: 12, opacity: 0.9 }}>
-                Target amount (RM)
-              </Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. 1500"
-                keyboardType="numeric"
-                value={targetAmount}
-                onChangeText={setTargetAmount}
-              />
-
-              <Text style={{ marginTop: 12, opacity: 0.9 }}>
-                Target date (YYYY-MM-DD)
-              </Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. 2026-02-01"
-                value={targetDate}
-                onChangeText={setTargetDate}
-              />
-
-              <Button
-                text={
-                  aiPlanLoading ? "Generating..." : "Generate Saving Plan (AI)"
-                }
-                style={{ marginTop: 14 }}
-                onPress={generateSavingPlanAi}
-                disabled={aiPlanLoading}
-              />
-
-              <View style={{ marginTop: 12 }}>
-                {aiPlanLoading ? (
-                  <View style={{ paddingVertical: 10, alignItems: "center" }}>
-                    <ActivityIndicator />
-                    <Text style={{ marginTop: 8, opacity: 0.8 }}>
-                      Calling AI...
-                    </Text>
-                  </View>
-                ) : (
-                  <Text style={{ color: subtle }}>
-                    {aiPlanText
-                      ? aiPlanText
-                      : "Your saving plan will appear here."}
+                <View
+                  style={{
+                    flexDirection: "row",
+                    justifyContent: "space-between",
+                    alignItems: "center",
+                  }}
+                >
+                  <Text size="h3" fontWeight="bold">
+                    AI Saving Planner (RM)
                   </Text>
-                )}
-              </View>
+                  <Ionicons
+                    name="sparkles"
+                    size={18}
+                    color={isDarkmode ? "#A78BFA" : "#7C3AED"}
+                  />
+                </View>
 
-              <Button
-                text="Close"
-                style={{
-                  marginTop: 14,
-                  backgroundColor: isDarkmode ? themeColor.dark200 : "#e5e7eb",
-                }}
-                textStyle={{
-                  color: isDarkmode ? themeColor.white100 : themeColor.dark,
-                }}
-                onPress={() => setShowSavingModal(false)}
-              />
+                <Text style={{ marginTop: 8, opacity: 0.85 }}>
+                  Enter your goal and target date. The system will calculate the
+                  correct time left and saving targets, then AI will provide
+                  tips.
+                </Text>
+
+                <Text style={{ marginTop: 12, opacity: 0.9 }}>Goal name</Text>
+                <TextInput
+                  containerStyle={{ marginTop: 10 }}
+                  placeholder="e.g. Thailand trip / New laptop"
+                  value={goalName}
+                  onChangeText={setGoalName}
+                />
+
+                <Text style={{ marginTop: 12, opacity: 0.9 }}>
+                  Target amount (RM)
+                </Text>
+                <TextInput
+                  containerStyle={{ marginTop: 10 }}
+                  placeholder="e.g. 1500"
+                  keyboardType="numeric"
+                  value={targetAmount}
+                  onChangeText={setTargetAmount}
+                />
+
+                <Text style={{ marginTop: 12, opacity: 0.9 }}>
+                  Target date (YYYY-MM-DD)
+                </Text>
+                <TextInput
+                  containerStyle={{ marginTop: 10 }}
+                  placeholder="e.g. 2026-02-01"
+                  value={targetDate}
+                  onChangeText={setTargetDate}
+                />
+
+                <Button
+                  text={
+                    aiPlanLoading
+                      ? "Generating..."
+                      : "Generate Saving Plan (AI)"
+                  }
+                  style={{ marginTop: 14 }}
+                  onPress={generateSavingPlanAi}
+                  disabled={aiPlanLoading}
+                />
+
+                <View style={{ marginTop: 12 }}>
+                  {aiPlanLoading ? (
+                    <View style={{ paddingVertical: 10, alignItems: "center" }}>
+                      <ActivityIndicator />
+                      <Text style={{ marginTop: 8, opacity: 0.8 }}>
+                        Calling AI...
+                      </Text>
+                    </View>
+                  ) : (
+                    <Text style={{ color: subtle }}>
+                      {aiPlanText
+                        ? aiPlanText
+                        : "Your saving plan will appear here."}
+                    </Text>
+                  )}
+                </View>
+
+                <Button
+                  text="Close"
+                  style={{
+                    marginTop: 14,
+                    backgroundColor: isDarkmode
+                      ? themeColor.dark200
+                      : "#e5e7eb",
+                    marginBottom: 6, // ✅ small bottom padding inside scroll
+                  }}
+                  textStyle={{
+                    color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                  }}
+                  onPress={() => setShowSavingModal(false)}
+                />
+              </ScrollView>
             </View>
           </View>
         </Modal>
