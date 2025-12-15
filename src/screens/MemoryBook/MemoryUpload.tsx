@@ -287,7 +287,7 @@ export default function MemoryUpload({ navigation, route }: Props) {
   const LOCAL_AI_SERVER =
     ((process as any)?.env?.EXPO_PUBLIC_AI_SERVER as string) ||
     ((process as any)?.env?.AI_SERVER_URL as string) ||
-    "http://192.168.1.74:3000";
+    "http://192.168.68.129:3000";
 
   // -------------------------------------------------------
   // Location: auto-detect
