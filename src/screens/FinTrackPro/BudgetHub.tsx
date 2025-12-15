@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState, useCallback } from "react";
 import {
   View,
   Platform,
@@ -7,6 +7,7 @@ import {
   Modal,
   Alert,
   Linking,
+  ActivityIndicator,
 } from "react-native";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -32,7 +33,6 @@ import {
   doc,
   setDoc,
   getDoc,
-  addDoc,
 } from "firebase/firestore";
 import { getAuth } from "firebase/auth";
 
@@ -41,15 +41,7 @@ import * as Location from "expo-location";
 
 type Props = NativeStackScreenProps<MainStackParamList, "BudgetHub">;
 
-const MONTH_KEY = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
-
-const DAY_KEY = (d: Date) =>
-  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
-    d.getDate()
-  ).padStart(2, "0")}`;
-
-// ✅ Ollama (same pattern as your ExpensesChart)
+// ✅ Ollama host (same pattern you used)
 const API_HOST =
   Platform.OS === "web"
     ? "http://localhost:11434"
@@ -57,29 +49,13 @@ const API_HOST =
 
 const OLLAMA_MODEL = "gemma3:1b";
 
-// ✅ sanitizer (removes markdown like **)
-function sanitizeAiText(text: string) {
-  return (text || "")
-    .replace(/\*\*/g, "")
-    .replace(/\*/g, "")
-    .replace(/__/g, "")
-    .replace(/_/g, "")
-    .replace(/`/g, "")
-    .trim();
-}
+const MONTH_KEY = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`;
 
-// ✅ parse date input YYYY-MM-DD
-function parseYmd(s: string): Date | null {
-  const t = (s || "").trim();
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(t)) return null;
-  const [y, m, d] = t.split("-").map((x) => Number(x));
-  const dt = new Date(y, m - 1, d);
-  if (Number.isNaN(dt.getTime())) return null;
-  // Validate exact (avoid JS overflow like 2025-02-40)
-  if (dt.getFullYear() !== y || dt.getMonth() !== m - 1 || dt.getDate() !== d)
-    return null;
-  return dt;
-}
+const DAY_KEY = (d: Date) =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(
+    d.getDate()
+  ).padStart(2, "0")}`;
 
 export default function BudgetHub({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
@@ -102,7 +78,7 @@ export default function BudgetHub({ navigation }: Props) {
   const [showBudgetModal, setShowBudgetModal] = useState(false);
   const [budgetInput, setBudgetInput] = useState<string>("");
 
-  // location states
+  // ✅ location states
   const [locLoading, setLocLoading] = useState(false);
   const [locError, setLocError] = useState<string>("");
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(
@@ -110,14 +86,13 @@ export default function BudgetHub({ navigation }: Props) {
   );
   const [placeText, setPlaceText] = useState<string>("");
 
-  // ✅ NEW: Saving Planner states
-  const [showGoalModal, setShowGoalModal] = useState(false);
-  const [goalName, setGoalName] = useState<string>("");
-  const [goalAmount, setGoalAmount] = useState<string>("");
-  const [goalDate, setGoalDate] = useState<string>(""); // YYYY-MM-DD
-
-  const [aiPlanLoading, setAiPlanLoading] = useState(false);
-  const [aiPlanText, setAiPlanText] = useState<string>("");
+  // ✅ NEW: AI Saving Planner
+  const [showSavingModal, setShowSavingModal] = useState(false);
+  const [goalName, setGoalName] = useState("");
+  const [goalAmount, setGoalAmount] = useState("");
+  const [targetDate, setTargetDate] = useState(""); // user type: YYYY-MM-DD
+  const [aiSavingPlan, setAiSavingPlan] = useState("");
+  const [aiSavingLoading, setAiSavingLoading] = useState(false);
 
   const auth = getAuth();
   const db = getFirestore();
@@ -138,6 +113,17 @@ export default function BudgetHub({ navigation }: Props) {
       cursor.setDate(cursor.getDate() - 1);
     }
     return streak;
+  };
+
+  const sanitizePlainText = (s: string) => {
+    if (!s) return "";
+    // Remove common markdown artifacts (**, *, _, backticks) just in case model ignores rules
+    return s
+      .replace(/\*\*/g, "")
+      .replace(/\*/g, "")
+      .replace(/_/g, "")
+      .replace(/`/g, "")
+      .trim();
   };
 
   // ---------- Listen Transactions (THIS MONTH) ----------
@@ -301,7 +287,7 @@ export default function BudgetHub({ navigation }: Props) {
     }
   };
 
-  // ---------- location ----------
+  // ---------- Location ----------
   const fetchLocation = async () => {
     try {
       setLocError("");
@@ -340,8 +326,8 @@ export default function BudgetHub({ navigation }: Props) {
     }
   };
 
-  const partTimeKeywords = useMemo(() => {
-    return [
+  const partTimeKeywords = useMemo(
+    () => [
       "part time barista",
       "part time promoter",
       "part time cashier",
@@ -350,8 +336,9 @@ export default function BudgetHub({ navigation }: Props) {
       "event crew",
       "warehouse packer",
       "retail assistant",
-    ];
-  }, []);
+    ],
+    []
+  );
 
   const openMapsSearch = async (keyword: string) => {
     const q = encodeURIComponent(`${keyword} near ${placeText || "me"}`);
@@ -372,103 +359,76 @@ export default function BudgetHub({ navigation }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isLowBalance]);
 
-  // ✅ NEW: AI Goal-Based Saving Planner
-  const generateSavingPlan = async () => {
-    const user = auth.currentUser;
-    if (!user) {
-      Alert.alert("Not logged in", "Please login again.");
-      return;
-    }
-
-    const name = goalName.trim();
+  // ---------- ✅ AI Saving Planner ----------
+  const generateSavingPlanWithAi = useCallback(async () => {
+    const goal = goalName.trim();
     const amt = Number(goalAmount);
-    const dt = parseYmd(goalDate);
+    const dateStr = targetDate.trim();
 
-    if (!name) {
-      Alert.alert("Missing goal", "Please enter a goal name.");
+    if (!goal) {
+      Alert.alert("Missing", "Please enter a goal name.");
       return;
     }
     if (!Number.isFinite(amt) || amt <= 0) {
-      Alert.alert("Invalid target", "Please enter a valid target amount (RM).");
+      Alert.alert("Invalid", "Please enter a valid target amount (RM).");
       return;
     }
-    if (!dt) {
+    if (!dateStr) {
+      Alert.alert("Missing", "Please enter a target date (YYYY-MM-DD).");
+      return;
+    }
+
+    // Basic date parsing
+    const target = new Date(dateStr);
+    if (Number.isNaN(target.getTime())) {
       Alert.alert(
         "Invalid date",
-        "Please enter target date in format YYYY-MM-DD."
+        "Use format YYYY-MM-DD (example: 2026-03-15)."
       );
       return;
     }
 
-    const msLeft = dt.getTime() - Date.now();
-    if (msLeft <= 0) {
-      Alert.alert("Target date", "Target date must be in the future.");
-      return;
-    }
+    try {
+      setAiSavingLoading(true);
+      setAiSavingPlan("");
 
-    const daysLeft = Math.max(1, Math.ceil(msLeft / (1000 * 60 * 60 * 24)));
-    const weeksLeft = Math.max(1, Math.ceil(daysLeft / 7));
-    const monthsLeft = Math.max(1, Math.ceil(daysLeft / 30));
-
-    // Basic recommended saving (math) — AI will explain nicely
-    const weekly = amt / weeksLeft;
-    const monthly = amt / monthsLeft;
-
-    const dataJson = {
-      currency: "RM (MYR)",
-      currentMonth: monthKey,
-      incomeThisMonthRM: Number(incomeTotal.toFixed(2)),
-      expenseThisMonthRM: Number(expenseTotal.toFixed(2)),
-      balanceThisMonthRM: Number(balance.toFixed(2)),
-      hasBudget,
-      budgetLimitRM: hasBudget ? Number(budgetLimit!.toFixed(2)) : null,
-      budgetUsedRM: Number(budgetUsed.toFixed(2)),
-      budgetRemainingRM: hasBudget
-        ? Number((budgetRemaining ?? 0).toFixed(2))
-        : null,
-      savingGoal: {
-        name,
+      const payload = {
+        currency: "MYR",
+        currencySymbol: "RM",
+        currentMonth: monthKey,
+        totalIncomeThisMonth: Number(incomeTotal.toFixed(2)),
+        totalExpenseThisMonth: Number(expenseTotal.toFixed(2)),
+        balanceThisMonth: Number(balance.toFixed(2)),
+        hasBudget: !!hasBudget,
+        budgetLimit: hasBudget ? Number(budgetLimit!.toFixed(2)) : null,
+        budgetRemaining: hasBudget
+          ? Number((budgetRemaining ?? 0).toFixed(2))
+          : null,
+        goalName: goal,
         targetAmountRM: Number(amt.toFixed(2)),
-        targetDate: dt.toISOString().slice(0, 10),
-        daysLeft,
-        weeksLeft,
-        monthsLeft,
-        computedWeeklyRM: Number(weekly.toFixed(2)),
-        computedMonthlyRM: Number(monthly.toFixed(2)),
-      },
-    };
+        targetDate: dateStr,
+        today: new Date().toISOString().slice(0, 10),
+      };
 
-    const prompt = `
-You are a personal finance assistant.
+      const prompt = `
+You are a personal finance assistant for a Malaysian student.
 
 IMPORTANT RULES:
-- Currency is Malaysian Ringgit (RM / MYR).
-- Do NOT use "$".
-- Do NOT use Markdown.
-- Do NOT use **bold**, *, _, or bullet symbols.
+- Currency is Malaysian Ringgit (RM / MYR). Do NOT use "$".
+- Do NOT use Markdown. No **bold**, no bullet symbols like "•", no numbering.
 - Use plain text only.
+- Output format: 6 to 10 short lines. Each line must start with "- ".
 
-Task:
-Create a goal-based saving plan for the user.
-Output format:
-- Exactly 6 lines.
-- Each line must start with a dash (-).
-- Keep each line short and actionable.
-
-Must include:
-- Weekly saving amount in RM (use computedWeeklyRM)
-- Monthly saving amount in RM (use computedMonthlyRM)
-- A simple progress-tracking idea
-- 1 reminder suggestion
-- 1 realistic tip based on user's budget/balance
+TASK:
+Create a goal-based saving plan using the JSON data.
+1) Calculate how many weeks and months until the target date.
+2) Recommend a weekly saving amount and monthly saving amount (RM).
+3) Suggest 2 to 3 practical adjustments based on spending/budget info.
+4) If budget remaining is low, suggest a smaller starter plan first.
 
 DATA (JSON):
-${JSON.stringify(dataJson, null, 2)}
-`.trim();
-
-    try {
-      setAiPlanLoading(true);
-      setAiPlanText("");
+${JSON.stringify(payload, null, 2)}
+      `.trim();
 
       const res = await fetch(API_HOST + "/api/generate", {
         method: "POST",
@@ -477,37 +437,28 @@ ${JSON.stringify(dataJson, null, 2)}
       });
 
       if (!res.ok) throw new Error(`Ollama error ${res.status}`);
-      const json = await res.json();
+      const data = await res.json();
 
-      const cleaned = sanitizeAiText(json?.response || "");
-      setAiPlanText(cleaned);
-
-      // ✅ Optional: Save to Firestore (SavingGoals)
-      await addDoc(collection(db, "SavingGoals"), {
-        userId: user.uid,
-        createdAt: Date.now(),
-        monthKey,
-        currency: "MYR",
-        goalName: name,
-        targetAmount: Number(amt.toFixed(2)),
-        targetDate: dt.getTime(),
-        daysLeft,
-        weeksLeft,
-        monthsLeft,
-        computedWeekly: Number(weekly.toFixed(2)),
-        computedMonthly: Number(monthly.toFixed(2)),
-        aiPlanText: cleaned,
-      });
-
-      setShowGoalModal(false);
+      const txt = sanitizePlainText(data?.response || "");
+      setAiSavingPlan(txt || "No response from AI.");
     } catch (e: any) {
-      setAiPlanText(
-        "Error generating saving plan: " + (e?.message ?? String(e))
-      );
+      setAiSavingPlan("AI Error: " + (e?.message || String(e)));
     } finally {
-      setAiPlanLoading(false);
+      setAiSavingLoading(false);
     }
-  };
+  }, [
+    goalName,
+    goalAmount,
+    targetDate,
+    monthKey,
+    incomeTotal,
+    expenseTotal,
+    balance,
+    hasBudget,
+    budgetLimit,
+    budgetRemaining,
+    API_HOST,
+  ]);
 
   return (
     <KeyboardAvoidingView
@@ -623,38 +574,32 @@ ${JSON.stringify(dataJson, null, 2)}
                 <View
                   style={{
                     flexDirection: "row",
-                    alignItems: "center",
                     justifyContent: "space-between",
                   }}
                 >
                   <Text size="h3" fontWeight="bold">
                     AI Saving Planner
                   </Text>
-
                   <Button
-                    text="Create"
+                    text="Open"
                     size="sm"
-                    style={{ width: 95 }}
-                    onPress={() => setShowGoalModal(true)}
+                    style={{ width: 90 }}
+                    onPress={() => {
+                      setAiSavingPlan("");
+                      setShowSavingModal(true);
+                    }}
                   />
                 </View>
 
                 <Text style={{ marginTop: 8, opacity: 0.85 }}>
-                  Create a saving goal (travel / purchase) and get a weekly &
-                  monthly saving plan.
+                  Create a saving goal and let AI suggest a weekly/monthly plan.
                 </Text>
 
-                {aiPlanLoading ? (
-                  <Text style={{ marginTop: 10 }}>Generating plan...</Text>
-                ) : aiPlanText ? (
-                  <Text style={{ marginTop: 10, opacity: 0.95 }}>
-                    {aiPlanText}
-                  </Text>
-                ) : (
-                  <Text style={{ marginTop: 10, opacity: 0.8 }}>
-                    No plan yet. Tap “Create” to generate one.
-                  </Text>
-                )}
+                {aiSavingPlan ? (
+                  <View style={{ marginTop: 10 }}>
+                    <Text style={{ opacity: 0.9 }}>{aiSavingPlan}</Text>
+                  </View>
+                ) : null}
               </View>
 
               {/* Budget Progress */}
@@ -890,6 +835,102 @@ ${JSON.stringify(dataJson, null, 2)}
           )}
         </ScrollView>
 
+        {/* ✅ Saving Planner Modal */}
+        <Modal
+          visible={showSavingModal}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowSavingModal(false)}
+        >
+          <View
+            style={{
+              flex: 1,
+              backgroundColor: "rgba(0,0,0,0.5)",
+              justifyContent: "center",
+              paddingHorizontal: 18,
+            }}
+          >
+            <View
+              style={{
+                backgroundColor: isDarkmode
+                  ? themeColor.dark
+                  : themeColor.white,
+                borderRadius: 14,
+                padding: 18,
+              }}
+            >
+              <Text size="h3" fontWeight="bold">
+                AI Saving Planner (RM)
+              </Text>
+
+              <Text style={{ marginTop: 12 }}>Goal name</Text>
+              <TextInput
+                containerStyle={{ marginTop: 10 }}
+                placeholder="e.g. Japan trip / New laptop"
+                value={goalName}
+                onChangeText={setGoalName}
+              />
+
+              <Text style={{ marginTop: 12 }}>Target amount (RM)</Text>
+              <TextInput
+                containerStyle={{ marginTop: 10 }}
+                placeholder="e.g. 3000"
+                keyboardType="numeric"
+                value={goalAmount}
+                onChangeText={setGoalAmount}
+              />
+
+              <Text style={{ marginTop: 12 }}>Target date (YYYY-MM-DD)</Text>
+              <TextInput
+                containerStyle={{ marginTop: 10 }}
+                placeholder="e.g. 2026-06-30"
+                value={targetDate}
+                onChangeText={setTargetDate}
+              />
+
+              <View style={{ marginTop: 14 }}>
+                <Button
+                  text={
+                    aiSavingLoading
+                      ? "Generating..."
+                      : "Generate Saving Plan (AI)"
+                  }
+                  onPress={generateSavingPlanWithAi}
+                  disabled={aiSavingLoading}
+                />
+              </View>
+
+              {aiSavingLoading ? (
+                <View style={{ marginTop: 12, alignItems: "center" }}>
+                  <ActivityIndicator />
+                </View>
+              ) : null}
+
+              {aiSavingPlan ? (
+                <View style={{ marginTop: 12 }}>
+                  <Text style={{ opacity: 0.92 }}>{aiSavingPlan}</Text>
+                </View>
+              ) : null}
+
+              <View style={{ flexDirection: "row", marginTop: 14 }}>
+                <Button
+                  text="Close"
+                  onPress={() => setShowSavingModal(false)}
+                  style={{
+                    flex: 1,
+                    backgroundColor: isDarkmode
+                      ? themeColor.dark200
+                      : "#e5e7eb",
+                  }}
+                  textStyle={{
+                    color: isDarkmode ? themeColor.white100 : themeColor.dark,
+                  }}
+                />
+              </View>
+            </View>
+          </View>
+        </Modal>
+
         {/* Budget Modal */}
         <Modal
           visible={showBudgetModal}
@@ -951,90 +992,6 @@ ${JSON.stringify(dataJson, null, 2)}
                   style={{ flex: 1 }}
                 />
               </View>
-            </View>
-          </View>
-        </Modal>
-
-        {/* ✅ NEW: Goal Modal */}
-        <Modal
-          visible={showGoalModal}
-          transparent
-          animationType="fade"
-          onRequestClose={() => setShowGoalModal(false)}
-        >
-          <View
-            style={{
-              flex: 1,
-              backgroundColor: "rgba(0,0,0,0.5)",
-              justifyContent: "center",
-              paddingHorizontal: 18,
-            }}
-          >
-            <View
-              style={{
-                backgroundColor: isDarkmode
-                  ? themeColor.dark
-                  : themeColor.white,
-                borderRadius: 14,
-                padding: 18,
-              }}
-            >
-              <Text size="h3" fontWeight="bold">
-                Create Saving Goal
-              </Text>
-
-              <Text style={{ marginTop: 12 }}>Goal name</Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. Japan trip"
-                value={goalName}
-                onChangeText={setGoalName}
-              />
-
-              <Text style={{ marginTop: 12 }}>Target amount (RM)</Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. 2000"
-                keyboardType="numeric"
-                value={goalAmount}
-                onChangeText={setGoalAmount}
-              />
-
-              <Text style={{ marginTop: 12 }}>Target date (YYYY-MM-DD)</Text>
-              <TextInput
-                containerStyle={{ marginTop: 10 }}
-                placeholder="e.g. 2026-03-01"
-                value={goalDate}
-                onChangeText={setGoalDate}
-              />
-
-              <View style={{ flexDirection: "row", marginTop: 14 }}>
-                <Button
-                  text="Cancel"
-                  onPress={() => setShowGoalModal(false)}
-                  style={{
-                    flex: 1,
-                    marginRight: 10,
-                    backgroundColor: isDarkmode
-                      ? themeColor.dark200
-                      : "#e5e7eb",
-                  }}
-                  textStyle={{
-                    color: isDarkmode ? themeColor.white100 : themeColor.dark,
-                  }}
-                />
-                <Button
-                  text={aiPlanLoading ? "Generating..." : "Generate"}
-                  onPress={generateSavingPlan}
-                  style={{ flex: 1 }}
-                  disabled={aiPlanLoading}
-                />
-              </View>
-
-              <Text style={{ marginTop: 10, opacity: 0.75, fontSize: 12 }}>
-                Note: Plan uses RM (MYR) and saves a copy into Firestore
-                (SavingGoals).
-              </Text>
             </View>
           </View>
         </Modal>
