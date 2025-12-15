@@ -1,4 +1,5 @@
-import React, { useMemo, useRef, useState } from "react";
+// src/screens/MemoryBook/MemoryMediaViewer.tsx
+import React, { useMemo, useRef, useState, useEffect } from "react";
 import {
   View,
   Dimensions,
@@ -8,16 +9,18 @@ import {
   StatusBar,
   Platform,
 } from "react-native";
-import { Layout, Text, useTheme, themeColor } from "react-native-rapi-ui";
+import { Layout, Text, useTheme } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
-import { Video, ResizeMode } from "expo-av";
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
+
+// ✅ expo-video
+import { VideoView, useVideoPlayer } from "expo-video";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryMediaViewer">;
 
 export type MediaItem = {
-  id: string; // unique per media item (postId + index)
+  id: string;
   postId: string;
   uri: string;
   type: "image" | "video";
@@ -27,14 +30,66 @@ export type MediaItem = {
 
 const { width: W, height: H } = Dimensions.get("window");
 
+function clamp(n: number, min: number, max: number) {
+  return Math.max(min, Math.min(max, n));
+}
+
+/**
+ * Small component to render a video with its own player instance
+ * so we can pause/play based on "active" state.
+ */
+function VideoSlide({
+  uri,
+  active,
+}: {
+  uri: string;
+  active: boolean;
+}) {
+  const player = useVideoPlayer(uri, (p) => {
+    // start paused always; user taps play via controls
+    p.loop = false;
+    p.muted = false;
+  });
+
+  // ✅ Pause when not active. Keep the current one paused by default
+  // until user uses controls, but make sure other slides never keep playing.
+  useEffect(() => {
+    if (!active) {
+      try {
+        player.pause();
+      } catch {}
+    } else {
+      // active slide: keep paused by default (like your previous shouldPlay={false})
+      try {
+        player.pause();
+      } catch {}
+    }
+  }, [active, player]);
+
+  return (
+    <VideoView
+      player={player}
+      style={{ width: W, height: H }}
+      allowsFullscreen
+      allowsPictureInPicture
+      // ✅ show native controls
+      nativeControls
+      // Similar to ResizeMode.CONTAIN
+      contentFit="contain"
+    />
+  );
+}
+
 export default function MemoryMediaViewer({ navigation, route }: Props) {
   const { isDarkmode } = useTheme();
   const { media, startIndex = 0, title } = route.params;
 
-  const [index, setIndex] = useState(Math.max(0, Math.min(startIndex, media.length - 1)));
+  const safeStart = clamp(startIndex, 0, Math.max(0, media.length - 1));
+  const [index, setIndex] = useState(safeStart);
+
   const listRef = useRef<FlatList<MediaItem>>(null);
 
-  const bg = isDarkmode ? "#000" : "#000";
+  const bg = "#000";
   const textColor = "#fff";
 
   const current = media[index];
@@ -50,14 +105,23 @@ export default function MemoryMediaViewer({ navigation, route }: Props) {
     []
   );
 
+  // ✅ if media changes and startIndex changes, keep stable
+  useEffect(() => {
+    setIndex(safeStart);
+  }, [safeStart]);
+
+  // better top spacing (no safe-area lib)
+  const topInset = Platform.OS === "ios" ? 52 : 18;
+
   return (
     <Layout style={{ backgroundColor: bg }}>
       <StatusBar barStyle="light-content" />
+
       {/* Top bar */}
       <View
         style={{
           position: "absolute",
-          top: Platform.OS === "ios" ? 48 : 18,
+          top: topInset,
           left: 12,
           right: 12,
           zIndex: 20,
@@ -106,7 +170,6 @@ export default function MemoryMediaViewer({ navigation, route }: Props) {
           </Text>
         </View>
 
-        {/* spacer to balance back button */}
         <View style={{ width: 40, height: 40 }} />
       </View>
 
@@ -116,12 +179,17 @@ export default function MemoryMediaViewer({ navigation, route }: Props) {
         keyExtractor={(it) => it.id}
         horizontal
         pagingEnabled
-        initialScrollIndex={startIndex}
+        initialScrollIndex={safeStart}
         getItemLayout={(_, i) => ({ length: W, offset: W * i, index: i })}
         showsHorizontalScrollIndicator={false}
         onViewableItemsChanged={onViewableItemsChanged}
         viewabilityConfig={viewabilityConfig}
-        renderItem={({ item }) => {
+        windowSize={3}
+        maxToRenderPerBatch={2}
+        removeClippedSubviews
+        renderItem={({ item, index: itemIndex }) => {
+          const active = itemIndex === index;
+
           return (
             <View
               style={{
@@ -133,14 +201,7 @@ export default function MemoryMediaViewer({ navigation, route }: Props) {
               }}
             >
               {item.type === "video" ? (
-                <Video
-                  source={{ uri: item.uri }}
-                  style={{ width: W, height: H }}
-                  resizeMode={ResizeMode.CONTAIN}
-                  useNativeControls
-                  shouldPlay={false}
-                  isLooping={false}
-                />
+                <VideoSlide uri={item.uri} active={active} />
               ) : (
                 <Image
                   source={{ uri: item.uri }}
@@ -153,7 +214,7 @@ export default function MemoryMediaViewer({ navigation, route }: Props) {
         }}
       />
 
-      {/* Bottom caption (optional) */}
+      {/* Bottom caption */}
       {!!current?.caption && (
         <View
           style={{

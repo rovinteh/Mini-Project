@@ -1,5 +1,5 @@
 // src/screens/MemoryBook/MemoryAlbum.tsx
-import React, { useEffect, useState, useRef, useMemo } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   ScrollView,
@@ -11,6 +11,7 @@ import {
   Modal,
   Alert,
   Dimensions,
+  ActivityIndicator,
 } from "react-native";
 import {
   Layout,
@@ -22,6 +23,7 @@ import {
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
+import * as VideoThumbnails from "expo-video-thumbnails";
 
 import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
@@ -49,7 +51,6 @@ import { PostType } from "./B2PostCard";
 
 type Props = NativeStackScreenProps<MainStackParamList, "MemoryAlbum">;
 
-// ✅ must match MainStackParamList type
 type MediaItem = {
   id: string;
   postId: string;
@@ -60,34 +61,24 @@ type MediaItem = {
 };
 
 interface PersonAlbum {
-  key: string; // lowercase key
+  key: string;
   name: string;
   postIds: string[];
   coverPost: PostType | null;
 }
 
 interface LocationAlbum {
-  id: string; // normalized location key
-  placeTitle: string; // e.g. "Cameron Highlands"
-  rangeLabel: string; // e.g. "9 May 2025 – 15 Dec 2025"
+  id: string;
+  placeTitle: string;
+  rangeLabel: string;
   postIds: string[];
   coverPost: PostType | null;
-  rawLabel: string; // original label string
+  rawLabel: string;
 }
 
 const monthNames = [
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
 ];
 
 function getPostDate(p: PostType): Date {
@@ -97,14 +88,6 @@ function getPostDate(p: PostType): Date {
   return new Date();
 }
 
-function getPostThumb(post: any): string | undefined {
-  if (Array.isArray(post.mediaUrls) && post.mediaUrls.length > 0)
-    return post.mediaUrls[0];
-  if (typeof post.mediaUrl === "string") return post.mediaUrl;
-  return undefined;
-}
-
-// --- treat videos same thumbnail, show play icon in grid
 function isVideoPost(post: any): boolean {
   const mt = String(post?.mediaType || "").toLowerCase();
   const mts = Array.isArray(post?.mediaTypes) ? post.mediaTypes : [];
@@ -112,11 +95,16 @@ function isVideoPost(post: any): boolean {
   return mts.some((t: any) => String(t).toLowerCase() === "video");
 }
 
-// -------------------- Location grouping helpers --------------------
+// Return FIRST media url (image or video)
+function getFirstMediaUrl(post: any): string | undefined {
+  if (Array.isArray(post?.mediaUrls) && post.mediaUrls.length > 0) return post.mediaUrls[0];
+  if (typeof post?.mediaUrl === "string" && post.mediaUrl) return post.mediaUrl;
+  return undefined;
+}
+
+// ------------- Location grouping helpers -------------
 function extractLocationRaw(p: any): string {
-  return String(
-    p?.locationLabel || p?.locationName || p?.placeName || ""
-  ).trim();
+  return String(p?.locationLabel || p?.locationName || p?.placeName || "").trim();
 }
 
 function normalizeLocationKey(raw: string) {
@@ -193,6 +181,19 @@ function buildMediaFromPosts(posts: PostType[]): MediaItem[] {
   return out;
 }
 
+// ---------------- Thumbnail helpers ----------------
+async function safeGetVideoThumbnail(videoUrl: string) {
+  // try multiple timestamps because some videos have black first frame
+  const times = [200, 800, 1500];
+  for (const t of times) {
+    try {
+      const { uri } = await VideoThumbnails.getThumbnailAsync(videoUrl, { time: t });
+      if (uri) return uri;
+    } catch {}
+  }
+  return "";
+}
+
 export default function MemoryAlbum({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const firestore = getFirestore();
@@ -206,15 +207,25 @@ export default function MemoryAlbum({ navigation }: Props) {
   const [onThisDayPosts, setOnThisDayPosts] = useState<PostType[]>([]);
   const [locationAlbums, setLocationAlbums] = useState<LocationAlbum[]>([]);
 
-  const [peopleCoverCustom, setPeopleCoverCustom] = useState<
-    Record<string, string>
-  >({});
-  const [peopleCoverMap, setPeopleCoverMap] = useState<Record<string, string>>(
-    {}
-  );
+  const [peopleCoverCustom, setPeopleCoverCustom] = useState<Record<string, string>>({});
+  const [peopleCoverMap, setPeopleCoverMap] = useState<Record<string, string>>({});
+
+  // ensure video covers have thumbs when no custom cover
+  useEffect(() => {
+    personAlbums.forEach((pa) => {
+      if (!peopleCoverCustom[pa.key] && pa.coverPost && isVideoPost(pa.coverPost)) {
+        ensureThumbForPost(pa.coverPost);
+      }
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [personAlbums, peopleCoverCustom]);
 
   const [coverModalOpen, setCoverModalOpen] = useState(false);
   const [coverTarget, setCoverTarget] = useState<PersonAlbum | null>(null);
+
+  // ✅ thumbnail cache (postId -> thumbUri)
+  const [videoThumbMap, setVideoThumbMap] = useState<Record<string, string>>({});
+  const pendingThumbsRef = useRef<Set<string>>(new Set());
 
   const primaryTextColor = isDarkmode ? themeColor.white100 : themeColor.dark;
   const subTextColor = isDarkmode ? "#cbd5e1" : "#64748b";
@@ -233,6 +244,43 @@ export default function MemoryAlbum({ navigation }: Props) {
       useNativeDriver: true,
     }).start();
   }, [posts.length]);
+
+  // ✅ ensure thumb for a post (only first media)
+  const ensureThumbForPost = async (p: any) => {
+    const postId = String(p?.id || "");
+    if (!postId) return;
+
+    if (videoThumbMap[postId]) return;
+    if (pendingThumbsRef.current.has(postId)) return;
+
+    const isVideo = isVideoPost(p);
+    if (!isVideo) return;
+
+    const url = getFirstMediaUrl(p);
+    if (!url) return;
+
+    pendingThumbsRef.current.add(postId);
+
+    const thumb = await safeGetVideoThumbnail(url);
+
+    pendingThumbsRef.current.delete(postId);
+
+    if (!thumb) return;
+
+    setVideoThumbMap((prev) => {
+      if (prev[postId]) return prev;
+      return { ...prev, [postId]: thumb };
+    });
+  };
+
+  // ✅ unified cover uri for ANY post (image or video)
+  const getCoverUriForPost = (p: any): string | undefined => {
+    if (!p) return undefined;
+    if (isVideoPost(p)) {
+      return videoThumbMap[String(p.id || "")] || undefined;
+    }
+    return getFirstMediaUrl(p);
+  };
 
   // ✅ OPEN SWIPE VIEWER
   const openSwipeViewer = (
@@ -292,8 +340,7 @@ export default function MemoryAlbum({ navigation }: Props) {
         else setPeopleCoverMap({});
 
         const customMap = data?.peopleCoverCustomUrls;
-        if (customMap && typeof customMap === "object")
-          setPeopleCoverCustom(customMap);
+        if (customMap && typeof customMap === "object") setPeopleCoverCustom(customMap);
         else setPeopleCoverCustom({});
       },
       () => {
@@ -304,6 +351,17 @@ export default function MemoryAlbum({ navigation }: Props) {
 
     return () => unsub();
   }, [uid, firestore]);
+
+  // ✅ Pre-generate thumbnails for visible sections (so no more grey)
+  useEffect(() => {
+    if (!posts.length) return;
+    const videos = posts.filter((p: any) => isVideoPost(p));
+    // limit to avoid heavy work
+    videos.slice(0, 35).forEach((p: any) => {
+      ensureThumbForPost(p);
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [posts.length]);
 
   // 2) PEOPLE ALBUMS
   useEffect(() => {
@@ -328,7 +386,6 @@ export default function MemoryAlbum({ navigation }: Props) {
       });
     });
 
-    // always include "Me"
     const meName = currentUser?.displayName?.trim() || "Me";
     const meKey = meName.toLowerCase();
 
@@ -348,8 +405,7 @@ export default function MemoryAlbum({ navigation }: Props) {
         );
 
         const overridePostId = peopleCoverMap?.[key];
-        const override =
-          overridePostId ? sorted.find((p) => p.id === overridePostId) : null;
+        const override = overridePostId ? sorted.find((p) => p.id === overridePostId) : null;
 
         return {
           key,
@@ -363,7 +419,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     setPersonAlbums(albums);
   }, [posts, currentUser, peopleCoverMap]);
 
-  // 3) LOCATION ALBUMS (Places)
+  // 3) LOCATION ALBUMS
   useEffect(() => {
     if (!posts.length) {
       setLocationAlbums([]);
@@ -389,9 +445,7 @@ export default function MemoryAlbum({ navigation }: Props) {
         );
 
         const newest = sorted[0] || null;
-        const times = sorted
-          .map((p) => getPostDate(p).getTime())
-          .sort((a, b) => a - b);
+        const times = sorted.map((p) => getPostDate(p).getTime()).sort((a, b) => a - b);
 
         const minD = new Date(times[0]);
         const maxD = new Date(times[times.length - 1]);
@@ -425,18 +479,12 @@ export default function MemoryAlbum({ navigation }: Props) {
 
     posts.forEach((p) => {
       const d = getPostDate(p);
-      if (
-        d.getMonth() === tMonth &&
-        d.getDate() === tDate &&
-        d.getFullYear() !== today.getFullYear()
-      ) {
+      if (d.getMonth() === tMonth && d.getDate() === tDate && d.getFullYear() !== today.getFullYear()) {
         onThisDay.push(p);
       }
     });
 
-    onThisDay.sort(
-      (a, b) => getPostDate(b).getTime() - getPostDate(a).getTime()
-    );
+    onThisDay.sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
     setOnThisDayPosts(onThisDay);
   }, [posts]);
 
@@ -445,17 +493,10 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(
-        userRef,
-        { peopleCoverPostIds: { [personKey]: postId } },
-        { merge: true }
-      );
+      await setDoc(userRef, { peopleCoverPostIds: { [personKey]: postId } }, { merge: true });
     } catch (e) {
       console.log("savePeopleCover error:", e);
-      Alert.alert(
-        "Save failed",
-        "Could not save people cover. Please check Firestore rules."
-      );
+      Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
     }
   };
 
@@ -463,17 +504,10 @@ export default function MemoryAlbum({ navigation }: Props) {
     if (!uid) return;
     try {
       const userRef = doc(firestore, "users", uid);
-      await setDoc(
-        userRef,
-        { peopleCoverCustomUrls: { [personKey]: url } },
-        { merge: true }
-      );
+      await setDoc(userRef, { peopleCoverCustomUrls: { [personKey]: url } }, { merge: true });
     } catch (e) {
       console.log("savePeopleCoverCustom error:", e);
-      Alert.alert(
-        "Save failed",
-        "Could not save people cover. Please check Firestore rules."
-      );
+      Alert.alert("Save failed", "Could not save people cover. Please check Firestore rules.");
     }
   };
 
@@ -481,10 +515,7 @@ export default function MemoryAlbum({ navigation }: Props) {
   const pickCoverFromGallery = async (personKey: string) => {
     const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
     if (status !== "granted") {
-      Alert.alert(
-        "Permission needed",
-        "Please allow photo access to choose a cover."
-      );
+      Alert.alert("Permission needed", "Please allow photo access to choose a cover.");
       return;
     }
 
@@ -518,21 +549,9 @@ export default function MemoryAlbum({ navigation }: Props) {
       <Layout>
         <TopNav
           middleContent={<Text>Memory Album</Text>}
-          leftContent={
-            <Ionicons
-              name="chevron-back"
-              size={20}
-              color={themeColor.white100}
-            />
-          }
+          leftContent={<Ionicons name="chevron-back" size={20} color={themeColor.white100} />}
           leftAction={() => navigation.popToTop()}
-          rightContent={
-            <Ionicons
-              name={isDarkmode ? "sunny" : "moon"}
-              size={20}
-              color={themeColor.white100}
-            />
-          }
+          rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={themeColor.white100} />}
           rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
         />
         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
@@ -542,17 +561,15 @@ export default function MemoryAlbum({ navigation }: Props) {
     );
   }
 
-  const sortedPosts = posts
-    .slice()
-    .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
+  const sortedPosts = posts.slice().sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
 
   const timelineTranslateY = timelineAnim.interpolate({
     inputRange: [0, 1],
     outputRange: [20, 0],
   });
 
-  // ✅ All Photos grid: CENTER + BIGGER
-  const gridData = sortedPosts.filter((p) => !!getPostThumb(p));
+  // All Photos grid
+  const gridData = sortedPosts.filter((p: any) => !!getFirstMediaUrl(p));
   const numColumns = 3;
   const screenW = Dimensions.get("window").width;
   const gridSidePadding = 14;
@@ -560,35 +577,29 @@ export default function MemoryAlbum({ navigation }: Props) {
   const thumbSize =
     (screenW - gridSidePadding * 2 - gridGap * (numColumns - 1)) / numColumns;
 
-  // Build media list for viewer (all photos/videos in grid order)
+  // media list for viewer
   const mediaList = useMemo(() => {
-    return gridData.flatMap((p) => {
+    return gridData.flatMap((p: any) => {
       const urls =
-        Array.isArray((p as any).mediaUrls) && (p as any).mediaUrls.length
-          ? (p as any).mediaUrls
-          : (p as any).mediaUrl
-          ? [(p as any).mediaUrl]
-          : [];
+        Array.isArray(p.mediaUrls) && p.mediaUrls.length ? p.mediaUrls :
+        p.mediaUrl ? [p.mediaUrl] : [];
 
       const typesRaw =
-        Array.isArray((p as any).mediaTypes) &&
-        (p as any).mediaTypes.length === urls.length
-          ? (p as any).mediaTypes
-          : urls.map(() => (p as any).mediaType || "image");
+        Array.isArray(p.mediaTypes) && p.mediaTypes.length === urls.length
+          ? p.mediaTypes
+          : urls.map(() => p.mediaType || "image");
 
       return urls.map((uri: string, idx: number) => {
         const t = typesRaw[idx] || "image";
         const normType =
-          typeof t === "string" && t.toLowerCase().startsWith("video")
-            ? "video"
-            : "image";
+          typeof t === "string" && t.toLowerCase().startsWith("video") ? "video" : "image";
         return {
           id: `${p.id}-${idx}`,
           postId: p.id,
           uri,
           type: normType as "image" | "video",
-          createdAt: (p as any).createdAt,
-          caption: (p as any).caption || "",
+          createdAt: p.createdAt,
+          caption: p.caption || "",
         };
       });
     });
@@ -603,44 +614,41 @@ export default function MemoryAlbum({ navigation }: Props) {
   }, [mediaList]);
 
   const openInViewer = (postId: string, title?: string) => {
-    const startIndex =
-      mediaStartIndexByPost[postId] !== undefined
-        ? mediaStartIndexByPost[postId]
-        : 0;
-
-    navigation.navigate("MemoryMediaViewer", {
-      media: mediaList,
-      startIndex,
-      title,
-    } as any);
+    const startIndex = mediaStartIndexByPost[postId] !== undefined ? mediaStartIndexByPost[postId] : 0;
+    navigation.navigate("MemoryMediaViewer", { media: mediaList, startIndex, title } as any);
   };
 
-  const GridItem = ({ item }: { item: PostType }) => {
-    const thumb = getPostThumb(item);
-    if (!thumb) return null;
+  // ---------- Reusable card thumb ----------
+  const MediaCover = ({
+    post,
+    style,
+  }: {
+    post: any;
+    style: any;
+  }) => {
+    const isVideo = isVideoPost(post);
+    const coverUri = getCoverUriForPost(post);
 
-    const video = isVideoPost(item);
+    useEffect(() => {
+      if (isVideo) ensureThumbForPost(post);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [post?.id]);
 
     return (
-      <TouchableOpacity
-        style={{
-          width: thumbSize,
-          height: thumbSize,
-          borderRadius: 10,
-          overflow: "hidden",
-          backgroundColor: cardBg,
-          marginBottom: gridGap,
-        }}
-        activeOpacity={0.9}
-        onPress={() => openInViewer(item.id, "All Photos")}
-      >
-        <Image
-          source={{ uri: thumb }}
-          style={{ width: "100%", height: "100%" }}
-          resizeMode="cover"
-        />
+      <View style={[{ backgroundColor: cardBg, overflow: "hidden" }, style]}>
+        {coverUri ? (
+          <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+        ) : (
+          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+            {isVideo ? (
+              <ActivityIndicator />
+            ) : (
+              <Ionicons name="image" size={26} color={subTextColor} />
+            )}
+          </View>
+        )}
 
-        {video && (
+        {isVideo && (
           <View
             style={{
               position: "absolute",
@@ -657,6 +665,23 @@ export default function MemoryAlbum({ navigation }: Props) {
             <Ionicons name="play" size={14} color="#fff" />
           </View>
         )}
+      </View>
+    );
+  };
+
+  const GridItem = ({ item }: { item: PostType }) => {
+    return (
+      <TouchableOpacity
+        style={{
+          width: thumbSize,
+          height: thumbSize,
+          borderRadius: 10,
+          marginBottom: gridGap,
+        }}
+        activeOpacity={0.9}
+        onPress={() => openInViewer(item.id, "All Photos")}
+      >
+        <MediaCover post={item} style={{ width: "100%", height: "100%", borderRadius: 10 }} />
       </TouchableOpacity>
     );
   };
@@ -667,7 +692,7 @@ export default function MemoryAlbum({ navigation }: Props) {
     const setIds = new Set(coverTarget.postIds);
     return posts
       .filter((p) => setIds.has(p.id))
-      .filter((p) => !!getPostThumb(p))
+      .filter((p: any) => !!getFirstMediaUrl(p))
       .sort((a, b) => getPostDate(b).getTime() - getPostDate(a).getTime());
   }, [coverTarget, posts]);
 
@@ -675,48 +700,24 @@ export default function MemoryAlbum({ navigation }: Props) {
     <Layout>
       <TopNav
         middleContent={<Text>Memory Album</Text>}
-        leftContent={
-          <Ionicons name="chevron-back" size={20} color={primaryTextColor} />
-        }
+        leftContent={<Ionicons name="chevron-back" size={20} color={primaryTextColor} />}
         leftAction={() => navigation.popToTop()}
-        rightContent={
-          <Ionicons
-            name={isDarkmode ? "sunny" : "moon"}
-            size={20}
-            color={primaryTextColor}
-          />
-        }
+        rightContent={<Ionicons name={isDarkmode ? "sunny" : "moon"} size={20} color={primaryTextColor} />}
         rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
 
-      <View
-        style={{
-          flex: 1,
-          backgroundColor: isDarkmode ? "#050608" : themeColor.white100,
-        }}
-      >
-        <ScrollView
-          style={{ flex: 1 }}
-          contentContainerStyle={{ padding: 16, paddingBottom: 110 }}
-        >
+      <View style={{ flex: 1, backgroundColor: isDarkmode ? "#050608" : themeColor.white100 }}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={{ padding: 16, paddingBottom: 110 }}>
           {/* 1) ON THIS DAY */}
           {onThisDayPosts.length > 0 && (
             <View style={{ marginBottom: 22 }}>
-              <Text
-                style={{
-                  fontSize: 18,
-                  fontWeight: "bold",
-                  color: primaryTextColor,
-                  marginBottom: 12,
-                }}
-              >
+              <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
                 On this day
               </Text>
 
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {onThisDayPosts.map((p) => {
                   const d = getPostDate(p);
-                  const thumb = getPostThumb(p);
                   return (
                     <TouchableOpacity
                       key={p.id}
@@ -730,31 +731,13 @@ export default function MemoryAlbum({ navigation }: Props) {
                       onPress={() => openSwipeViewer(onThisDayPosts, p.id, "On this day")}
                       activeOpacity={0.9}
                     >
-                      {thumb && (
-                        <Image
-                          source={{ uri: thumb }}
-                          style={{ width: "100%", height: 110 }}
-                          resizeMode="cover"
-                        />
-                      )}
+                      <MediaCover post={p} style={{ width: "100%", height: 110 }} />
+
                       <View style={{ padding: 10 }}>
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            color: subTextColor,
-                            marginBottom: 2,
-                          }}
-                        >
+                        <Text style={{ fontSize: 12, color: subTextColor, marginBottom: 2 }}>
                           {d.getDate()} {monthNames[d.getMonth()]} {d.getFullYear()}
                         </Text>
-                        <Text
-                          style={{
-                            fontSize: 14,
-                            fontWeight: "600",
-                            color: primaryTextColor,
-                          }}
-                          numberOfLines={2}
-                        >
+                        <Text style={{ fontSize: 14, fontWeight: "600", color: primaryTextColor }} numberOfLines={2}>
                           {(p as any).caption || "Memory from past years"}
                         </Text>
                       </View>
@@ -765,28 +748,21 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
           )}
 
-          {/* 2) PLACES — tap opens swipe inside that place */}
+          {/* 2) PLACES */}
           {locationAlbums.length > 0 && (
             <View style={{ marginBottom: 22 }}>
-              <Text
-                style={{
-                  fontSize: 18,
-                  fontWeight: "bold",
-                  color: primaryTextColor,
-                  marginBottom: 12,
-                }}
-              >
+              <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
                 Places
               </Text>
 
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {locationAlbums.map((a) => {
-                  const coverUrl = a.coverPost ? getPostThumb(a.coverPost) : undefined;
-
                   const placeSet = new Set(a.postIds);
                   const placePosts = posts
                     .filter((p) => placeSet.has(p.id))
                     .sort((x, y) => getPostDate(y).getTime() - getPostDate(x).getTime());
+
+                  const coverPost = a.coverPost;
 
                   return (
                     <TouchableOpacity
@@ -799,15 +775,11 @@ export default function MemoryAlbum({ navigation }: Props) {
                         width: 260,
                         height: 320,
                       }}
-                      onPress={() => openSwipeViewer(placePosts, a.coverPost?.id, a.placeTitle)}
+                      onPress={() => openSwipeViewer(placePosts, coverPost?.id, a.placeTitle)}
                       activeOpacity={0.9}
                     >
-                      {coverUrl ? (
-                        <Image
-                          source={{ uri: coverUrl }}
-                          style={{ width: "100%", height: "100%" }}
-                          resizeMode="cover"
-                        />
+                      {coverPost ? (
+                        <MediaCover post={coverPost} style={{ width: "100%", height: "100%" }} />
                       ) : (
                         <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
                           <Ionicons name="location" size={30} color={subTextColor} />
@@ -825,20 +797,10 @@ export default function MemoryAlbum({ navigation }: Props) {
                           backgroundColor: "rgba(0,0,0,0.45)",
                         }}
                       >
-                        <Text
-                          style={{ fontSize: 14, fontWeight: "800", color: "#fff" }}
-                          numberOfLines={1}
-                        >
+                        <Text style={{ fontSize: 14, fontWeight: "800", color: "#fff" }} numberOfLines={1}>
                           {a.placeTitle}
                         </Text>
-                        <Text
-                          style={{
-                            fontSize: 12,
-                            color: "rgba(255,255,255,0.85)",
-                            marginTop: 2,
-                          }}
-                          numberOfLines={1}
-                        >
+                        <Text style={{ fontSize: 12, color: "rgba(255,255,255,0.85)", marginTop: 2 }} numberOfLines={1}>
                           {a.rangeLabel}
                         </Text>
                       </View>
@@ -849,46 +811,34 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
           )}
 
-          {/* 3) PEOPLE — tap opens swipe inside that person */}
+          {/* 3) PEOPLE */}
           <View style={{ marginBottom: 22 }}>
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "bold",
-                color: primaryTextColor,
-                marginBottom: 12,
-              }}
-            >
+            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
               People
             </Text>
 
             {personAlbums.length === 0 ? (
-              <Text style={{ color: subTextColor }}>
-                No people tags yet. Try tagging friends.
-              </Text>
+              <Text style={{ color: subTextColor }}>No people tags yet. Try tagging friends.</Text>
             ) : (
               <ScrollView horizontal showsHorizontalScrollIndicator={false}>
                 {personAlbums.map((pa) => {
                   const coverUrl =
                     peopleCoverCustom[pa.key] ||
-                    (pa.coverPost ? getPostThumb(pa.coverPost) : undefined);
+                    (pa.coverPost ? getCoverUriForPost(pa.coverPost) : undefined);
 
                   const idSet = new Set(pa.postIds);
                   const personPosts = posts
                     .filter((p) => idSet.has(p.id))
                     .sort((x, y) => getPostDate(y).getTime() - getPostDate(x).getTime());
 
-                  return (
-                    <TouchableOpacity
-                      key={pa.key}
-                      style={{ marginRight: 16, alignItems: "center" }}
+                    return (
+                      <TouchableOpacity
+                        key={pa.key}
+                        style={{ marginRight: 16, alignItems: "center" }}
                       onPress={() => openSwipeViewer(personPosts, pa.coverPost?.id, pa.name)}
                       onLongPress={() => {
                         Alert.alert("Change cover", `Choose cover for ${pa.name}`, [
-                          {
-                            text: "Pick from gallery",
-                            onPress: () => pickCoverFromGallery(pa.key),
-                          },
+                          { text: "Pick from gallery", onPress: () => pickCoverFromGallery(pa.key) },
                           {
                             text: "Choose from posts",
                             onPress: () => {
@@ -914,11 +864,7 @@ export default function MemoryAlbum({ navigation }: Props) {
                         }}
                       >
                         {coverUrl ? (
-                          <Image
-                            source={{ uri: coverUrl }}
-                            style={{ width: "100%", height: "100%" }}
-                            resizeMode="cover"
-                          />
+                          <Image source={{ uri: coverUrl }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
                         ) : (
                           <Ionicons name="person" size={34} color={subTextColor} />
                         )}
@@ -952,21 +898,12 @@ export default function MemoryAlbum({ navigation }: Props) {
 
           {/* 4) ALL PHOTOS */}
           <View style={{ marginBottom: 22 }}>
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "bold",
-                color: primaryTextColor,
-                marginBottom: 12,
-              }}
-            >
+            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
               All Photos
             </Text>
 
             {!gridData.length ? (
-              <Text style={{ color: subTextColor }}>
-                No memories yet. Try uploading a few photos first.
-              </Text>
+              <Text style={{ color: subTextColor }}>No memories yet. Try uploading a few photos first.</Text>
             ) : (
               <FlatList
                 data={gridData}
@@ -974,34 +911,20 @@ export default function MemoryAlbum({ navigation }: Props) {
                 numColumns={numColumns}
                 scrollEnabled={false}
                 renderItem={({ item }) => <GridItem item={item} />}
-                contentContainerStyle={{
-                  paddingHorizontal: gridSidePadding,
-                  paddingBottom: 6,
-                }}
-                columnWrapperStyle={{
-                  justifyContent: "space-between",
-                }}
+                contentContainerStyle={{ paddingHorizontal: gridSidePadding, paddingBottom: 6 }}
+                columnWrapperStyle={{ justifyContent: "space-between" }}
               />
             )}
           </View>
 
-          {/* 5) TIMELINE — tap opens swipe in all posts */}
+          {/* 5) TIMELINE */}
           <View style={{ marginTop: 6 }}>
-            <Text
-              style={{
-                fontSize: 18,
-                fontWeight: "bold",
-                color: primaryTextColor,
-                marginBottom: 12,
-              }}
-            >
+            <Text style={{ fontSize: 18, fontWeight: "bold", color: primaryTextColor, marginBottom: 12 }}>
               Memories timeline
             </Text>
 
             {!sortedPosts.length ? (
-              <Text style={{ color: subTextColor }}>
-                No memories yet. Try uploading a few photos first.
-              </Text>
+              <Text style={{ color: subTextColor }}>No memories yet. Try uploading a few photos first.</Text>
             ) : (
               <View style={{ position: "relative", paddingLeft: 40 }}>
                 <View
@@ -1016,17 +939,12 @@ export default function MemoryAlbum({ navigation }: Props) {
                   }}
                 />
 
-                <Animated.View
-                  style={{
-                    opacity: timelineAnim,
-                    transform: [{ translateY: timelineTranslateY }],
-                  }}
-                >
+                <Animated.View style={{ opacity: timelineAnim, transform: [{ translateY: timelineTranslateY }] }}>
                   {(() => {
                     let lastYear = -1;
                     let lastMonthKey = "";
 
-                    return sortedPosts.map((p) => {
+                    return sortedPosts.map((p: any) => {
                       const d = getPostDate(p);
                       const year = d.getFullYear();
                       const monthKey = `${year}-${d.getMonth()}`;
@@ -1038,32 +956,16 @@ export default function MemoryAlbum({ navigation }: Props) {
                       lastYear = year;
                       lastMonthKey = monthKey;
 
-                      const thumb = getPostThumb(p);
-
                       return (
                         <View key={p.id} style={{ marginBottom: 26 }}>
                           {showYear && (
-                            <Text
-                              style={{
-                                fontSize: 16,
-                                fontWeight: "700",
-                                color: primaryTextColor,
-                                marginBottom: 4,
-                              }}
-                            >
+                            <Text style={{ fontSize: 16, fontWeight: "700", color: primaryTextColor, marginBottom: 4 }}>
                               {year}
                             </Text>
                           )}
 
                           {showMonth && (
-                            <Text
-                              style={{
-                                marginBottom: 6,
-                                fontSize: 14,
-                                fontWeight: "600",
-                                color: primaryTextColor,
-                              }}
-                            >
+                            <Text style={{ marginBottom: 6, fontSize: 14, fontWeight: "600", color: primaryTextColor }}>
                               {monthLabel}
                             </Text>
                           )}
@@ -1093,13 +995,7 @@ export default function MemoryAlbum({ navigation }: Props) {
                               activeOpacity={0.9}
                             >
                               <View style={{ position: "relative" }}>
-                                {thumb && (
-                                  <Image
-                                    source={{ uri: thumb }}
-                                    style={{ width: "100%", height: 190 }}
-                                    resizeMode="cover"
-                                  />
-                                )}
+                                <MediaCover post={p} style={{ width: "100%", height: 190 }} />
 
                                 <View
                                   style={{
@@ -1112,23 +1008,10 @@ export default function MemoryAlbum({ navigation }: Props) {
                                     backgroundColor: "rgba(15,23,42,0.92)",
                                   }}
                                 >
-                                  <Text
-                                    style={{
-                                      fontSize: 11,
-                                      color: "#e5e7eb",
-                                      marginBottom: 2,
-                                    }}
-                                  >
+                                  <Text style={{ fontSize: 11, color: "#e5e7eb", marginBottom: 2 }}>
                                     {d.getDate()} {monthNames[d.getMonth()]} {d.getFullYear()}
                                   </Text>
-                                  <Text
-                                    style={{
-                                      fontSize: 14,
-                                      fontWeight: "700",
-                                      color: "#f9fafb",
-                                    }}
-                                    numberOfLines={1}
-                                  >
+                                  <Text style={{ fontSize: 14, fontWeight: "700", color: "#f9fafb" }} numberOfLines={1}>
                                     {(p as any).caption || "Memory"}
                                   </Text>
                                 </View>
@@ -1153,14 +1036,7 @@ export default function MemoryAlbum({ navigation }: Props) {
         animationType="fade"
         onRequestClose={() => setCoverModalOpen(false)}
       >
-        <View
-          style={{
-            flex: 1,
-            backgroundColor: "rgba(0,0,0,0.6)",
-            padding: 16,
-            justifyContent: "center",
-          }}
-        >
+        <View style={{ flex: 1, backgroundColor: "rgba(0,0,0,0.6)", padding: 16, justifyContent: "center" }}>
           <View
             style={{
               borderRadius: 16,
@@ -1169,38 +1045,30 @@ export default function MemoryAlbum({ navigation }: Props) {
               maxHeight: "80%",
             }}
           >
-            <Text
-              style={{
-                fontSize: 16,
-                fontWeight: "800",
-                color: isDarkmode ? "#fff" : "#111",
-              }}
-            >
+            <Text style={{ fontSize: 16, fontWeight: "800", color: isDarkmode ? "#fff" : "#111" }}>
               Change cover
             </Text>
-            <Text
-              style={{
-                fontSize: 12,
-                marginTop: 6,
-                color: isDarkmode ? "#cbd5e1" : "#64748b",
-              }}
-            >
+            <Text style={{ fontSize: 12, marginTop: 6, color: isDarkmode ? "#cbd5e1" : "#64748b" }}>
               {coverTarget?.name || "Person"} • Tap a photo to set as cover
             </Text>
 
             <View style={{ marginTop: 12, flex: 1 }}>
               {coverPickerPosts.length === 0 ? (
-                <Text style={{ color: subTextColor }}>
-                  No photos available for cover.
-                </Text>
+                <Text style={{ color: subTextColor }}>No photos available for cover.</Text>
               ) : (
                 <FlatList
                   data={coverPickerPosts}
                   keyExtractor={(it) => it.id}
                   numColumns={3}
                   renderItem={({ item }) => {
-                    const thumb = getPostThumb(item);
-                    if (!thumb) return null;
+                    const isVideo = isVideoPost(item);
+
+                    useEffect(() => {
+                      if (isVideo) ensureThumbForPost(item);
+                      // eslint-disable-next-line react-hooks/exhaustive-deps
+                    }, [item.id]);
+
+                    const coverUri = getCoverUriForPost(item);
 
                     return (
                       <TouchableOpacity
@@ -1219,11 +1087,31 @@ export default function MemoryAlbum({ navigation }: Props) {
                         }}
                         activeOpacity={0.9}
                       >
-                        <Image
-                          source={{ uri: thumb }}
-                          style={{ width: "100%", height: "100%" }}
-                          resizeMode="cover"
-                        />
+                        {coverUri ? (
+                          <Image source={{ uri: coverUri }} style={{ width: "100%", height: "100%" }} resizeMode="cover" />
+                        ) : (
+                          <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+                            {isVideo ? <ActivityIndicator /> : <Ionicons name="image" size={22} color={subTextColor} />}
+                          </View>
+                        )}
+
+                        {isVideo && (
+                          <View
+                            style={{
+                              position: "absolute",
+                              right: 6,
+                              bottom: 6,
+                              width: 22,
+                              height: 22,
+                              borderRadius: 11,
+                              backgroundColor: "rgba(0,0,0,0.55)",
+                              alignItems: "center",
+                              justifyContent: "center",
+                            }}
+                          >
+                            <Ionicons name="play" size={12} color="#fff" />
+                          </View>
+                        )}
                       </TouchableOpacity>
                     );
                   }}
@@ -1232,12 +1120,7 @@ export default function MemoryAlbum({ navigation }: Props) {
             </View>
 
             <View style={{ flexDirection: "row", marginTop: 10 }}>
-              <Button
-                text="Close"
-                status="info"
-                style={{ flex: 1 }}
-                onPress={() => setCoverModalOpen(false)}
-              />
+              <Button text="Close" status="info" style={{ flex: 1 }} onPress={() => setCoverModalOpen(false)} />
             </View>
           </View>
         </View>
