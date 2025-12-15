@@ -1,8 +1,8 @@
 // index.js - Local AI + Face proxy server for MemoryBook
 // ✅ Updated:
-// - FIX: Stop forcing “glasses” as a must-keyword (was overriding good captions)
-// - FIX: Only enforce mustKeywords grounding when draft is empty
-// - FIX: Fallback ONLY when caption is empty (or clearly invalid), not just missing a must keyword
+// - Prevent captions starting with "Person/People/Friends"
+// - Keep no pronouns + no gender words
+// - Keep: /generatePostMeta + face proxy endpoints + ollama proxy
 
 const express = require("express");
 const cors = require("cors");
@@ -11,11 +11,7 @@ const axios = require("axios");
 const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
-const {
-  detectFacesInList,
-  registerFace,
-  recognizeFace,
-} = require("./face-service");
+const { detectFacesInList, registerFace, recognizeFace } = require("./face-service");
 
 const app = express();
 app.use(cors());
@@ -29,12 +25,10 @@ app.get("/health", (req, res) => {
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 
 // ✅ Better default text model for instruction-following
-const OLLAMA_TEXT_MODEL =
-  process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
+const OLLAMA_TEXT_MODEL = process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
 
 // Vision model
-const OLLAMA_VISION_MODEL =
-  process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
+const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
 // ✅ base64 normalizer
@@ -73,7 +67,6 @@ function countWords(str) {
     .filter(Boolean).length;
 }
 
-// ✅ Caption length: 8–20 words
 function normalizeCaptionLength(caption, captionDraft) {
   let result = String(caption || captionDraft || "").trim();
   if (!result) return "";
@@ -109,8 +102,7 @@ function extractJsonBlock(raw) {
 
   const first = cleaned.indexOf("{");
   const last = cleaned.lastIndexOf("}");
-  if (first !== -1 && last !== -1 && last > first)
-    cleaned = cleaned.slice(first, last + 1);
+  if (first !== -1 && last !== -1 && last > first) cleaned = cleaned.slice(first, last + 1);
 
   return cleaned.trim();
 }
@@ -137,22 +129,12 @@ function emojiFromMoodLabel(label) {
 }
 
 // -------------------------
-// Hashtags + cleanup helpers
+// Cleanup helpers
 // -------------------------
 const BANNED_BACKGROUND_WORDS = [
-  "matches",
-  "matchbox",
-  "box of matches",
-  "pencil",
-  "pencils",
-  "pen",
-  "pens",
-  "marker",
-  "markers",
-  "notebook",
-  "notebooks",
-  "remote control",
-  "remote",
+  "matches", "matchbox", "box of matches",
+  "pencil", "pencils", "pen", "pens", "marker", "markers",
+  "notebook", "notebooks", "remote control", "remote",
 ];
 
 function removeBannedWords(text) {
@@ -165,20 +147,9 @@ function removeBannedWords(text) {
 }
 
 const BANNED_ACTIVITY_PHRASES = [
-  "taking notes",
-  "take notes",
-  "doing homework",
-  "do homework",
-  "studying",
-  "study session",
-  "working on my notes",
-  "working on notes",
-  "working on homework",
-  "working on assignments",
-  "doing my assignment",
-  "doing assignments",
-  "preparing for exams",
-  "studying for exams",
+  "taking notes","take notes","doing homework","do homework","studying","study session",
+  "working on my notes","working on notes","working on homework","working on assignments",
+  "doing my assignment","doing assignments","preparing for exams","studying for exams",
 ];
 
 function removeBannedActivities(text, captionDraft) {
@@ -205,20 +176,8 @@ function removeBrandTextIfNotInDraft(text, captionDraft) {
 }
 
 const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog",
-  "dogs",
-  "puppy",
-  "puppies",
-  "cat",
-  "cats",
-  "kitten",
-  "kittens",
-  "bear",
-  "bears",
-  "bunny",
-  "bunnies",
-  "rabbit",
-  "rabbits",
+  "dog","dogs","puppy","puppies","cat","cats","kitten","kittens",
+  "bear","bears","bunny","bunnies","rabbit","rabbits",
 ];
 
 function fixPlushAnimalHallucination(caption, captionDraft) {
@@ -233,20 +192,14 @@ function fixPlushAnimalHallucination(caption, captionDraft) {
   return result;
 }
 
-// ✅ Replace gendered / identity-ish person labels -> neutral
+// ✅ Replace gendered / identity-ish labels -> neutral
 function neutralizePersonWords(text, captionDraft = "") {
   let s = String(text || "");
   const d = String(captionDraft || "").toLowerCase();
 
   const allowGenderWords =
-    d.includes("man") ||
-    d.includes("woman") ||
-    d.includes("boy") ||
-    d.includes("girl") ||
-    d.includes("male") ||
-    d.includes("female") ||
-    d.includes("guy") ||
-    d.includes("lady");
+    d.includes("man") || d.includes("woman") || d.includes("boy") || d.includes("girl") ||
+    d.includes("male") || d.includes("female") || d.includes("guy") || d.includes("lady");
 
   if (allowGenderWords) return s.replace(/\s+/g, " ").trim();
 
@@ -264,10 +217,27 @@ function neutralizePersonWords(text, captionDraft = "") {
   ];
 
   for (const [re, rep] of replacements) s = s.replace(re, rep);
-
   s = s.replace(/\bposes?\s+with\b/gi, "photo moment with");
 
   return s.replace(/\s+/g, " ").trim();
+}
+
+// ✅ NEW: prevent caption starting with "person/people/friends"
+function avoidPersonStart(caption, visionDesc) {
+  let c = String(caption || "").trim();
+  if (!c) return c;
+
+  // starts with: Person..., A person..., People..., Friends...
+  if (/^(a\s+)?(person|people|friends)\b/i.test(c)) {
+    const v = String(visionDesc || "").toLowerCase();
+    if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
+    if (v.includes("store") || v.includes("shopping")) return "Store run vibes, quick and fun.";
+    if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, lowkey and cozy.";
+    if (v.includes("glasses")) return "Glasses on, focus mode.";
+    return "Lowkey moment, captured.";
+  }
+
+  return c;
 }
 
 // -------------------------
@@ -346,7 +316,7 @@ function ensureCaptionMentionsDraft(caption, draftKeywords) {
 }
 
 // ---------------------------------------------------------
-// Caption: "no 1st/2nd/3rd person pronouns" helpers
+// Pronoun blockers
 // ---------------------------------------------------------
 const PRONOUN_BLOCKLIST = [
   "i","i'm","im","me","my","mine",
@@ -359,10 +329,7 @@ const PRONOUN_BLOCKLIST = [
 function removePronouns(text) {
   let s = String(text || "");
   for (const p of PRONOUN_BLOCKLIST) {
-    const re = new RegExp(
-      `\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-      "gi"
-    );
+    const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
     s = s.replace(re, "");
   }
   return s.replace(/\s+/g, " ").trim();
@@ -394,6 +361,7 @@ function buildNeutralCaptionFromVision(visionCombined) {
   if (v.includes("table")) return "Table talk vibes.";
   if (v.includes("laptop")) return "Laptop open, focus mode.";
   if (v.includes("phone")) return "Phone time, don’t disturb.";
+  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
   return "Moment captured.";
 }
 
@@ -416,8 +384,7 @@ async function callOllamaChatText(prompt, modelOverride, temperatureOverride) {
     format: "json",
     stream: false,
     options: {
-      temperature:
-        typeof temperatureOverride === "number" ? temperatureOverride : 0.25,
+      temperature: typeof temperatureOverride === "number" ? temperatureOverride : 0.25,
       top_p: 0.9,
       num_predict: 260,
     },
@@ -464,9 +431,7 @@ Style: 1–2 short sentences, simple English.
 // Vision – multi images describe
 // -------------------------
 async function callOllamaVisionDescribeMulti(imageBase64List) {
-  const safeList = Array.isArray(imageBase64List)
-    ? imageBase64List.filter(Boolean)
-    : [];
+  const safeList = Array.isArray(imageBase64List) ? imageBase64List.filter(Boolean) : [];
   if (!safeList.length) return { combined: "", perPhoto: [] };
 
   const total = safeList.length;
@@ -477,17 +442,12 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
       perPhoto.push(neutralizePersonWords(String(desc || ""), ""));
     } catch (err) {
-      console.log(
-        `Vision describe error on photo ${i + 1}:`,
-        err?.message || err
-      );
+      console.log(`Vision describe error on photo ${i + 1}:`, err?.message || err);
       perPhoto.push("");
     }
   }
 
-  const lines = perPhoto.map((d, i) =>
-    d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`
-  );
+  const lines = perPhoto.map((d, i) => (d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`));
   let combined = lines.join("\n");
   combined = combined.replace(/\bBOH\b/gi, "").trim();
 
@@ -504,8 +464,7 @@ const MOOD_LABELS = ["happy", "neutral", "tired", "sad", "angry"];
 // Vision mood detection (faces only - AI estimate)
 // -------------------------
 async function detectMoodFromVisionFirstImage(imageBase64) {
-  if (!imageBase64)
-    return { moodLabel: "neutral", confidence: 0.0, hasHumanFace: false };
+  if (!imageBase64) return { moodLabel: "neutral", confidence: 0.0, hasHumanFace: false };
 
   const prompt = `
 Return ONLY valid JSON:
@@ -549,9 +508,7 @@ Task:
 // Face recognize batch (python)
 // -------------------------
 async function recognizeFaceBatch(imageBase64List, threshold) {
-  const safeList = Array.isArray(imageBase64List)
-    ? imageBase64List.filter(Boolean)
-    : [];
+  const safeList = Array.isArray(imageBase64List) ? imageBase64List.filter(Boolean) : [];
   const MAX_IMAGES = 6;
   const images = safeList.slice(0, MAX_IMAGES);
 
@@ -578,16 +535,12 @@ async function recognizeFaceBatch(imageBase64List, threshold) {
 }
 
 // -------------------------
-// Grounding helpers (FIXED)
+// Grounding helpers
 // -------------------------
 function buildMustKeywordsFromFirstPhoto(perPhoto) {
   const first = String(perPhoto?.[0] || "").toLowerCase();
-
-  // ✅ FIX: REMOVE "glasses" because it's too common and was overriding captions
-  // Keep only strong context cues
   const pool = ["outdoor", "cafe", "restaurant", "street", "shopping", "store", "table"];
   const must = pool.filter((k) => first.includes(k));
-
   return Array.from(new Set(must)).slice(0, 1);
 }
 
@@ -595,19 +548,14 @@ function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKe
   const c = String(caption || "").toLowerCase();
   const v = String(visionDescription || "").toLowerCase();
   const d = String(captionDraft || "").toLowerCase();
-
   const draftHasText = d.trim().length > 0;
 
-  // ✅ FIX: only enforce mustKeywords when draft is empty
   if (!draftHasText && mustKeywords && mustKeywords.length) {
     const ok = mustKeywords.some((k) => c.includes(k));
     if (!ok) return true;
   }
 
-  const fantasy = [
-    "childhood","nostalgia","cherished","magical","lucky charm",
-    "river","stream","summer","winter","sun touched","fish",
-  ];
+  const fantasy = ["childhood","nostalgia","cherished","magical","lucky charm","river","stream","summer","winter","sun touched","fish"];
   for (const w of fantasy) {
     if (c.includes(w) && !v.includes(w) && !d.includes(w)) return true;
   }
@@ -619,23 +567,16 @@ function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKe
 // -------------------------
 app.post("/generatePostMeta", async (req, res) => {
   try {
-    const { captionDraft = "", imageBase64List = [], imageBase64 = null } =
-      req.body || {};
+    const { captionDraft = "", imageBase64List = [], imageBase64 = null } = req.body || {};
 
     const listFromArray = normalizeBase64List(imageBase64List);
     const single = normalizeBase64Image(imageBase64);
-    const images =
-      listFromArray.length > 0 ? listFromArray : single ? [single] : [];
+    const images = listFromArray.length > 0 ? listFromArray : single ? [single] : [];
 
     const draftText = String(captionDraft || "").trim();
     const draftHasText = draftText.length > 0;
 
-    console.log(
-      "\n🧠 /generatePostMeta received. Images count:",
-      images.length,
-      "Draft:",
-      draftText
-    );
+    console.log("\n🧠 /generatePostMeta received. Images count:", images.length, "Draft:", draftText);
 
     // 1) Vision
     let visionDescription = "";
@@ -658,9 +599,7 @@ app.post("/generatePostMeta", async (req, res) => {
     const draftKeywords = draftHasText ? extractDraftKeywords(draftText, 2) : [];
     const draftKeywordsLine =
       draftKeywords.length > 0
-        ? `- MUST keep the topic aligned with these draft keywords: ${draftKeywords.join(
-            ", "
-          )}.`
+        ? `- MUST keep the topic aligned with these draft keywords: ${draftKeywords.join(", ")}.`
         : `- If draft is empty, rely on vision description only.`;
 
     // 2) TEXT model prompt
@@ -689,6 +628,8 @@ CAPTION STYLE:
 - Do NOT use 1st/2nd/3rd person pronouns (no I / we / you / he / she / they).
 - IMPORTANT: Do NOT say "a man" / "a woman" / boy / girl / male / female / guy / lady.
   Use "friends", "people", or "person" only.
+- ✅ Do NOT start the caption with: "person", "a person", "people", "friends".
+  Start with an activity/scene/vibe (e.g., "Books out..." "Store run..." "Cafe vibes...").
 - Sound like a real social post: short, confident.
 - 8–20 words, 0–1 emoji.
 - No hashtags inside the caption.
@@ -731,15 +672,10 @@ Vision description (may be empty):
     let captionTry = String(parsed.caption || draftText || "").trim();
     const violatesDraft =
       draftHasText && draftKeywords.length
-        ? !draftKeywords.some((k) =>
-            captionTry.toLowerCase().includes(String(k).toLowerCase())
-          )
+        ? !draftKeywords.some((k) => captionTry.toLowerCase().includes(String(k).toLowerCase()))
         : false;
 
-    if (
-      captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) ||
-      violatesDraft
-    ) {
+    if (captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) || violatesDraft) {
       const retryPrompt =
         combinedPrompt +
         `
@@ -747,7 +683,7 @@ Vision description (may be empty):
 Previous answer not acceptable.
 - Follow draft topic strongly if draft exists.
 - Keep grounded; do NOT invent places/events.
-- Do NOT use man/woman/boy/girl words.
+- Do NOT start with "Person/People/Friends".
 Return ONLY JSON.
 `.trim();
 
@@ -773,26 +709,20 @@ Return ONLY JSON.
     caption = stripGenericIntros(caption);
     caption = removePronouns(caption);
 
-    // ✅ Neutralize person words LAST so "a man/a woman" never shows
     caption = neutralizePersonWords(caption, draftText);
 
-    if (draftHasText && draftKeywords.length) {
-      caption = ensureCaptionMentionsDraft(caption, draftKeywords);
-    }
+    if (draftHasText && draftKeywords.length) caption = ensureCaptionMentionsDraft(caption, draftKeywords);
 
     caption = normalizeCaptionLength(caption, draftText);
 
-    // ✅ FIX: Fallback ONLY if caption is empty (don’t override good captions)
+    // ✅ NEW: post-process to avoid "Person..." starts
+    caption = avoidPersonStart(caption, visionDescription);
+
+    // Fallback only if empty
     if (!caption) {
-      if (draftHasText) {
-        const safePrefix = draftKeywords.length
-          ? draftKeywords.join(" ")
-          : draftText.split(/\s+/).slice(0, 4).join(" ");
-        caption = `${safePrefix} vibes.`.replace(/\s+/g, " ").trim();
-      } else {
-        caption = buildNeutralCaptionFromVision(visionDescription);
-      }
+      caption = draftHasText ? `${draftText.split(/\s+/).slice(0, 4).join(" ")} vibes.` : buildNeutralCaptionFromVision(visionDescription);
       caption = neutralizePersonWords(caption, draftText);
+      caption = avoidPersonStart(caption, visionDescription);
     }
 
     // Hashtags: draft-first
@@ -825,8 +755,7 @@ Return ONLY JSON.
         let candidates = matches
           .map((m) => ({
             name: String(m.name || "").trim(),
-            distance:
-              typeof m.distance === "number" ? m.distance : Number(m.distance) || 999,
+            distance: typeof m.distance === "number" ? m.distance : Number(m.distance) || 999,
           }))
           .filter((m) => m.name && m.distance <= FACE_THRESHOLD)
           .sort((a, b) => a.distance - b.distance);
@@ -849,10 +778,7 @@ Return ONLY JSON.
         const scanImages = images.slice(0, 3);
         const batch = await recognizeFaceBatch(scanImages, FACE_THRESHOLD);
 
-        console.log(
-          "[FACE] Batch FULL:\n",
-          util.inspect(batch, { depth: null, colors: true })
-        );
+        console.log("[FACE] Batch FULL:\n", util.inspect(batch, { depth: null, colors: true }));
 
         hasRealHumanFace = (batch?.results || []).some((r) => {
           const faces = Array.isArray(r?.faces) ? r.faces : [];
@@ -873,7 +799,7 @@ Return ONLY JSON.
       }
     }
 
-    // ✅ Mood detection: your current rule
+    // ✅ Mood detection: your rule
     let moodLabel = "happy";
     let moodSource = "rule";
     let emoji = "😊";
@@ -898,12 +824,7 @@ Return ONLY JSON.
           moodSource = "face";
           emoji = emojiFromMoodLabel(moodLabel);
 
-          console.log(
-            "[MOOD] python face + vision face:",
-            visionMood,
-            "=>",
-            { moodLabel, moodSource, emoji }
-          );
+          console.log("[MOOD] python face + vision face:", visionMood, "=>", { moodLabel, moodSource, emoji });
         } else {
           moodLabel = "neutral";
           moodSource = "face";
@@ -958,9 +879,7 @@ app.post("/faces/register", async (req, res) => {
   const img = normalizeBase64Image(imageBase64);
 
   if (!name || !img) {
-    return res
-      .status(400)
-      .json({ error: "name and imageBase64 are required." });
+    return res.status(400).json({ error: "name and imageBase64 are required." });
   }
 
   try {
@@ -990,10 +909,7 @@ app.post("/faces/recognize", async (req, res) => {
 
   try {
     const pyResp = await recognizeFace(img, threshold);
-    console.log(
-      "✅ /faces/recognize -> Python:",
-      util.inspect(pyResp, { depth: null, colors: true })
-    );
+    console.log("✅ /faces/recognize -> Python:", util.inspect(pyResp, { depth: null, colors: true }));
 
     res.json({
       ok: pyResp.ok !== false,
@@ -1011,9 +927,7 @@ app.post("/faces/recognize", async (req, res) => {
 app.post("/faces/recognize_batch", async (req, res) => {
   const { imageBase64List, threshold } = req.body || {};
   if (!Array.isArray(imageBase64List) || imageBase64List.length === 0) {
-    return res
-      .status(400)
-      .json({ error: "imageBase64List must be a non-empty array." });
+    return res.status(400).json({ error: "imageBase64List must be a non-empty array." });
   }
 
   try {
@@ -1032,8 +946,7 @@ app.post("/faces/recognize_batch", async (req, res) => {
 app.post("/ollama/generate", async (req, res) => {
   try {
     const { model, prompt, stream = false, options = {} } = req.body || {};
-    if (!model || !prompt)
-      return res.status(400).json({ error: "model and prompt are required." });
+    if (!model || !prompt) return res.status(400).json({ error: "model and prompt are required." });
 
     const body = {
       model,
@@ -1062,7 +975,7 @@ app.post("/ollama/generate", async (req, res) => {
 // Start server
 // -------------------------
 const PORT = process.env.PORT || 3000;
-const HOST = process.env.HOST || "0.0.0.0"; // ✅ important for phone access
+const HOST = process.env.HOST || "0.0.0.0";
 
 app.listen(PORT, HOST, () => {
   console.log(`Local AI server running at http://${HOST}:${PORT}`);

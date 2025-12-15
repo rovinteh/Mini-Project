@@ -796,14 +796,18 @@ export default function MemoryUpload({ navigation, route }: Props) {
       return;
     }
 
-    const hashtagList =
-      hashtagsText
-        .split(/[,\s]+/)
-        .map((t: string) => t.trim())
-        .filter((t: string) => t.length > 0)
-        .map((t: string) => (t.startsWith("#") ? t : `#${t}`)) || [];
-    const hashtagNorm =
-      hashtagList.map((t) => t.replace(/^#/, "").toLowerCase()).filter(Boolean) || [];
+    const hashtagList: string[] =
+  (hashtagsText || "")
+    .split(/[,\s]+/)
+    .map((t: string) => t.trim())
+    .filter((t: string) => t.length > 0)
+    .map((t: string) => (t.startsWith("#") ? t : `#${t}`));
+
+const hashtagNorm: string[] =
+  hashtagList
+    .map((t: string) => t.replace(/^#/, "").toLowerCase())
+    .filter(Boolean);
+
 
     const friendTagList =
       friendTagsText

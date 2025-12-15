@@ -25,6 +25,7 @@
     "expo-audio": "~1.1.0",
     "expo-av": "~16.0.8",
     "expo-barcode-scanner": "^13.0.1",
+    "expo-blur": "~15.0.8",
     "expo-calendar": "~15.0.8",
     "expo-camera": "~17.0.10",
     "expo-constants": "~18.0.11",

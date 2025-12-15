@@ -1,4 +1,4 @@
-// app/modules/money-management/ExpensesChart.tsx
+﻿// src/screens/FinTrackPro/ExpensesChart.tsx
 import React, { useEffect, useMemo, useState } from "react";
 import {
   View,
@@ -29,13 +29,6 @@ import { NativeStackScreenProps } from "@react-navigation/native-stack";
 import { MainStackParamList } from "../../types/navigation";
 import * as Print from "expo-print";
 import { shareAsync } from "expo-sharing";
-
-// ✅ Currency (saved from MoneyManagementModule)
-import {
-  getCurrencyCode,
-  codeToSymbol,
-  codeToLabel,
-} from "../../utils/currencyStore";
 
 const MONTH_LABELS = [
   "January",
@@ -69,9 +62,10 @@ const MONTH_SHORT = [
 
 // ✅ Your hotspot PC IP (keep it correct)
 const API_HOST =
-  Platform.OS === "web"
-    ? "http://localhost:11434"
-    : "http://192.168.68.118:11434";
+  (Platform.OS === "web"
+    ? (process as any)?.env?.EXPO_PUBLIC_AI_SERVER
+    : (process as any)?.env?.EXPO_PUBLIC_AI_SERVER) ||
+  "http://192.168.68.129:3000";
 
 const OLLAMA_MODEL = "gemma3:1b";
 
@@ -93,14 +87,14 @@ type Anomaly = {
   note?: string;
 };
 
-export default function ({
-  navigation,
-}: NativeStackScreenProps<MainStackParamList, "ExpensesChart">) {
+type Props = NativeStackScreenProps<MainStackParamList, "ExpensesChart">;
+
+export default function ExpensesChart({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const auth = getAuth();
   const db = getFirestore();
 
-  const [chartData, setChartData] = useState<number[]>(new Array(12).fill(0));
+  const [chartData, setChartData] = useState<number[]>(Array(12).fill(0));
   const [loading, setLoading] = useState(true);
 
   const [transactions, setTransactions] = useState<Tx[]>([]);
@@ -112,19 +106,6 @@ export default function ({
   const [aiAnomalyText, setAiAnomalyText] = useState<string>("");
   const [aiAnomalyLoading, setAiAnomalyLoading] = useState(false);
 
-  // ✅ Currency state
-  const [currencySymbol, setCurrencySymbol] = useState<string>("RM");
-  const [currencyLabel, setCurrencyLabel] = useState<string>("RM (MYR)");
-
-  // ✅ Load currency on mount
-  useEffect(() => {
-    (async () => {
-      const code = await getCurrencyCode();
-      setCurrencySymbol(codeToSymbol(code));
-      setCurrencyLabel(codeToLabel(code));
-    })();
-  }, []);
-
   useEffect(() => {
     if (!auth.currentUser) return;
 
@@ -134,12 +115,12 @@ export default function ({
     );
 
     const unsub = onSnapshot(q, (snapshot) => {
-      const monthlyTotals = new Array(12).fill(0);
+      const monthlyTotals = Array(12).fill(0) as number[];
       const txs: Tx[] = [];
 
       snapshot.forEach((docSnap) => {
         const d: any = docSnap.data();
-        if (!d.transactionDate || !d.amount || !d.type) return;
+        if (d?.transactionDate == null || d?.amount == null || !d?.type) return;
 
         const tx: Tx = {
           amount: Number(d.amount) || 0,
@@ -162,7 +143,7 @@ export default function ({
     });
 
     return () => unsub();
-  }, []);
+  }, [auth.currentUser, db]);
 
   // ---------- PDF ----------
   const buildHtml = () => {
@@ -170,9 +151,9 @@ export default function ({
       const value = chartData[i] ?? 0;
       return `<tr>
         <td style="padding:8px;border:1px solid #ccc;">${month}</td>
-        <td style="padding:8px;border:1px solid #ccc; text-align:right;">${currencySymbol} ${value.toFixed(
-        2
-      )}</td>
+        <td style="padding:8px;border:1px solid #ccc; text-align:right;">RM ${value.toFixed(
+          2
+        )}</td>
       </tr>`;
     }).join("");
 
@@ -182,12 +163,11 @@ export default function ({
       <body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',sans-serif;padding:16px;">
         <h1 style="text-align:center;">FinTrack Pro – Monthly Expenses</h1>
         <p style="text-align:center;">Summary of total expenses for each month.</p>
-        <p style="text-align:center;"><b>Currency:</b> ${currencyLabel}</p>
         <table style="width:100%; border-collapse:collapse; margin-top:16px;">
           <thead>
             <tr>
               <th style="padding:8px;border:1px solid #ccc;text-align:left;">Month</th>
-              <th style="padding:8px;border:1px solid #ccc;text-align:right;">Total Expense (${currencySymbol})</th>
+              <th style="padding:8px;border:1px solid #ccc;text-align:right;">Total Expense (RM)</th>
             </tr>
           </thead>
           <tbody>${rows}</tbody>
@@ -227,7 +207,7 @@ export default function ({
           t.type === "expense" &&
           isSameMonth(t.transactionDate, currentYear, currentMonth)
       ),
-    [transactions]
+    [transactions, currentYear, currentMonth]
   );
 
   const expensesPrevMonth = useMemo(
@@ -237,7 +217,7 @@ export default function ({
           t.type === "expense" &&
           isSameMonth(t.transactionDate, prevYear, prevMonth)
       ),
-    [transactions]
+    [transactions, prevYear, prevMonth]
   );
 
   const sum = (arr: Tx[]) =>
@@ -245,9 +225,24 @@ export default function ({
 
   const thisTotal = useMemo(() => sum(expensesThisMonth), [expensesThisMonth]);
   const prevTotal = useMemo(() => sum(expensesPrevMonth), [expensesPrevMonth]);
+
   const delta = thisTotal - prevTotal;
-  const deltaPct =
-    prevTotal <= 0 ? null : Math.round((delta / prevTotal) * 100);
+  const deltaPct = prevTotal <= 0 ? null : Math.round((delta / prevTotal) * 100);
+
+  // ✅ Peak month safe
+  const peakIndex = useMemo(() => {
+    if (!chartData?.length) return 0;
+    let bestIdx = 0;
+    let bestVal = Number(chartData[0] ?? 0);
+    for (let i = 1; i < chartData.length; i++) {
+      const v = Number(chartData[i] ?? 0);
+      if (v > bestVal) {
+        bestVal = v;
+        bestIdx = i;
+      }
+    }
+    return bestIdx;
+  }, [chartData]);
 
   // ---------- Grouping ----------
   const groupByCategory = (arr: Tx[]) => {
@@ -296,7 +291,6 @@ export default function ({
         totalExpensePrevMonth: Number(prevTotal.toFixed(2)),
         delta: Number(delta.toFixed(2)),
         deltaPct: deltaPct,
-        currency: { label: currencyLabel, symbol: currencySymbol },
         topCategoriesThisMonth: topThis.map((x) => ({
           category: x.category,
           total: Number(x.total.toFixed(2)),
@@ -307,23 +301,18 @@ export default function ({
 
       const prompt = `
 You are a personal finance assistant.
-
-Currency setting: ${currencyLabel}. The currency symbol is "${currencySymbol}".
-
 Write a short "AI Insight Summary" in 3-6 bullet points.
 Rules:
 - Use simple student-friendly English.
 - Mention overall trend (up/down), top categories, and one practical suggestion.
 - Do NOT invent numbers. Only use numbers from the JSON.
-- IMPORTANT: Always display money using "${currencySymbol}" (example: ${currencySymbol} 12.50).
-- IMPORTANT: Do NOT use "$" unless the currency symbol is "$".
 - Bullet points only.
 
 DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/api/generate", {
+      const res = await fetch(API_HOST + "/ollama/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
@@ -360,7 +349,6 @@ ${JSON.stringify(summaryJson, null, 2)}
     });
 
     const found: Anomaly[] = [];
-
     expensesThisMonth.forEach((t, idx) => {
       const cat = t.category || "Uncategorized";
       const baselineAvg = avgByCat[cat] || 0;
@@ -379,7 +367,6 @@ ${JSON.stringify(summaryJson, null, 2)}
     });
 
     found.sort((a, b) => b.ratio - a.ratio);
-
     setAnomalies(found);
     return found;
   };
@@ -392,20 +379,17 @@ ${JSON.stringify(summaryJson, null, 2)}
       const found = detectAnomalies();
 
       if (found.length === 0) {
-        setAiAnomalyText(
-          "No unusual spending spikes detected for this month ✅"
-        );
+        setAiAnomalyText("No unusual spending spikes detected for this month ✅");
         return;
       }
 
       const payload = {
         period: `${MONTH_LABELS[currentMonth]} ${currentYear}`,
-        currency: { label: currencyLabel, symbol: currencySymbol },
         anomalies: found.slice(0, 5).map((a) => ({
           date: new Date(a.dateMs).toLocaleDateString(),
           category: a.category,
-          amount: a.amount,
-          baselineAvg: a.baselineAvg,
+          amountRM: a.amount,
+          baselineAvgRM: a.baselineAvg,
           ratio: a.ratio,
           note: a.note,
         })),
@@ -413,24 +397,18 @@ ${JSON.stringify(summaryJson, null, 2)}
 
       const prompt = `
 You are a finance assistant.
-
-Currency setting: ${currencyLabel}. The currency symbol is "${currencySymbol}".
-
 Explain the anomalies below.
 For each anomaly:
 - say why it's unusual (compare to baseline average)
 - suggest 1-2 possible reasons
 - give 1 suggestion to control it
-Rules:
-- IMPORTANT: Always display money using "${currencySymbol}" (example: ${currencySymbol} 12.50).
-- IMPORTANT: Do NOT use "$" unless the currency symbol is "$".
-- Keep it short. Use bullet points.
+Keep it short. Use bullet points.
 
 ANOMALIES (JSON):
 ${JSON.stringify(payload, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/api/generate", {
+      const res = await fetch(API_HOST + "/ollama/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
@@ -440,9 +418,7 @@ ${JSON.stringify(payload, null, 2)}
       const data = await res.json();
       setAiAnomalyText(data.response || "");
     } catch (e: any) {
-      setAiAnomalyText(
-        "Error explaining anomalies: " + (e?.message || String(e))
-      );
+      setAiAnomalyText("Error explaining anomalies: " + (e?.message || String(e)));
     } finally {
       setAiAnomalyLoading(false);
     }
@@ -463,9 +439,7 @@ ${JSON.stringify(payload, null, 2)}
           }
           leftAction={() => navigation.goBack()}
         />
-        <View
-          style={{ flex: 1, justifyContent: "center", alignItems: "center" }}
-        >
+        <View style={{ flex: 1, justifyContent: "center", alignItems: "center" }}>
           <ActivityIndicator size="large" />
         </View>
       </Layout>
@@ -480,8 +454,14 @@ ${JSON.stringify(payload, null, 2)}
   const textColor = isDarkmode ? themeColor.white100 : themeColor.dark;
   const subText = isDarkmode ? "rgba(255,255,255,0.65)" : "rgba(0,0,0,0.6)";
 
-  const fmtMoney = (n: number) =>
-    `${currencySymbol} ${Number(n || 0).toFixed(2)}`;
+  // ✅ strings for StatCard (no TS errors)
+  const thisMonthValue = `RM ${thisTotal.toFixed(2)}`;
+  const lastMonthValue = `RM ${prevTotal.toFixed(2)}`;
+  const changeValue = `${delta >= 0 ? "+" : ""}RM ${delta.toFixed(2)}`;
+  const changeSub =
+    deltaPct === null ? "No last-month baseline" : `${deltaPct >= 0 ? "+" : ""}${deltaPct}%`;
+  const peakValue = `RM ${(Number(chartData[peakIndex] ?? 0)).toFixed(2)}`;
+  const peakSub = `${MONTH_SHORT[peakIndex]}`;
 
   const StatCard = ({
     title,
@@ -514,21 +494,18 @@ ${JSON.stringify(payload, null, 2)}
       <Text style={{ color: subText, fontSize: 12 }}>
         {icon} {title}
       </Text>
-      <Text
-        fontWeight="bold"
-        style={{ color: color, fontSize: 18, marginTop: 6 }}
-      >
+
+      <Text fontWeight="bold" style={{ color: color, fontSize: 18, marginTop: 6 }}>
         {value}
       </Text>
+
       {sub ? (
-        <Text style={{ color: subText, fontSize: 12, marginTop: 4 }}>
-          {sub}
-        </Text>
+        <Text style={{ color: subText, fontSize: 12, marginTop: 4 }}>{sub}</Text>
       ) : null}
     </View>
   );
 
-  const Card = ({ title, children }: { title: string; children: any }) => (
+  const Card = ({ title, children }: { title: string; children: React.ReactNode }) => (
     <View
       style={{
         width: screenW - 32,
@@ -565,15 +542,13 @@ ${JSON.stringify(payload, null, 2)}
           }}
         />
       </View>
+
       {children}
     </View>
   );
 
   // ✅ scrollable chart width (prevents label overlap)
   const chartWidth = Math.max(screenW - 16, 520);
-
-  const peakValue = Math.max(...chartData);
-  const peakMonthIndex = chartData.indexOf(peakValue);
 
   return (
     <Layout>
@@ -605,56 +580,41 @@ ${JSON.stringify(payload, null, 2)}
           backgroundColor: softBg,
         }}
       >
-        <Text fontWeight="bold" style={{ marginBottom: 6, color: textColor }}>
+        <Text fontWeight="bold" style={{ marginBottom: 10, color: textColor }}>
           {MONTH_LABELS[currentMonth]} {currentYear} Overview
-        </Text>
-        <Text style={{ marginBottom: 10, color: subText, fontSize: 12 }}>
-          Currency: {currencyLabel}
         </Text>
 
         {/* ✅ Stats row */}
-        <View
-          style={{ flexDirection: "row", width: screenW - 32, marginBottom: 6 }}
-        >
+        <View style={{ flexDirection: "row", width: screenW - 32, marginBottom: 6 }}>
           <StatCard
             title="This Month"
             icon="📅"
-            value={fmtMoney(thisTotal)}
+            value={thisMonthValue}
             sub={`${expensesThisMonth.length} tx`}
             color={accentBlue}
           />
           <StatCard
             title="Last Month"
             icon="🕘"
-            value={fmtMoney(prevTotal)}
+            value={lastMonthValue}
             sub={`${expensesPrevMonth.length} tx`}
             color={isDarkmode ? "#A78BFA" : "#7C3AED"}
           />
         </View>
 
-        <View
-          style={{
-            flexDirection: "row",
-            width: screenW - 32,
-            marginBottom: 10,
-          }}
-        >
+        <View style={{ flexDirection: "row", width: screenW - 32, marginBottom: 10 }}>
           <StatCard
             title="Change"
             icon={delta >= 0 ? "📈" : "📉"}
-            value={`${delta >= 0 ? "+" : ""}${fmtMoney(Math.abs(delta))}`}
-            sub={
-              deltaPct === null
-                ? "No last-month baseline"
-                : `${deltaPct >= 0 ? "+" : ""}${deltaPct}%`
-            }
+            value={changeValue}
+            sub={changeSub}
             color={delta >= 0 ? "#EF4444" : "#22C55E"}
           />
           <StatCard
             title="Peak Month"
             icon="🏆"
-            value={fmtMoney(peakValue)}
-            sub={`${MONTH_SHORT[Math.max(0, peakMonthIndex)]}`}
+            value={peakValue}
+            sub={peakSub}
             color={isDarkmode ? "#FBBF24" : "#B45309"}
           />
         </View>
@@ -675,10 +635,7 @@ ${JSON.stringify(payload, null, 2)}
           }}
         >
           <View style={{ paddingHorizontal: 14, marginBottom: 8 }}>
-            <Text
-              fontWeight="bold"
-              style={{ color: textColor, marginBottom: 4 }}
-            >
+            <Text fontWeight="bold" style={{ color: textColor, marginBottom: 4 }}>
               Monthly Total Expense
             </Text>
             <Text style={{ color: subText, fontSize: 12 }}>
@@ -694,7 +651,7 @@ ${JSON.stringify(payload, null, 2)}
               }}
               width={chartWidth}
               height={260}
-              yAxisLabel={`${currencySymbol} `}
+              yAxisLabel="RM "
               fromZero
               bezier
               withVerticalLines={false}
@@ -735,11 +692,10 @@ ${JSON.stringify(payload, null, 2)}
             disabled={aiSummaryLoading}
             style={{ width: "100%" }}
           />
+
           <View style={{ marginTop: 10 }}>
             <Text style={{ color: textColor, opacity: 0.9 }}>
-              {aiSummary
-                ? aiSummary
-                : "Tap “Generate Summary” to get insights for this month."}
+              {aiSummary ? aiSummary : "Tap “Generate Summary” to get insights for this month."}
             </Text>
           </View>
         </Card>
@@ -747,9 +703,7 @@ ${JSON.stringify(payload, null, 2)}
         {/* ✅ Anomaly Detection */}
         <Card title="Anomaly Detection (Spending Spikes)">
           <Button
-            text={
-              aiAnomalyLoading ? "Analyzing..." : "Detect & Explain Anomalies"
-            }
+            text={aiAnomalyLoading ? "Analyzing..." : "Detect & Explain Anomalies"}
             onPress={explainAnomaliesWithAi}
             disabled={aiAnomalyLoading}
             style={{ width: "100%" }}
@@ -759,8 +713,8 @@ ${JSON.stringify(payload, null, 2)}
             {anomalies.length > 0 ? (
               anomalies.slice(0, 3).map((a) => (
                 <Text key={a.id} style={{ color: textColor, marginBottom: 4 }}>
-                  ⚠️ {new Date(a.dateMs).toLocaleDateString()} — {a.category}:{" "}
-                  {fmtMoney(a.amount)} (avg {fmtMoney(a.baselineAvg)})
+                  ⚠ {new Date(a.dateMs).toLocaleDateString()} — {a.category}: RM{" "}
+                  {a.amount.toFixed(2)} (avg RM {a.baselineAvg.toFixed(2)})
                 </Text>
               ))
             ) : (
@@ -772,9 +726,7 @@ ${JSON.stringify(payload, null, 2)}
 
           {aiAnomalyText ? (
             <View style={{ marginTop: 10 }}>
-              <Text style={{ color: textColor, opacity: 0.9 }}>
-                {aiAnomalyText}
-              </Text>
+              <Text style={{ color: textColor, opacity: 0.9 }}>{aiAnomalyText}</Text>
             </View>
           ) : null}
         </Card>
