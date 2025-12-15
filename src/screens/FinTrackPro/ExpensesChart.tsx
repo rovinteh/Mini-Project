@@ -63,7 +63,7 @@ const MONTH_SHORT = [
 const API_HOST =
   Platform.OS === "web"
     ? "http://localhost:11434"
-    : "http://192.168.68.118:11434";
+    : "http://192.168.68.129:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
 type Tx = {
