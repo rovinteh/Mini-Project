@@ -54,6 +54,8 @@ type MealEntry = {
   // calories?: number | null; // (kept removed from UI)
   isWater?: boolean;
   volumeMl?: number | null;
+  portionLabel?: string | null;
+  portionMultiplier?: number | null;
 };
 
 // --- Theme (match FitnessMenu / WeeklySummary) ---
@@ -103,6 +105,13 @@ const QUICK_TAGS = [
   "Soup",
 ];
 
+// ✅ Portion size estimate (simple, no calories needed)
+const PORTIONS = [
+  { label: "Small", key: "small", mult: 0.75, icon: "remove" },
+  { label: "Normal", key: "normal", mult: 1, icon: "swap-horizontal" },
+  { label: "Large", key: "large", mult: 1.5, icon: "add" },
+] as const;
+
 function startOfDay(d: Date) {
   return new Date(d.getFullYear(), d.getMonth(), d.getDate(), 0, 0, 0, 0);
 }
@@ -120,6 +129,8 @@ export default function LogMealScreen({ navigation }: Props) {
   const [image, setImage] = useState<string | null>(null);
   const [mealType, setMealType] = useState<string>("breakfast");
   const [notes, setNotes] = useState("");
+  const [portionKey, setPortionKey] =
+    useState<(typeof PORTIONS)[number]["key"]>("normal");
   const [saving, setSaving] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -183,6 +194,11 @@ export default function LogMealScreen({ navigation }: Props) {
             // calories removed from UI
             isWater: !!data.isWater,
             volumeMl: typeof data.volumeMl === "number" ? data.volumeMl : null,
+            portionLabel: data.portionLabel ?? null,
+            portionMultiplier:
+              typeof data.portionMultiplier === "number"
+                ? data.portionMultiplier
+                : null,
           });
         });
         setTodayMeals(list);
@@ -247,12 +263,15 @@ export default function LogMealScreen({ navigation }: Props) {
       }
 
       const now = new Date();
+      const portion = PORTIONS.find((p) => p.key === portionKey) || PORTIONS[1];
       await addDoc(collection(db, "MealEntry"), {
         userId: user.uid,
         mealType,
         category: "home-cooked", // keep existing behavior
         notes: notes.trim(),
         photoURL,
+        portionLabel: portion.label,
+        portionMultiplier: portion.mult,
         isWater: false,
         volumeMl: null,
         mealTimeClient: Timestamp.fromDate(now),
@@ -263,6 +282,7 @@ export default function LogMealScreen({ navigation }: Props) {
 
       setImage(null);
       setNotes("");
+      setPortionKey("normal");
     } catch (err: any) {
       Alert.alert("Error", err.message);
     } finally {
@@ -382,7 +402,30 @@ export default function LogMealScreen({ navigation }: Props) {
                   {item.mealType}
                 </Text>
 
-                {/* ✅ Change #1: calories UI removed */}
+                {!!item.portionLabel && (
+                  <View
+                    style={[
+                      styles.portionPill,
+                      {
+                        borderColor: isDarkmode
+                          ? "rgba(255,255,255,0.08)"
+                          : "rgba(0,0,0,0.08)",
+                        backgroundColor: isDarkmode
+                          ? "rgba(255,255,255,0.03)"
+                          : "rgba(0,0,0,0.03)",
+                      },
+                    ]}
+                  >
+                    <Ionicons name="pizza" size={12} color={dimText2} />
+                    <Text
+                      style={{ marginLeft: 6, fontSize: 11, color: dimText }}
+                    >
+                      {item.portionLabel}
+                    </Text>
+                  </View>
+                )}
+
+                {/* calories UI removed */}
               </View>
 
               <Text
@@ -620,6 +663,56 @@ export default function LogMealScreen({ navigation }: Props) {
                     onChangeText={setNotes}
                     multiline={false}
                   />
+
+                  {/* ✅ Portion estimate */}
+                  <View>
+                    <Text
+                      style={{ fontSize: 12, color: dimText, marginBottom: 8 }}
+                    >
+                      Portion size (estimate)
+                    </Text>
+                    <View style={styles.portionRow}>
+                      {PORTIONS.map((p) => {
+                        const active = portionKey === p.key;
+                        return (
+                          <TouchableOpacity
+                            key={p.key}
+                            onPress={() => setPortionKey(p.key)}
+                            activeOpacity={0.9}
+                            style={[
+                              styles.portionChip,
+                              {
+                                borderColor: active ? activeColor : borderColor,
+                                backgroundColor: active
+                                  ? isDarkmode
+                                    ? "rgba(255,255,255,0.04)"
+                                    : "rgba(0,0,0,0.03)"
+                                  : isDarkmode
+                                  ? "rgba(255,255,255,0.02)"
+                                  : "rgba(0,0,0,0.02)",
+                              },
+                            ]}
+                          >
+                            <Ionicons
+                              name={p.icon as any}
+                              size={16}
+                              color={active ? activeColor : dimText2}
+                            />
+                            <Text
+                              style={{
+                                marginLeft: 8,
+                                fontSize: 12,
+                                fontWeight: "900",
+                                color: active ? activeColor : dimText,
+                              }}
+                            >
+                              {p.label}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </View>
                 </View>
               </View>
 
@@ -701,8 +794,6 @@ export default function LogMealScreen({ navigation }: Props) {
                     </Text>
                   </View>
                 </View>
-
-                {/* ✅ Change #1: total calories badge removed */}
               </View>
 
               {loadingMeals ? (
@@ -842,10 +933,32 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
 
+  portionRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 10,
+  } as any,
+  portionChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+
+  portionPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+
   // Timeline
   timelineRow: { flexDirection: "row", minHeight: 84 },
   timelineLeft: { width: 54, alignItems: "center", marginRight: 10 },
-  // ✅ Change #2: smaller font to avoid wrapping
   timeText: {
     fontSize: 10,
     fontWeight: "900",
