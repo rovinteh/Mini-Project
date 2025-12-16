@@ -503,50 +503,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               )}
             </Card>
 
-            <Card title="Quick Actions">
-              <View style={{ flexDirection: "row" }}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[styles.actionBtn, { marginRight: 10 }]}
-                  onPress={() => navigation.navigate("TransactionAdd")}
-                >
-                  <Ionicons name="add-circle-outline" size={18} color="#fff" />
-                  <Text style={styles.actionText}>Add</Text>
-                </TouchableOpacity>
 
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[styles.actionBtn, { backgroundColor: "#7C3AED" }]}
-                  onPress={() => navigation.navigate("SpendingInsights")}
-                >
-                  <Ionicons name="sparkles" size={18} color="#fff" />
-                  <Text style={styles.actionText}>AI Insights</Text>
-                </TouchableOpacity>
-              </View>
-
-              <View style={{ flexDirection: "row", marginTop: 10 }}>
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[
-                    styles.actionBtn,
-                    { marginRight: 10, backgroundColor: "#22C55E" },
-                  ]}
-                  onPress={() => navigation.navigate("BudgetHub")}
-                >
-                  <Ionicons name="wallet-outline" size={18} color="#fff" />
-                  <Text style={styles.actionText}>Budget</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  activeOpacity={0.85}
-                  style={[styles.actionBtn, { backgroundColor: "#0EA5E9" }]}
-                  onPress={() => navigation.navigate("ExpensesChart")}
-                >
-                  <Ionicons name="stats-chart-outline" size={18} color="#fff" />
-                  <Text style={styles.actionText}>Chart</Text>
-                </TouchableOpacity>
-              </View>
-            </Card>
           </>
         )}
       </ScrollView>
@@ -854,7 +811,7 @@ const makeStyles = (isDark: boolean) =>
 
     aiPill: {
       position: "absolute",
-      right: 16,
+      right: 53,
       top: -12,
       flexDirection: "row",
       alignItems: "center",

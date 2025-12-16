@@ -62,10 +62,9 @@ const MONTH_SHORT = [
 
 // ✅ Your hotspot PC IP (keep it correct)
 const API_HOST =
-  (Platform.OS === "web"
-    ? (process as any)?.env?.EXPO_PUBLIC_AI_SERVER
-    : (process as any)?.env?.EXPO_PUBLIC_AI_SERVER) ||
-  "http://192.168.1.103:3000";
+  Platform.OS === "web"
+    ? "http://localhost:11434"
+    : "http://10.10.19.246:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
 
