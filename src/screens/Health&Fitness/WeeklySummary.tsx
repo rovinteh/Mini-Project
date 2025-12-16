@@ -48,6 +48,16 @@ type DayStat = {
   waterMl: number;
 };
 
+type LoggedMeal = {
+  id: string;
+  mealType: string;
+  notes: string;
+  photoURL?: string | null;
+  mealTimeClient?: any;
+  portionLabel?: string | null;
+  portionMultiplier?: number | null;
+};
+
 const screenWidth = Dimensions.get("window").width;
 
 // --- Theme ---
@@ -124,6 +134,15 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
+  // ✅ Details view: let user switch between charts and "what meals were logged"
+  const [viewMode, setViewMode] = useState<"charts" | "meals">("charts");
+  const [selectedDay, setSelectedDay] = useState<string>(
+    last7Days()[last7Days().length - 1].fullDate
+  );
+  const [mealsByDay, setMealsByDay] = useState<Record<string, LoggedMeal[]>>(
+    {}
+  );
+
   const unsubRef = useRef<null | (() => void)>(null);
 
   const loadData = useCallback(() => {
@@ -143,6 +162,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
     let workoutAgg: Record<string, { workouts: number; minutes: number }> = {};
     let mealAgg: Record<string, { meals: number; waterMl: number }> = {};
+    let mealDetails: Record<string, LoggedMeal[]> = {};
 
     const recompute = () => {
       const merged = base.map((d) => ({
@@ -150,7 +170,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
         workouts: workoutAgg[d.fullDate]?.workouts || 0,
         workoutMinutes: workoutAgg[d.fullDate]?.minutes || 0,
         meals: mealAgg[d.fullDate]?.meals || 0,
-        waterMl: mealAgg[d.fullDate]?.waterMl || 0, // ✅ water comes from MealEntry like your menu
+        waterMl: mealAgg[d.fullDate]?.waterMl || 0,
       }));
 
       setStats(merged);
@@ -158,7 +178,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       setRefreshing(false);
     };
 
-    // --- Workouts (same as menu) ---
+    // --- Workouts ---
     const workoutQ = query(
       collection(db, "WorkoutSession"),
       where("userId", "==", user.uid),
@@ -189,7 +209,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
       recompute();
     });
 
-    // --- Meals + Water (✅ from MealEntry, matches your Quick Water button) ---
+    // --- Meals + Water (from MealEntry) ---
     const mealQ = query(
       collection(db, "MealEntry"),
       where("userId", "==", user.uid),
@@ -199,6 +219,7 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
 
     const unsubMeals = onSnapshot(mealQ, (mSnap) => {
       mealAgg = {};
+      mealDetails = {};
       mSnap.forEach((doc) => {
         const data: any = doc.data();
 
@@ -218,13 +239,38 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
           data.type === "water";
 
         if (isWater) {
-          // ✅ FitnessMenu writes "volumeMl"
           const ml = Number(data.volumeMl ?? data.waterMl ?? data.ml ?? 0) || 0;
           mealAgg[dateStr].waterMl += ml;
         } else {
           mealAgg[dateStr].meals += 1;
+
+          // ✅ Store detail list for optional drill-down
+          if (!mealDetails[dateStr]) mealDetails[dateStr] = [];
+          mealDetails[dateStr].push({
+            id: doc.id,
+            mealType: String(data.mealType || "meal"),
+            notes: String(data.notes || ""),
+            photoURL: data.photoURL ?? null,
+            mealTimeClient: data.mealTimeClient ?? data.createdAtClient ?? null,
+            portionLabel: data.portionLabel ?? null,
+            portionMultiplier:
+              typeof data.portionMultiplier === "number"
+                ? data.portionMultiplier
+                : null,
+          });
         }
       });
+
+      // Sort each day's meals by time (newest first)
+      Object.keys(mealDetails).forEach((k) => {
+        mealDetails[k] = (mealDetails[k] || []).sort((a, b) => {
+          const ta = a.mealTimeClient?.toDate?.()?.getTime?.() ?? 0;
+          const tb = b.mealTimeClient?.toDate?.()?.getTime?.() ?? 0;
+          return tb - ta;
+        });
+      });
+
+      setMealsByDay(mealDetails);
       recompute();
     });
 
@@ -508,6 +554,74 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
     </View>
   );
 
+  const formatTime = (ts?: any) => {
+    if (!ts?.toDate) return "";
+    return ts
+      .toDate()
+      .toLocaleTimeString("en-MY", { hour: "2-digit", minute: "2-digit" });
+  };
+
+  const MealDetailCard = ({ item }: { item: LoggedMeal }) => {
+    const type = (item.mealType || "meal").toString();
+    const title = type.charAt(0).toUpperCase() + type.slice(1);
+
+    return (
+      <View
+        style={[styles.mealRowCard, { backgroundColor: cardBg, borderColor }]}
+      >
+        <View style={{ flex: 1 }}>
+          <View style={{ flexDirection: "row", alignItems: "center" }}>
+            <Text style={{ fontWeight: "900" }}>{title}</Text>
+            {!!item.portionLabel && (
+              <View
+                style={[
+                  styles.mealPill,
+                  {
+                    borderColor: isDarkmode
+                      ? "rgba(255,255,255,0.08)"
+                      : "rgba(0,0,0,0.08)",
+                    backgroundColor: isDarkmode
+                      ? "rgba(255,255,255,0.03)"
+                      : "rgba(0,0,0,0.03)",
+                  },
+                ]}
+              >
+                <Ionicons name="pizza" size={12} color={dimText2} />
+                <Text style={{ marginLeft: 6, fontSize: 11, color: dimText }}>
+                  {item.portionLabel}
+                </Text>
+              </View>
+            )}
+          </View>
+          <Text style={{ marginTop: 4, color: dimText, lineHeight: 18 }}>
+            {item.notes?.trim() ? item.notes : "No description"}
+          </Text>
+          <Text style={{ marginTop: 6, color: dimText2, fontSize: 12 }}>
+            {formatTime(item.mealTimeClient)}
+          </Text>
+        </View>
+
+        {!!item.photoURL && (
+          <View
+            style={[
+              styles.photoBadge,
+              {
+                borderColor: isDarkmode
+                  ? "rgba(255,255,255,0.08)"
+                  : "rgba(0,0,0,0.08)",
+                backgroundColor: isDarkmode
+                  ? "rgba(255,255,255,0.03)"
+                  : "rgba(0,0,0,0.03)",
+              },
+            ]}
+          >
+            <Ionicons name="image" size={16} color={dimText2} />
+          </View>
+        )}
+      </View>
+    );
+  };
+
   return (
     <Layout>
       <TopNav
@@ -582,6 +696,151 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
               subtitle={`${waterGoalDays}/7 goal days`}
               color={ACCENT.water}
             />
+          </View>
+
+          {/* ✅ Toggle: charts vs meal details */}
+          <View
+            style={[
+              styles.switchCard,
+              { backgroundColor: cardBg, borderColor },
+            ]}
+          >
+            <View style={styles.switchRow}>
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setViewMode("charts")}
+                style={[
+                  styles.switchBtn,
+                  {
+                    borderColor:
+                      viewMode === "charts" ? ACCENT.active : "transparent",
+                    backgroundColor:
+                      viewMode === "charts"
+                        ? isDarkmode
+                          ? "rgba(255,255,255,0.04)"
+                          : "rgba(0,0,0,0.03)"
+                        : "transparent",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="bar-chart"
+                  size={16}
+                  color={viewMode === "charts" ? ACCENT.active : dimText2}
+                />
+                <Text
+                  style={{
+                    marginLeft: 8,
+                    fontWeight: "900",
+                    color: viewMode === "charts" ? ACCENT.active : dimText,
+                  }}
+                >
+                  Charts
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                activeOpacity={0.9}
+                onPress={() => setViewMode("meals")}
+                style={[
+                  styles.switchBtn,
+                  {
+                    borderColor:
+                      viewMode === "meals" ? ACCENT.meal : "transparent",
+                    backgroundColor:
+                      viewMode === "meals"
+                        ? isDarkmode
+                          ? "rgba(255,255,255,0.04)"
+                          : "rgba(0,0,0,0.03)"
+                        : "transparent",
+                  },
+                ]}
+              >
+                <Ionicons
+                  name="restaurant"
+                  size={16}
+                  color={viewMode === "meals" ? ACCENT.meal : dimText2}
+                />
+                <Text
+                  style={{
+                    marginLeft: 8,
+                    fontWeight: "900",
+                    color: viewMode === "meals" ? ACCENT.meal : dimText,
+                  }}
+                >
+                  Meal details
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {viewMode === "meals" && (
+              <View style={{ marginTop: 12 }}>
+                <Text
+                  style={{ fontSize: 12, color: dimText, marginBottom: 10 }}
+                >
+                  Tap a day to see what you logged (water is excluded).
+                </Text>
+
+                <ScrollView
+                  horizontal
+                  showsHorizontalScrollIndicator={false}
+                  contentContainerStyle={{ paddingBottom: 6 }}
+                >
+                  {stats.map((d) => {
+                    const active = selectedDay === d.fullDate;
+                    const count = (mealsByDay[d.fullDate] || []).length;
+                    return (
+                      <TouchableOpacity
+                        key={d.fullDate}
+                        activeOpacity={0.9}
+                        onPress={() => setSelectedDay(d.fullDate)}
+                        style={[
+                          styles.dayChip,
+                          {
+                            borderColor: active ? ACCENT.meal : borderColor,
+                            backgroundColor: active
+                              ? isDarkmode
+                                ? "rgba(255,255,255,0.04)"
+                                : "rgba(0,0,0,0.03)"
+                              : isDarkmode
+                              ? "rgba(255,255,255,0.02)"
+                              : "rgba(0,0,0,0.02)",
+                          },
+                        ]}
+                      >
+                        <Text
+                          style={{
+                            fontWeight: "900",
+                            color: active ? ACCENT.meal : dimText,
+                          }}
+                        >
+                          {d.label}
+                        </Text>
+                        <Text
+                          style={{
+                            marginTop: 2,
+                            fontSize: 11,
+                            color: active ? ACCENT.meal : dimText2,
+                          }}
+                        >
+                          {count} meal{count === 1 ? "" : "s"}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+
+                <View style={{ marginTop: 12 }}>
+                  {(mealsByDay[selectedDay] || []).length === 0 ? (
+                    <EmptyState text="No meals logged for this day." />
+                  ) : (
+                    (mealsByDay[selectedDay] || []).map((m) => (
+                      <MealDetailCard key={m.id} item={m} />
+                    ))
+                  )}
+                </View>
+              </View>
+            )}
           </View>
 
           <Section style={{ marginTop: 12 }}>
@@ -714,8 +973,6 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                   data={{ labels, datasets: [{ data: minutesArr }] }}
                   width={screenWidth - 28}
                   height={220}
-                  yAxisLabel=""
-                  yAxisSuffix=""
                   fromZero
                   chartConfig={chartConfig(ACCENT.active)}
                   bezier
@@ -745,9 +1002,9 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                   data={{ labels, datasets: [{ data: mealsArr }] }}
                   width={screenWidth - 28}
                   height={220}
+                  fromZero
                   yAxisLabel=""
                   yAxisSuffix=""
-                  fromZero
                   chartConfig={chartConfig(ACCENT.meal)}
                   style={{ borderRadius: 18 }}
                   segments={getMaxSegments(mealsArr)}
@@ -775,9 +1032,9 @@ export default function WeeklySummaryScreen({ navigation }: Props) {
                   data={{ labels, datasets: [{ data: waterCupsArr }] }}
                   width={screenWidth - 28}
                   height={220}
+                  fromZero
                   yAxisLabel=""
                   yAxisSuffix=""
-                  fromZero
                   chartConfig={chartConfig(ACCENT.water)}
                   style={{ borderRadius: 18 }}
                   segments={getMaxSegments(waterCupsArr)}
@@ -876,6 +1133,62 @@ const styles = StyleSheet.create({
     marginTop: 10,
     flexDirection: "row",
     alignItems: "center",
+  },
+
+  switchCard: {
+    marginTop: 12,
+    borderWidth: 1,
+    borderRadius: 20,
+    padding: 14,
+  },
+  switchRow: {
+    flexDirection: "row",
+    gap: 10,
+  } as any,
+  switchBtn: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
+    borderRadius: 999,
+    borderWidth: 1,
+  },
+
+  dayChip: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 16,
+    borderWidth: 1,
+    marginRight: 10,
+    minWidth: 78,
+    alignItems: "center",
+  },
+
+  mealRowCard: {
+    borderWidth: 1,
+    borderRadius: 18,
+    padding: 14,
+    marginBottom: 10,
+    flexDirection: "row",
+    gap: 12,
+  } as any,
+  mealPill: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    marginLeft: 10,
+  },
+  photoBadge: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    borderWidth: 1,
+    alignItems: "center",
+    justifyContent: "center",
   },
 
   backPill: {
