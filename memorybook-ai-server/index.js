@@ -1,11 +1,9 @@
 // index.js - Local AI + Face proxy server for MemoryBook
-// ✅ Updated (your requests):
-// - Caption MUST summarize ALL images (not only Photo 1), not too simple
-// - NEVER start caption with "lowkey", "friend/friends", "person/people"
-// - If user sends draft/keywords, caption MUST contain user keyword/draft (enforced)
-// - If draft exists: use (draft + vision) to write the caption (draft is PRIMARY)
-// - Remove "glasses" mentions unless user typed it in draft
-// - Safer, less-weird fallback captions (no "lowkey moment, captured.")
+// ✅ Updated (your request):
+// - Stop "a young person" / any age words
+// - Stop "a friend..." / "two friends..." style captions
+// - Allow first-person captions like "I'm brushing..."
+// - Vision descriptions avoid people-counting + age + clothing/body details
 // - Keep: /generatePostMeta + face proxy endpoints + ollama proxy
 
 const express = require("express");
@@ -15,11 +13,7 @@ const axios = require("axios");
 const util = require("util");
 
 // 👉 import helpers that talk to Python face_api
-const {
-  detectFacesInList,
-  registerFace,
-  recognizeFace,
-} = require("./face-service");
+const { detectFacesInList, registerFace, recognizeFace } = require("./face-service");
 
 const app = express();
 app.use(cors());
@@ -33,12 +27,10 @@ app.get("/health", (req, res) => {
 const OLLAMA_URL = process.env.OLLAMA_URL || "http://127.0.0.1:11434";
 
 // ✅ Better default text model for instruction-following
-const OLLAMA_TEXT_MODEL =
-  process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
+const OLLAMA_TEXT_MODEL = process.env.OLLAMA_TEXT_MODEL || "qwen2.5:7b-instruct";
 
 // Vision model
-const OLLAMA_VISION_MODEL =
-  process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
+const OLLAMA_VISION_MODEL = process.env.OLLAMA_VISION_MODEL || "llava-phi3:latest";
 
 // -------------------------
 // ✅ base64 normalizer
@@ -84,13 +76,10 @@ function normalizeCaptionLength(caption, captionDraft) {
   result = result.replace(/\s+/g, " ").trim();
   const words = countWords(result);
 
-  // ✅ not too simple: keep minimum length too
-  const MIN_WORDS = 10;
+  const MIN_WORDS = 8;
   const MAX_WORDS = 22;
 
-  // If too short and draft exists, allow draft to extend it later (we enforce again later).
   if (words < MIN_WORDS && String(captionDraft || "").trim()) return result;
-
   if (words <= MAX_WORDS) return result;
 
   const tokens = result.split(/\s+/);
@@ -173,109 +162,55 @@ function removeBannedWords(text) {
   return result.replace(/\s+/g, " ").trim();
 }
 
-const BANNED_ACTIVITY_PHRASES = [
-  "taking notes",
-  "take notes",
-  "doing homework",
-  "do homework",
-  "studying",
-  "study session",
-  "working on my notes",
-  "working on notes",
-  "working on homework",
-  "working on assignments",
-  "doing my assignment",
-  "doing assignments",
-  "preparing for exams",
-  "studying for exams",
+// ✅ ban age wording totally (young, teen, kid, etc.)
+const AGE_WORDS = [
+  "young",
+  "younger",
+  "teen",
+  "teenager",
+  "kid",
+  "kids",
+  "child",
+  "children",
+  "boy",
+  "girl",
+  "toddler",
+  "adult",
+  "older",
+  "elderly",
 ];
 
-function removeBannedActivities(text, captionDraft) {
-  let result = String(text || "");
-  const draftLower = String(captionDraft || "").toLowerCase();
-
-  for (const phrase of BANNED_ACTIVITY_PHRASES) {
-    if (!draftLower.includes(phrase.toLowerCase())) {
-      const re = new RegExp(phrase.replace(/\s+/g, "\\s+"), "ig");
-      result = result.replace(re, "");
-    }
-  }
-
-  result = result.replace(/\s+/g, " ").trim();
-  result = result.replace(/\s+,/g, ",").replace(/,\s*,/g, ",");
-  return result.trim();
-}
-
-function removeBrandTextIfNotInDraft(text, captionDraft) {
-  let result = String(text || "");
-  const draftLower = String(captionDraft || "").toLowerCase();
-  if (!draftLower.includes("boh"))
-    result = result.replace(/\bBOH\b/gi, "").trim();
-  return result.replace(/\s+/g, " ").trim();
-}
-
-const ANIMAL_WORDS_FOR_PLUSH = [
-  "dog",
-  "dogs",
-  "puppy",
-  "puppies",
-  "cat",
-  "cats",
-  "kitten",
-  "kittens",
-  "bear",
-  "bears",
-  "bunny",
-  "bunnies",
-  "rabbit",
-  "rabbits",
-];
-
-function fixPlushAnimalHallucination(caption, captionDraft) {
-  const draftLower = String(captionDraft || "").toLowerCase();
-  if (!draftLower.includes("plush")) return caption;
-
-  let result = String(caption || "");
-  ANIMAL_WORDS_FOR_PLUSH.forEach((word) => {
-    const re = new RegExp("\\b" + word + "\\b", "gi");
-    result = result.replace(re, "plush toy");
-  });
-  return result;
-}
-
-// ✅ Replace gendered / identity-ish labels -> neutral
-function neutralizePersonWords(text, captionDraft = "") {
+function removeAgeWords(text) {
   let s = String(text || "");
-  const d = String(captionDraft || "").toLowerCase();
+  for (const w of AGE_WORDS) {
+    const re = new RegExp("\\b" + w + "\\b", "ig");
+    s = s.replace(re, "");
+  }
+  s = s.replace(/\s+/g, " ").trim();
+  return s;
+}
 
-  const allowGenderWords =
-    d.includes("man") ||
-    d.includes("woman") ||
-    d.includes("boy") ||
-    d.includes("girl") ||
-    d.includes("male") ||
-    d.includes("female") ||
-    d.includes("guy") ||
-    d.includes("lady");
+// ✅ remove "two friends..." / "a friend..." / "a person..."
+function removePeopleCountingOpeners(text) {
+  let s = String(text || "").trim();
 
-  if (allowGenderWords) return s.replace(/\s+/g, " ").trim();
+  s = s.replace(
+    /^(one|two|three|four|five|six|seven|eight|nine|ten|\d+)\s+(friends?|people|persons?)\b[,:-]?\s*/i,
+    ""
+  );
 
-  const replacements = [
-    [/\b(a|an)\s+man\b/gi, "a friend"],
-    [/\b(a|an)\s+woman\b/gi, "a friend"],
-    [/\bman\b/gi, "person"],
-    [/\bwoman\b/gi, "person"],
-    [/\bboy\b/gi, "person"],
-    [/\bgirl\b/gi, "person"],
-    [/\bguy\b/gi, "person"],
-    [/\blady\b/gi, "person"],
-    [/\bmale\b/gi, "person"],
-    [/\bfemale\b/gi, "person"],
-  ];
+  s = s.replace(/^(a\s+)?(friend|friends|person|people|someone)\b[,:-]?\s*/i, "");
 
-  for (const [re, rep] of replacements) s = s.replace(re, rep);
-  s = s.replace(/\bposes?\s+with\b/gi, "photo moment with");
+  // remove "posing..." starters too
+  s = s.replace(/^(posing|pose|standing|sitting)\b[,:-]?\s*/i, "");
 
+  return s.replace(/\s+/g, " ").trim();
+}
+
+function removePosingPhrases(text) {
+  let s = String(text || "");
+  s = s.replace(/\bposing\b(\s+(by|with|near))?/gi, "");
+  s = s.replace(/\bpose\b(\s+(by|with|near))?/gi, "");
   return s.replace(/\s+/g, " ").trim();
 }
 
@@ -311,19 +246,20 @@ function removeAccessoryMentionsIfNotInDraft(text, captionDraft) {
   return s;
 }
 
-// ✅ prevent caption starting with "person/people/friends" (and NEVER "lowkey")
+// ✅ prevent caption starting with bad openers
 function avoidBadStarts(caption, visionDesc, captionDraft) {
   let c = String(caption || "").trim();
   if (!c) return c;
 
   const badStartRe =
-    /^(lowkey\b|low-key\b|friend\b|friends\b|a\s+friend\b|person\b|a\s+person\b|people\b)/i;
+    /^(lowkey\b|low-key\b|(one|two|three|\d+)\s+(friends?|people|persons?)\b|a\s+friend\b|friends\b|friend\b|person\b|people\b|someone\b|a\s+person\b|a\s+young\b|young\b)/i;
+
   if (!badStartRe.test(c)) return c;
 
   const v = String(visionDesc || "").toLowerCase();
   const d = String(captionDraft || "").trim();
 
-  // If draft exists and is short, lead with draft instead of generic starter
+  // If draft exists and is short, lead with draft
   if (d) {
     const shortDraft = d.replace(/\s+/g, " ").trim();
     if (shortDraft.length <= 45) {
@@ -333,18 +269,12 @@ function avoidBadStarts(caption, visionDesc, captionDraft) {
     }
   }
 
-  // Otherwise choose safe starter by vision
-  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
-  if (v.includes("cafe") || v.includes("restaurant"))
-    return "Cafe vibes, keep it chill.";
-  if (v.includes("outdoor") || v.includes("street"))
-    return "Out and about, good vibes.";
-  if (v.includes("table")) return "Simple table vibes, clean and calm.";
-  if (v.includes("laptop")) return "Locked in, focus vibes.";
-  if (v.includes("phone")) return "Phone out, keep it simple.";
-
-  return "Clean moment, good vibes.";
+  // Otherwise choose safe starter
+  if (v.includes("cable car") || v.includes("cablecar")) return "Cable car views hit different.";
+  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
+  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
+  if (v.includes("toothbrush") || v.includes("bathroom")) return "Morning routine reset.";
+  return "Little moment, big mood.";
 }
 
 // -------------------------
@@ -387,7 +317,6 @@ function extractDraftKeywords(draft, max = 2) {
   const d = raw.toLowerCase();
   if (!d) return [];
 
-  // keep hashtags as keywords too
   const hash = raw
     .split(/\s+/)
     .map((t) => t.trim())
@@ -432,7 +361,6 @@ function enforceCaptionContainsUserInput(caption, draftText, draftKeywords) {
       ? draftKeywords.some((k) => lc.includes(String(k).toLowerCase()))
       : false;
 
-  // If user draft is short, require the EXACT draft string (as substring)
   const shortDraft = d.replace(/\s+/g, " ").trim();
   const requireExact = shortDraft.length <= 45;
 
@@ -443,7 +371,6 @@ function enforceCaptionContainsUserInput(caption, draftText, draftKeywords) {
     return c;
   }
 
-  // Otherwise require at least one extracted keyword
   if (draftKeywords && draftKeywords.length && !hasKeyword) {
     const prefix = draftKeywords.join(" ");
     c = `${prefix} — ${c}`.replace(/\s+/g, " ").trim();
@@ -454,22 +381,21 @@ function enforceCaptionContainsUserInput(caption, draftText, draftKeywords) {
 
 // ---------------------------------------------------------
 // Pronoun blockers
+// ✅ Allow first-person ("I / I'm / my") because you asked.
+// Keep blocking other pronouns (we/you/he/she/they).
 // ---------------------------------------------------------
 const PRONOUN_BLOCKLIST = [
-  "i","i'm","im","me","my","mine",
+  // block group + other people
   "we","we're","were","our","ours","us",
   "you","you're","youre","your","yours",
   "he","she","him","her","his","hers",
   "they","them","their","theirs",
 ];
 
-function removePronouns(text) {
+function removePronounsExceptFirstPerson(text) {
   let s = String(text || "");
   for (const p of PRONOUN_BLOCKLIST) {
-    const re = new RegExp(
-      `\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`,
-      "gi"
-    );
+    const re = new RegExp(`\\b${p.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}\\b`, "gi");
     s = s.replace(re, "");
   }
   return s.replace(/\s+/g, " ").trim();
@@ -491,26 +417,6 @@ function stripGenericIntros(text) {
     }
   }
   return s.trim();
-}
-
-// ✅ No more "Lowkey moment, captured."
-function buildNeutralCaptionFromVision(visionCombined) {
-  const v = String(visionCombined || "").toLowerCase();
-  if (v.includes("outdoor") || v.includes("street")) return "Out and about, good vibes.";
-  if (v.includes("cafe") || v.includes("restaurant")) return "Cafe vibes, keep it chill.";
-  if (v.includes("store") || v.includes("shopping")) return "Quick stop, good vibes.";
-  if (v.includes("table")) return "Simple table vibes, clean and calm.";
-  if (v.includes("laptop")) return "Locked in, focus vibes.";
-  if (v.includes("phone")) return "Phone out, keep it simple.";
-  if (v.includes("books") || v.includes("book")) return "Books out, brain loading.";
-  return "Simple scene, good vibes.";
-}
-
-function detectUserIntent(draft) {
-  const d = String(draft || "").toLowerCase();
-  const flex = ["flex","new look","new style","hair","hairstyle","outfit","ootd","slay","glow up"];
-  if (flex.some((k) => d.includes(k))) return "FLEX";
-  return "NORMAL";
 }
 
 // -------------------------
@@ -550,13 +456,16 @@ This is photo ${index} of ${total}.
 Describe ONLY what is clearly visible.
 
 CRITICAL RULES:
-- Use ONLY neutral words: "person", "people", "friends".
-- NEVER say: man/woman/boy/girl/male/female/guy/lady.
-- Do NOT guess age, identity, relationship, or emotions.
+- Do NOT use age words (NO: young/teen/kid/child/adult/older).
+- Do NOT count people (NO: one/two people, two friends).
+- Do NOT use "a friend/person/people" as the subject.
+- Focus on scene + action + main objects only (e.g., cable car, trees, bathroom, toothbrush).
+- Do NOT mention clothing, body features, or face details (unless a clear prop like "cat ears headband" is visible).
+- NEVER guess identity, relationship, or emotions.
 - Ignore tiny/unclear background items.
 - If you see "BOH" anywhere, IGNORE it and do NOT mention it.
 
-Style: 1–2 short sentences, simple English.
+Style: 1–2 short sentences.
 `.trim(),
         images: [imageBase64],
       },
@@ -581,16 +490,20 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
   for (let i = 0; i < total; i++) {
     try {
       const desc = await describeSingleImage(safeList[i], i + 1, total);
-      perPhoto.push(neutralizePersonWords(String(desc || ""), ""));
+      // extra safety cleaning
+      let cleaned = String(desc || "");
+      cleaned = removeAgeWords(cleaned);
+      cleaned = cleaned.replace(/\b(two|one|three|\d+)\s+(people|persons|friends?)\b/gi, "");
+      cleaned = cleaned.replace(/\b(a\s+)?(friend|person|people|someone)\b/gi, "");
+      cleaned = cleaned.replace(/\s+/g, " ").trim();
+      perPhoto.push(cleaned);
     } catch (err) {
       console.log(`Vision describe error on photo ${i + 1}:`, err?.message || err);
       perPhoto.push("");
     }
   }
 
-  const lines = perPhoto.map((d, i) =>
-    d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`
-  );
+  const lines = perPhoto.map((d, i) => (d ? `Photo ${i + 1}: ${d}` : `Photo ${i + 1}: (unclear)`));
   let combined = lines.join("\n");
   combined = combined.replace(/\bBOH\b/gi, "").trim();
 
@@ -604,7 +517,7 @@ async function callOllamaVisionDescribeMulti(imageBase64List) {
 const MOOD_LABELS = ["happy", "neutral", "tired", "sad", "angry"];
 
 // -------------------------
-// Vision mood detection (faces only - AI estimate)
+// Vision mood detection (first image only)
 // -------------------------
 async function detectMoodFromVisionFirstImage(imageBase64) {
   if (!imageBase64) return { moodLabel: "neutral", confidence: 0.0, hasHumanFace: false };
@@ -678,50 +591,6 @@ async function recognizeFaceBatch(imageBase64List, threshold) {
 }
 
 // -------------------------
-// Grounding helpers
-// -------------------------
-function buildMustKeywordsFromFirstPhoto(perPhoto) {
-  const first = String(perPhoto?.[0] || "").toLowerCase();
-  const pool = ["outdoor", "cafe", "restaurant", "street", "shopping", "store", "table"];
-  const must = pool.filter((k) => first.includes(k));
-  return Array.from(new Set(must)).slice(0, 1);
-}
-
-function captionLooksUngrounded(caption, visionDescription, captionDraft, mustKeywords) {
-  const c = String(caption || "").toLowerCase();
-  const v = String(visionDescription || "").toLowerCase();
-  const d = String(captionDraft || "").toLowerCase();
-  const draftHasText = d.trim().length > 0;
-
-  if (!draftHasText && mustKeywords && mustKeywords.length) {
-    const ok = mustKeywords.some((k) => c.includes(k));
-    if (!ok) return true;
-  }
-
-  const fantasy = ["childhood","nostalgia","cherished","magical","lucky charm","river","stream","summer","winter","sun touched","fish"];
-  for (const w of fantasy) {
-    if (c.includes(w) && !v.includes(w) && !d.includes(w)) return true;
-  }
-  return false;
-}
-
-// ✅ NEW: ensure multi-image summary (not only Photo 1)
-function captionSeemsOnlyFirstPhoto(caption, perPhotoList) {
-  const c = String(caption || "").toLowerCase();
-  const per = Array.isArray(perPhotoList) ? perPhotoList : [];
-  if (per.length <= 1) return false;
-
-  // find a keyword that appears in photos 2..N
-  const pool = ["cafe","restaurant","street","outdoor","store","shopping","table","laptop","books","book","phone"];
-  const laterText = per.slice(1).join(" ").toLowerCase();
-  const laterKeywords = pool.filter((k) => laterText.includes(k));
-
-  if (!laterKeywords.length) return false; // nothing strong in later photos
-  const mentionsLater = laterKeywords.some((k) => c.includes(k));
-  return !mentionsLater;
-}
-
-// -------------------------
 // /generatePostMeta
 // -------------------------
 app.post("/generatePostMeta", async (req, res) => {
@@ -752,18 +621,15 @@ app.post("/generatePostMeta", async (req, res) => {
       }
     }
 
-    const mustKeywords = buildMustKeywordsFromFirstPhoto(visionPerPhoto);
-    const intent = detectUserIntent(draftText);
-
     const draftKeywords = draftHasText ? extractDraftKeywords(draftText, 2) : [];
     const draftKeywordsLine =
       draftKeywords.length > 0
         ? `- MUST include user keyword(s) in final caption: ${draftKeywords.join(", ")}.`
         : `- If draft is empty, rely on vision description only.`;
 
-    // 2) TEXT model prompt (✅ multi-image summary, not too simple)
+    // 2) TEXT model prompt (✅ human caption, first-person allowed)
     const systemInstruction = `
-You write SHORT, human-style captions for a memory app.
+You write SHORT, natural captions for a memory app.
 
 Return ONLY valid JSON:
 {
@@ -775,30 +641,25 @@ Return ONLY valid JSON:
 PRIORITY RULES:
 - If user draft is NOT empty, it is the PRIMARY source of truth.
   The final caption MUST contain the user's draft (or user's keywords).
-- Vision descriptions are SECONDARY but MUST be used to cover the FULL set of photos:
-  If there are multiple photos, the caption must reflect the overall set, not just Photo 1.
-  Combine repeated details, but include at least 2 distinct details that appear across the set.
-- Never override user draft with a different place/event.
+- Vision descriptions are SECONDARY and used for grounding.
 ${draftKeywordsLine}
 
-GROUNDING RULES:
-- Do NOT invent stories.
-- Avoid fantasy concepts unless written in the draft.
-- Do NOT copy-paste the vision list; rewrite into a natural caption.
+ABSOLUTE RULES:
+- NO age words (NO: young/teen/kid/child/adult/older).
+- Do NOT count people (NO: one/two people, two friends).
+- Do NOT describe others as the subject (NO: "a friend is...", "two friends...").
+- First-person is allowed (I / I'm / my) when it fits naturally.
+  Example: "I'm brushing my teeth — morning reset."
+- Do NOT use he/she/they/we/you.
+- Do NOT invent stories, locations, or emotions.
+- Do NOT mention clothing/body features/face details unless user typed them.
 
 CAPTION STYLE:
-- Do NOT use 1st/2nd/3rd person pronouns (no I / we / you / he / she / they).
-- Do NOT say man/woman/boy/girl/male/female/guy/lady.
-  Use friends/people/person only (but NOT as the opening word).
-- Do NOT start caption with: "lowkey", "low-key", "friend(s)", "person", "people".
-- 10–22 words (not too short), 0–1 emoji.
+- 8–22 words.
+- 0–1 emoji.
 - No hashtags inside the caption.
-- Avoid captions that are only "good vibes" / "simple scene".
-  Include at least ONE specific visible setting or item from the photos (no guessing).
-
-IMPORTANT DETAIL RULE:
-- Do NOT mention clothing/accessories/body features (e.g., glasses, hair, shirt color)
-  UNLESS user wrote them in the draft.
+- Avoid robotic descriptions like "a person is..." / "a friend is..."
+- Do NOT start with: lowkey, friend(s), person, people, someone, young, two friends.
 
 HASHTAGS:
 - 1–5 tags, lowercase.
@@ -810,13 +671,10 @@ FRIEND TAGS:
 
     const combinedPrompt = `${systemInstruction}
 
-User intent hint:
-"${intent}" (FLEX means: confident / show-off vibe)
-
 User draft/keywords (may be empty):
 "${draftText || "(empty)"}"
 
-Vision description (ALL photos, may be empty):
+Vision description (may be empty):
 "${visionDescription || "(no description)"}"
 `.trim();
 
@@ -833,46 +691,6 @@ Vision description (ALL photos, may be empty):
     let parsed = safeJsonParse(rawContent, null);
     if (!parsed) parsed = { caption: draftText, hashtags: [], friendTags: [] };
 
-    // Retry once if ungrounded OR violates draft alignment OR starts badly OR ignores later photos
-    let captionTry = String(parsed.caption || draftText || "").trim();
-
-    const violatesDraft =
-      draftHasText && draftKeywords.length
-        ? !draftKeywords.some((k) => captionTry.toLowerCase().includes(String(k).toLowerCase()))
-        : false;
-
-    const startsBad = /^(lowkey\b|low-key\b|friend\b|friends\b|person\b|people\b|a\s+person\b|a\s+friend\b)/i.test(
-      captionTry
-    );
-
-    const ignoresLaterPhotos = captionSeemsOnlyFirstPhoto(captionTry, visionPerPhoto);
-
-    if (
-      captionLooksUngrounded(captionTry, visionDescription, draftText, mustKeywords) ||
-      violatesDraft ||
-      startsBad ||
-      ignoresLaterPhotos
-    ) {
-      const retryPrompt =
-        combinedPrompt +
-        `
-
-Previous answer not acceptable.
-- MUST keep user draft/keyword in caption (do not omit).
-- MUST summarize ALL photos (not only Photo 1). Mention at least 2 distinct details across the set.
-- Keep grounded; do NOT invent places/events.
-- Do NOT mention clothes/accessories unless user typed it.
-- Do NOT start with "lowkey/low-key/friend(s)/person/people".
-Return ONLY JSON.
-`.trim();
-
-      try {
-        const retryRaw = await callOllamaChatText(retryPrompt);
-        const retryParsed = safeJsonParse(retryRaw, null);
-        if (retryParsed) parsed = retryParsed;
-      } catch {}
-    }
-
     // Normalize output
     let caption = String(parsed.caption || draftText || "").trim();
     let hashtags = Array.isArray(parsed.hashtags)
@@ -881,35 +699,24 @@ Return ONLY JSON.
 
     // Cleanup caption
     caption = removeBannedWords(caption);
-    caption = removeBannedActivities(caption, draftText);
-    caption = removeBrandTextIfNotInDraft(caption, draftText);
-    caption = fixPlushAnimalHallucination(caption, draftText);
-
+    caption = removeAgeWords(caption);
     caption = stripGenericIntros(caption);
-    caption = removePronouns(caption);
-    caption = neutralizePersonWords(caption, draftText);
 
-    // ✅ remove "glasses" mentions unless in draft
+    // remove other pronouns but keep first-person
+    caption = removePronounsExceptFirstPerson(caption);
+
+    // remove "friend/person/people" style openers + "two friends"
+    caption = removePeopleCountingOpeners(caption);
+    caption = removePosingPhrases(caption);
+
+    // remove glasses unless in draft
     caption = removeAccessoryMentionsIfNotInDraft(caption, draftText);
 
-    // ✅ HARD enforce: must include user keyword/draft if provided
+    // Must contain draft keywords if draft exists
     caption = enforceCaptionContainsUserInput(caption, draftText, draftKeywords);
 
     caption = normalizeCaptionLength(caption, draftText);
-
-    // ✅ final: remove bad starts like "lowkey" / "friend" / "person"
     caption = avoidBadStarts(caption, visionDescription, draftText);
-
-    // If still too short, extend with a safe add-on from vision (no guessing)
-    const wordsNow = countWords(caption);
-    if (wordsNow < 10) {
-      const addon = buildNeutralCaptionFromVision(visionDescription);
-      if (addon && !caption.toLowerCase().includes(addon.toLowerCase())) {
-        caption = `${caption} — ${addon}`.replace(/\s+/g, " ").trim();
-        caption = normalizeCaptionLength(caption, draftText);
-        caption = avoidBadStarts(caption, visionDescription, draftText);
-      }
-    }
 
     // Hashtags: draft-first
     const draftTags = draftHasText ? fallbackTagsFromDraft(draftText, 5) : [];
@@ -923,7 +730,7 @@ Return ONLY JSON.
     }
 
     // Face recognition for friendTags (python)
-    const FACE_THRESHOLD = 0.37;
+    const FACE_THRESHOLD = 0.40;
     const MIN_GAP = 0.06;
     const MAX_TAGS = 5;
 
@@ -985,7 +792,7 @@ Return ONLY JSON.
       }
     }
 
-    // ✅ Mood detection: your rule
+    // ✅ Mood detection: first image only + your rule
     let moodLabel = "happy";
     let moodSource = "rule";
     let emoji = "😊";
