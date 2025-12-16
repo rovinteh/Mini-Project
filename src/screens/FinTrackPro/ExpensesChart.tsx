@@ -64,7 +64,7 @@ const MONTH_SHORT = [
 const API_HOST =
   Platform.OS === "web"
     ? "http://localhost:11434"
-    : "http://10.10.19.246:11434";
+    : "http://10.10.20.66:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
 
@@ -322,7 +322,7 @@ DATA (JSON):
 ${JSON.stringify(summaryJson, null, 2)}
 `.trim();
 
-      const res = await fetch(API_HOST + "/ollama/generate", {
+      const res = await fetch(API_HOST + "/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),
@@ -420,7 +420,7 @@ ANOMALIES (JSON):
 ${JSON.stringify(payload, null, 2)}
       `.trim();
 
-      const res = await fetch(API_HOST + "/ollama/generate", {
+      const res = await fetch(API_HOST + "/api/generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ model: OLLAMA_MODEL, prompt, stream: false }),

@@ -53,7 +53,7 @@ const DAY_KEY = (d: Date) =>
 const API_HOST =
   Platform.OS === "web"
     ? "http://localhost:11434"
-    : "http://10.10.19.246:11434";
+    : "http://10.10.20.66:11434";
 
 const OLLAMA_MODEL = "gemma3:1b";
 
