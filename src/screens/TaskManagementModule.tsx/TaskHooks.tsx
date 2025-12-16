@@ -1284,15 +1284,30 @@ export const generateOllamaSummary = async (
 ) => {
   try {
     const prompt = `
-Act as a strict data extraction engine. Analyze the following team conversation for the "${teamName}" team.
-Extract ONLY relevant details. Output a JSON object.
+You are a STRICT data extraction engine. Analyze the team conversation for "${teamName}".
+Your job is to FILTER OUT irrelevant messages and CORRECTLY CATEGORIZE the remaining ones.
 
-Instructions:
-- Ignore the messages of greetings, pleasantries, funny interations "Testing", one-word messages Like "HAHAHA","Hello","Hello hahaha","Welcome".
-- Must Categorize content into "Update", "Action", "Blocker".
-- **CRITICAL**: Every item MUST start with "Sender Name (DD-MMM-YYYY HH:MM AM/PM) - ".
-- Example: "Rovin (11-Dec-2025 05:00 PM) - Task completed"
-- Do NOT output empty categories.
+## STEP 1: FILTER OUT (MUST IGNORE) these message types:
+- Greetings: "Hello", "Hi", "Hey", "Welcome", "Good morning"
+- Self-introductions: "My name is...", "I am...", "I'm..."
+- Test messages: "Testing", "Test", "Just testing"
+- Reactions/fillers: "Haha", "Hahaha", "Lol", "Ok", "Okay", "Nice", "Cool", "Thanks"
+- One-word or two-word messages with no actionable content
+- Messages that are ONLY pleasantries like "Hello hahaha"
+
+## STEP 2: CATEGORIZE remaining messages using these STRICT rules:
+- **Blocker**: Messages containing words like "blocker", "blocked", "stuck", "issue", "problem", "cannot", "can't", "failing", "error", "help needed"
+- **Action**: Messages about tasks to do, requests, assignments containing words like "need to", "please", "will do", "todo", "assigned", "complete by", "working on"
+- **Update**: Status updates, progress reports, completed work, information sharing (anything relevant that doesn't fit Blocker or Action)
+
+## STEP 3: FORMAT each item as:
+"SenderName (DD-MMM-YYYY HH:MM AM/PM) - Content"
+
+## RULES:
+1. Only include categories that have items (omit empty categories)
+2. If ALL messages are filtered out, return: {"message": "No relevant updates found"}
+3. A message can only be in ONE category
+4. NEVER include greetings, introductions, or meaningless short messages
 
 JSON Format:
 {
