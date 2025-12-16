@@ -5,8 +5,6 @@ import {
   TouchableOpacity,
   StyleSheet,
   Platform,
-  Modal,
-  Pressable,
   ScrollView,
   Dimensions,
   ActivityIndicator,
@@ -21,16 +19,6 @@ import {
 } from "react-native-rapi-ui";
 import { Ionicons } from "@expo/vector-icons";
 import { MainStackParamList } from "../../types/navigation";
-
-// ✅ Currency store (keep)
-import {
-  CURRENCY_OPTIONS,
-  CurrencyCode,
-  codeToLabel,
-  codeToSymbol,
-  getCurrencyCode,
-  setCurrencyCode,
-} from "../../utils/currencyStore";
 
 // ✅ Firebase
 import { getAuth } from "firebase/auth";
@@ -67,7 +55,6 @@ const MONTH_KEY = (d: Date) =>
 
 const clamp01 = (n: number) => Math.max(0, Math.min(1, n));
 
-// stable pie colors
 const PIE_COLORS = [
   "#38BDF8",
   "#A78BFA",
@@ -85,17 +72,13 @@ export default function MoneyManagementModule({ navigation }: Props) {
   const { isDarkmode, setTheme } = useTheme();
   const styles = useMemo(() => makeStyles(!!isDarkmode), [isDarkmode]);
 
-  // ✅ currency state (keep)
-  const [currency, setCurrency] = useState<CurrencyCode>("MYR");
-  const [showCurrencyModal, setShowCurrencyModal] = useState(false);
-
   // ✅ Home dashboard states
   const [loadingHome, setLoadingHome] = useState(true);
   const [incomeThisMonth, setIncomeThisMonth] = useState(0);
   const [expenseThisMonth, setExpenseThisMonth] = useState(0);
   const [txThisMonth, setTxThisMonth] = useState<Tx[]>([]);
 
-  // ✅ Budget remaining (from BudgetHub collection/doc)
+  // ✅ Budget remaining (from BudgetHub)
   const [budgetLoading, setBudgetLoading] = useState(true);
   const [budgetLimit, setBudgetLimit] = useState<number | null>(null);
 
@@ -104,14 +87,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
 
   const now = new Date();
   const monthKey = MONTH_KEY(now);
-
-  // ✅ load saved currency on mount (keep)
-  useEffect(() => {
-    (async () => {
-      const saved = await getCurrencyCode();
-      setCurrency(saved);
-    })();
-  }, []);
 
   const iconColor = (active: boolean) => {
     if (active) return MODULE_COLOR;
@@ -128,18 +103,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
 
   const activeTab: TabKey = "home";
 
-  const pickCurrency = async (code: CurrencyCode) => {
-    setCurrency(code);
-    await setCurrencyCode(code);
-    setShowCurrencyModal(false);
-  };
-
-  const symbol = codeToSymbol(currency);
-
-  const fmt = (n: number) => {
-    const v = Number.isFinite(n) ? n : 0;
-    return `${symbol} ${v.toFixed(2)}`;
-  };
+  const fmtRM = (n: number) => `RM ${(Number.isFinite(n) ? n : 0).toFixed(2)}`;
 
   // ---------- Listen transactions (THIS MONTH) ----------
   useEffect(() => {
@@ -267,7 +231,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
 
   const top3 = categorySorted.slice(0, 3);
 
-  // PieChart from chart-kit (same library you already use in ExpensesChart)
+  // ✅ PieChart (same library family you already use)
   // eslint-disable-next-line @typescript-eslint/no-var-requires
   const { PieChart } = require("react-native-chart-kit");
 
@@ -361,7 +325,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
         rightAction={() => setTheme(isDarkmode ? "light" : "dark")}
       />
 
-      {/* ✅ NEW: Attractive Home */}
       <ScrollView
         contentContainerStyle={{
           paddingHorizontal: 20,
@@ -370,31 +333,13 @@ export default function MoneyManagementModule({ navigation }: Props) {
         }}
         showsVerticalScrollIndicator={false}
       >
-        {/* Title + subtitle */}
         <View style={{ alignItems: "center", marginBottom: 10 }}>
           <Text fontWeight="bold" size="h3" style={{ marginBottom: 6 }}>
             FinTrack Pro
           </Text>
           <Text style={styles.subtitle}>
-            Manage your income, expenses and budgets in one place.
+            Your monthly money dashboard (RM).
           </Text>
-
-          {/* Currency button (keep) */}
-          <TouchableOpacity
-            activeOpacity={0.9}
-            onPress={() => setShowCurrencyModal(true)}
-            style={styles.currencyBtn}
-          >
-            <Ionicons
-              name="cash-outline"
-              size={16}
-              color={isDarkmode ? "#fff" : "#111"}
-              style={{ marginRight: 8 }}
-            />
-            <Text style={styles.currencyBtnText}>
-              Currency: {codeToLabel(currency)}
-            </Text>
-          </TouchableOpacity>
         </View>
 
         {loadingHome ? (
@@ -404,25 +349,23 @@ export default function MoneyManagementModule({ navigation }: Props) {
           </View>
         ) : (
           <>
-            {/* Month badge */}
             <View style={styles.monthBadge}>
               <Ionicons name="calendar-outline" size={16} color="#fff" />
               <Text style={styles.monthBadgeText}>This Month: {monthKey}</Text>
             </View>
 
-            {/* Stats row */}
             <View style={{ flexDirection: "row", marginTop: 12 }}>
               <StatCard
                 title="Income"
                 icon="🟢"
-                value={fmt(incomeThisMonth)}
+                value={fmtRM(incomeThisMonth)}
                 color="#22C55E"
               />
               <View style={{ width: 10 }} />
               <StatCard
                 title="Expense"
                 icon="🔴"
-                value={fmt(expenseThisMonth)}
+                value={fmtRM(expenseThisMonth)}
                 color="#EF4444"
               />
             </View>
@@ -431,7 +374,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
               <StatCard
                 title="Monthly Balance"
                 icon={monthlyBalance >= 0 ? "💰" : "⚠️"}
-                value={fmt(monthlyBalance)}
+                value={fmtRM(monthlyBalance)}
                 color={monthlyBalance >= 0 ? MODULE_COLOR : "#FB7185"}
               />
               <View style={{ width: 10 }} />
@@ -442,7 +385,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
                   budgetLoading
                     ? "Loading..."
                     : hasBudget
-                    ? fmt(budgetRemaining ?? 0)
+                    ? fmtRM(budgetRemaining ?? 0)
                     : "Not set"
                 }
                 color={
@@ -457,7 +400,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
               />
             </View>
 
-            {/* Budget progress */}
             <Card
               title="Budget Progress"
               right={
@@ -478,8 +420,8 @@ export default function MoneyManagementModule({ navigation }: Props) {
               ) : (
                 <>
                   <Text style={{ opacity: 0.85 }}>
-                    Limit: <Text fontWeight="bold">{fmt(budgetLimit!)}</Text> •
-                    Used: <Text fontWeight="bold">{fmt(budgetUsed)}</Text>
+                    Limit: <Text fontWeight="bold">{fmtRM(budgetLimit!)}</Text>{" "}
+                    • Used: <Text fontWeight="bold">{fmtRM(budgetUsed)}</Text>
                   </Text>
 
                   <View style={styles.progressTrack}>
@@ -504,7 +446,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
               )}
             </Card>
 
-            {/* Pie chart */}
             <Card title="Expense Categories (This Month)">
               {expenseThisMonth <= 0 ? (
                 <Text style={{ opacity: 0.8 }}>
@@ -553,7 +494,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
                           <Text style={{ fontWeight: "700" }}>
                             {idx + 1}. {x.name}
                           </Text>
-                          <Text style={{ opacity: 0.8 }}>{fmt(x.value)}</Text>
+                          <Text style={{ opacity: 0.8 }}>{fmtRM(x.value)}</Text>
                         </View>
                       ))
                     )}
@@ -562,7 +503,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
               )}
             </Card>
 
-            {/* Quick actions */}
             <Card title="Quick Actions">
               <View style={{ flexDirection: "row" }}>
                 <TouchableOpacity
@@ -611,7 +551,7 @@ export default function MoneyManagementModule({ navigation }: Props) {
         )}
       </ScrollView>
 
-      {/* Bottom bar (keep your original) */}
+      {/* Bottom bar (kept) */}
       <View style={styles.bottomWrap} pointerEvents="box-none">
         <View style={styles.bottomBar}>
           <TouchableOpacity
@@ -721,59 +661,6 @@ export default function MoneyManagementModule({ navigation }: Props) {
           <Text style={styles.aiText}>AI</Text>
         </TouchableOpacity>
       </View>
-
-      {/* Currency modal (keep) */}
-      <Modal
-        visible={showCurrencyModal}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setShowCurrencyModal(false)}
-      >
-        <Pressable
-          style={styles.modalBackdrop}
-          onPress={() => setShowCurrencyModal(false)}
-        >
-          <Pressable style={styles.modalCard} onPress={() => {}}>
-            <Text fontWeight="bold" style={{ fontSize: 16, marginBottom: 10 }}>
-              Select Currency
-            </Text>
-
-            {CURRENCY_OPTIONS.map((c) => {
-              const active = c.code === currency;
-              return (
-                <TouchableOpacity
-                  key={c.code}
-                  activeOpacity={0.85}
-                  onPress={() => pickCurrency(c.code)}
-                  style={[
-                    styles.currencyRow,
-                    active && styles.currencyRowActive,
-                  ]}
-                >
-                  <Text style={{ fontWeight: "700" }}>{c.label}</Text>
-                  {active ? (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={20}
-                      color="#22C55E"
-                    />
-                  ) : (
-                    <Ionicons
-                      name="ellipse-outline"
-                      size={20}
-                      color={
-                        isDarkmode
-                          ? "rgba(255,255,255,0.35)"
-                          : "rgba(0,0,0,0.35)"
-                      }
-                    />
-                  )}
-                </TouchableOpacity>
-              );
-            })}
-          </Pressable>
-        </Pressable>
-      </Modal>
     </Layout>
   );
 }
@@ -902,21 +789,6 @@ const makeStyles = (isDark: boolean) =>
       fontSize: 12,
     },
 
-    currencyBtn: {
-      flexDirection: "row",
-      alignItems: "center",
-      paddingHorizontal: 12,
-      paddingVertical: 10,
-      borderRadius: 999,
-      backgroundColor: isDark ? "rgba(255,255,255,0.08)" : "rgba(0,0,0,0.06)",
-      borderWidth: 1,
-      borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
-    },
-    currencyBtnText: {
-      fontWeight: "700",
-      color: isDark ? "#fff" : "#111",
-    },
-
     bottomWrap: {
       position: "absolute",
       left: 0,
@@ -995,33 +867,5 @@ const makeStyles = (isDark: boolean) =>
       color: "#fff",
       fontWeight: "800",
       fontSize: 12,
-    },
-
-    modalBackdrop: {
-      flex: 1,
-      backgroundColor: "rgba(0,0,0,0.55)",
-      justifyContent: "center",
-      paddingHorizontal: 18,
-    },
-    modalCard: {
-      backgroundColor: isDark ? "#0B1220" : "#FFFFFF",
-      borderRadius: 16,
-      padding: 14,
-      borderWidth: 1,
-      borderColor: isDark ? "rgba(255,255,255,0.12)" : "rgba(0,0,0,0.08)",
-    },
-    currencyRow: {
-      flexDirection: "row",
-      alignItems: "center",
-      justifyContent: "space-between",
-      paddingVertical: 12,
-      paddingHorizontal: 10,
-      borderRadius: 12,
-      marginTop: 8,
-      backgroundColor: isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.04)",
-    },
-    currencyRowActive: {
-      borderWidth: 1,
-      borderColor: MODULE_COLOR,
     },
   });
